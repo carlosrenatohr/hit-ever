@@ -1,0 +1,20 @@
+# ─── Local Development Secrets ────────────────────────────────────────────────
+# Copy this file to .dev.vars and fill in your values.
+# NEVER commit .dev.vars to git (it's in .gitignore already).
+# For production, add each key via: wrangler secret put <KEY>
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Everest credentials
+EVEREST_USERNAME=your_everest_username
+EVEREST_PASSWORD=your_everest_password
+EVEREST_BASE_URL=https://everest.cargotrack.net
+
+# Upstash Redis (get from https://console.upstash.com)
+UPSTASH_REDIS_URL=https://your-db.upstash.io
+UPSTASH_REDIS_TOKEN=your_upstash_token_here
+
+# OpenAI (optional: needed for AI parsing fallback)
+OPENAI_API_KEY=sk-...
+
+# Admin endpoint secret (simple string, make it long and random)
+ADMIN_SECRET=change-me-to-a-long-random-string

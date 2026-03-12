@@ -1,38 +1,29 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "hit-ever2",
+  "name": "hit-ever-scraper",
   "main": "src/index.ts",
-  "compatibility_date": "2026-03-12"
-  // "compatibility_flags": [
-  //   "nodejs_compat"
-  // ],
-  // "vars": {
-  //   "MY_VAR": "my-variable"
-  // },
-  // "kv_namespaces": [
-  //   {
-  //     "binding": "MY_KV_NAMESPACE",
-  //     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  //   }
-  // ],
-  // "r2_buckets": [
-  //   {
-  //     "binding": "MY_BUCKET",
-  //     "bucket_name": "my-bucket"
-  //   }
-  // ],
-  // "d1_databases": [
-  //   {
-  //     "binding": "MY_DB",
-  //     "database_name": "my-database",
-  //     "database_id": ""
-  //   }
-  // ],
-  // "ai": {
-  //   "binding": "AI"
-  // },
-  // "observability": {
-  //   "enabled": true,
-  //   "head_sampling_rate": 1
+  "compatibility_date": "2026-03-12",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  // ─── Observability (real-time logs in CF dashboard) ────────────────────────
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  // ─── Environment Variables (non-secret, safe to commit) ───────────────────
+  // Secrets are stored via: wrangler secret put <KEY>
+  // Never put credentials here.
+  "vars": {
+    "EVEREST_BASE_URL": "https://everest.cargotrack.net"
+  }
+  // ─── Future: Cloudflare Browser Rendering ─────────────────────────────────
+  // Uncomment once Browser Rendering API is enabled in your CF account.
+  // "browser": {
+  //   "binding": "BROWSER"
+  // }
+  // ─── Future: Cron Triggers for silent background processing ───────────────
+  // "triggers": {
+  //   "crons": ["*/15 * * * *"]  // every 15 min to refresh sessions
   // }
 }
