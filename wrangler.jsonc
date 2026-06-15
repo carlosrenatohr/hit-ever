@@ -17,11 +17,12 @@
   "vars": {
     "EVEREST_BASE_URL": "https://everest.cargotrack.net"
   },
-  // ─── Cron: low-footprint routine ingestion every 12h (recent window). ───────
-  // Near-real-time freshness comes from the email trigger (Zapier → /hooks). Kept
-  // infrequent because Cargotrack denies frequent re-logins (single-session guard).
+  // ─── Cron: routine ingestion every 2h (recent window). ──────────────────────
+  // Near-real-time freshness comes from the email trigger (Zapier → /hooks). Frequency
+  // is a tradeoff: more often = fresher, but more re-logins against Cargotrack's
+  // single-session guard. Tune against live behavior.
   "triggers": {
-    "crons": ["0 */12 * * *"]
+    "crons": ["0 */2 * * *"]
   }
   // ─── Future: Cloudflare Browser Rendering ─────────────────────────────────
   // Uncomment once Browser Rendering API is enabled in your CF account.
