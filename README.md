@@ -2,6 +2,8 @@
 
 > **Cloudflare Worker • Hono API** — Everest CargoTrack silent scraper for [Hit Cargo](https://hitcargo.com).
 
+**Workspace:** en el monolocal de carpetas, el contexto de producto (prioridades, otros repos, equipo part-time) está en [`../CLAUDE.md`](../CLAUDE.md) en la raíz del workspace `hit` (navegación relativa: un nivel arriba de esta carpeta).
+
 Microservice that scrapes `everest.cargotrack.net` (Classic ASP) and exposes a clean REST API for shipment tracking. Powers the dynamic tracking form on the Hit Cargo Astro website.
 
 ---
