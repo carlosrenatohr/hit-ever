@@ -71,9 +71,10 @@ admin.post(
 /** POST /admin/ingest?pages=N — triggers ingestion of all active providers (backfill/manual). */
 admin.post('/ingest', async (c) => {
   const pages = Math.min(20, Math.max(1, Number(c.req.query('pages') ?? '1')))
+  const days = Math.min(120, Math.max(1, Number(c.req.query('days') ?? '7')))
   try {
-    const result = await new IngestService(c.env).ingestAll(pages)
-    return Res.ok(c, { pages, result })
+    const result = await new IngestService(c.env).ingestAll(pages, days)
+    return Res.ok(c, { pages, days, result })
   } catch (error) {
     return Res.err(c, 'INGEST_FAILED', (error as Error).message, 500)
   }

@@ -12,6 +12,7 @@ export interface CloudflareBindings {
     // Global Connection (2nd provider, same Cargotrack engine) — optional until activated
     GC_USERNAME?: string
     GC_PASSWORD?: string
+    GC_BASE_URL?: string
 
     // OpenAI (future: AI parsing)
     OPENAI_API_KEY: string

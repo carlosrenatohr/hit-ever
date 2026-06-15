@@ -7,19 +7,22 @@ import type { Provider, ShipmentStatus } from '../types/tracking.js'
 // ============================================================================
 // Multi-provider Cargotrack → Insforge ingestion.
 // ============================================================================
-// The PARSER (lib/cargotrack.ts) is validated against real fixtures.
-// The NETWORK ROUTES must be verified live (there was no login fixture):
-//   - login:  POST {base}/default.asp  with fields txtUser/txtPassword/btnLogin
-//   - detail: GET {base}{DETAIL_PATH}?id=N   (whs_detail confirmed in the list links)
-//   - list:   GET {base}{LIST_PATH}?...      (URL/pagination TO BE CONFIRMED)
-// Adjust these constants after the first run.
-
-const LOGIN_PATH = '/default.asp'
-const DETAIL_PATH = '/appl2.0/cgi/whs_detail.asp'
-const LIST_PATH = '/appl2.0/cgi/whs_list.asp' // ⚠ TO BE CONFIRMED (real URL of the Warehouse view)
+// Network routes verified live against everest.cargotrack.net (both providers share the
+// same Cargotrack engine):
+//   - login:  GET /  then  POST /  with  user / password / action=login / Submit="Log In"
+//             (the POST regenerates the authenticated ASPSESSIONID cookie)
+//   - list:   GET /appl2.0/agent/whs.asp      (Warehouse view; page 1 is the most recent)
+//   - detail: GET /appl2.0/agent/whs_detail.asp?id=N
+const LIST_PATH = '/appl2.0/agent/whs.asp'
+const DETAIL_PATH = '/appl2.0/agent/whs_detail.asp'
 const SESSION_TTL_SEC = 13 * 60
+const LOGIN_BACKOFF_SEC = 15 * 60 // after an access-denied, wait before trying to log in again
+const INGEST_WINDOW_DAYS = 7 // only ingest packages received within this window
+const THROTTLE_MS = 900 // base delay between detail fetches (keep the footprint low)
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 // Per-provider credentials (in Cloudflare Secrets, never in the DB).
 function credsFor(code: string, env: CloudflareBindings): { user: string; pass: string } | null {
@@ -45,9 +48,17 @@ function toIso(date?: string, time?: string): string | null {
   return `${yr}-${mo.padStart(2, '0')}-${da.padStart(2, '0')}T${hh}:${mm}:00Z`
 }
 
+// Keeps rows whose date is within `days` of now. Unknown dates are kept (fail-open).
+function withinDays(fecha: string | undefined, days: number): boolean {
+  const iso = toIso(fecha)
+  if (!iso) return true
+  return Date.now() - Date.parse(iso) <= days * 86_400_000
+}
+
 export class CargotrackClient {
   private redis: UpstashRedisClient
   private sessionKey: string
+  private blockKey: string
 
   constructor(
     private baseUrl: string,
@@ -58,6 +69,7 @@ export class CargotrackClient {
   ) {
     this.redis = new UpstashRedisClient(env.UPSTASH_REDIS_URL, env.UPSTASH_REDIS_TOKEN)
     this.sessionKey = `ct:session:${providerCode}`
+    this.blockKey = `ct:login_block:${providerCode}`
     this.baseUrl = baseUrl.replace(/\/$/, '')
   }
 
@@ -68,20 +80,50 @@ export class CargotrackClient {
   }
 
   private async login(): Promise<string> {
-    const body = new URLSearchParams({
-      txtUser: this.username,
-      txtPassword: this.password,
-      btnLogin: 'Entrar',
-    })
-    const res = await fetch(`${this.baseUrl}${LOGIN_PATH}`, {
+    // Cargotrack enforces a single session / anti-abuse guard: logging in again while a
+    // session is active (or too frequently) returns validate.asp?accessdenied. Back off
+    // after a denial so we never hammer the provider.
+    if (await this.redis.get<number>(this.blockKey)) {
+      throw new Error('Login backing off after a recent access-denied; reusing nothing.')
+    }
+
+    // Accumulate cookies across the whole flow (GET → POST → agent landing); the authenticated
+    // session cookie is only fully established once we follow to the agent area.
+    const jar = new Map<string, string>()
+    const merge = (res: Response) => {
+      for (const sc of res.headers.getSetCookie?.() ?? []) {
+        const nv = sc.split(';')[0]
+        const i = nv.indexOf('=')
+        if (i > 0) jar.set(nv.slice(0, i).trim(), nv.slice(i + 1))
+      }
+    }
+    const cookieHeader = () =>
+      [...jar].map(([k, v]) => `${k}=${v}`).join('; ')
+
+    // 1. Seed the session.
+    merge(await fetch(`${this.baseUrl}/`, { headers: { 'User-Agent': UA }, redirect: 'manual' }))
+
+    // 2. Submit credentials.
+    const body = new URLSearchParams({ user: this.username, password: this.password, action: 'login', Submit: 'Log In' })
+    const post = await fetch(`${this.baseUrl}/`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': UA },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': UA, Referer: `${this.baseUrl}/`, Cookie: cookieHeader() },
       body: body.toString(),
       redirect: 'manual',
     })
-    const setCookies = res.headers.getSetCookie?.() ?? []
-    const cookie = setCookies.map((c) => c.split(';')[0]).join('; ')
-    if (!cookie) throw new Error(`Login failed (${this.baseUrl}): no cookies. Status ${res.status}. Check the form fields.`)
+    merge(post)
+
+    // Denied (concurrent session / cooldown): record a backoff and stop.
+    if (/validate\.asp|accessdenied/i.test(post.headers.get('location') ?? '')) {
+      await this.redis.set(this.blockKey, 1, LOGIN_BACKOFF_SEC)
+      throw new Error('Cargotrack denied the login (validate.asp?accessdenied) — concurrent session or anti-abuse cooldown.')
+    }
+
+    // 3. Follow to the agent landing to capture the authenticated session cookie.
+    merge(await fetch(`${this.baseUrl}/appl2.0/agent/default.asp`, { headers: { 'User-Agent': UA, Cookie: cookieHeader(), Referer: `${this.baseUrl}/` }, redirect: 'manual' }))
+
+    const cookie = cookieHeader()
+    if (!cookie) throw new Error(`Login failed (${this.baseUrl}): no session cookie.`)
     await this.redis.set(this.sessionKey, cookie, SESSION_TTL_SEC)
     return cookie
   }
@@ -89,9 +131,10 @@ export class CargotrackClient {
   private async fetchHtml(path: string, retried = false): Promise<string> {
     const cookie = await this.getCookie()
     const res = await fetch(`${this.baseUrl}${path}`, {
-      headers: { Cookie: cookie, 'User-Agent': UA, Referer: `${this.baseUrl}/` },
+      headers: { Cookie: cookie, 'User-Agent': UA, Referer: `${this.baseUrl}/appl2.0/agent/default.asp` },
       redirect: 'manual',
     })
+    // Session expired → Cargotrack 302s back to the login page; re-login once.
     if ((res.status === 301 || res.status === 302) && !retried) {
       await this.redis.del(this.sessionKey)
       return this.fetchHtml(path, true)
@@ -104,7 +147,9 @@ export class CargotrackClient {
   }
 
   fetchListPage(page = 1): Promise<string> {
-    return this.fetchHtml(`${LIST_PATH}?page=${page}`)
+    // Page 1 is the default Warehouse view (most recent first); enough for the 7-day window.
+    const q = page > 1 ? `?page=${page}` : ''
+    return this.fetchHtml(`${LIST_PATH}${q}`)
   }
 }
 
@@ -149,6 +194,22 @@ export class IngestService {
     return new CargotrackClient(p.baseUrl, creds.user, creds.pass, this.env, p.code)
   }
 
+  private async persist(providerId: string, almacenId: string, list: ListRow | undefined, detail: DetailData | undefined): Promise<void> {
+    const pkgId = await this.db.upsertPackage(toPackageRow(providerId, almacenId, list, detail))
+    if (pkgId && detail?.events.length) {
+      await this.db.upsertEvents(
+        detail.events.map((e) => ({
+          package_id: pkgId,
+          occurred_at: toIso(e.date, e.time),
+          office: e.office ?? null,
+          description: e.description,
+          status: null,
+          source: 'cargotrack',
+        })),
+      )
+    }
+  }
+
   /** Ingests ONE package by warehouse number (used by the email trigger). */
   async ingestOne(providerCode: string, almacenId: string): Promise<boolean> {
     const providers = await this.db.getActiveProviders()
@@ -161,24 +222,16 @@ export class IngestService {
     // Ownership filter: if the provider filters by mailbox (casillero), require a match.
     if (p.casilleroFilter && detail.consigneeId !== p.casilleroFilter) return false
 
-    const pkgId = await this.db.upsertPackage(toPackageRow(p.id, almacenId, undefined, detail))
-    if (pkgId && detail.events.length) {
-      await this.db.upsertEvents(
-        detail.events.map((e) => ({
-          package_id: pkgId,
-          occurred_at: toIso(e.date, e.time),
-          office: e.office ?? null,
-          description: e.description,
-          status: null,
-          source: 'cargotrack',
-        })),
-      )
-    }
+    await this.persist(p.id, almacenId, undefined, detail)
     return true
   }
 
-  /** Walks a provider's (capped) list and upserts HIT's packages. */
-  async ingestProvider(providerCode: string, maxPages = 1, enrichDetail = true): Promise<number> {
+  /**
+   * Walks a provider's Warehouse list and upserts HIT's recent packages.
+   * Bounded to the last INGEST_WINDOW_DAYS and throttled between detail fetches to keep
+   * the footprint low. The list is date-descending, so paging stops once it leaves the window.
+   */
+  async ingestProvider(providerCode: string, maxPages = 1, windowDays = INGEST_WINDOW_DAYS): Promise<number> {
     const providers = await this.db.getActiveProviders()
     const p = providers.find((x) => x.code === providerCode)
     if (!p) return 0
@@ -190,38 +243,29 @@ export class IngestService {
       const rows = parseAlmacenList(await client.fetchListPage(page))
       if (rows.length === 0) break
 
-      // Filter: in shared accounts (casillero_filter not null) only HIT's packages.
+      // Shared accounts (casilleroFilter set) → only HIT's packages.
       const mine = p.casilleroFilter ? rows.filter(isHitPackage) : rows
+      const recent = mine.filter((r) => withinDays(r.fecha, windowDays))
 
-      for (const row of mine) {
+      for (const row of recent) {
+        if (count > 0) await sleep(THROTTLE_MS + Math.floor(Math.random() * 600))
         let detail: DetailData | undefined
-        if (enrichDetail) {
-          try {
-            detail = parseDetail(await client.fetchDetail(row.almacenId))
-          } catch {
-            detail = undefined
-          }
+        try {
+          detail = parseDetail(await client.fetchDetail(row.almacenId))
+        } catch {
+          detail = undefined
         }
-        const pkgId = await this.db.upsertPackage(toPackageRow(p.id, row.almacenId, row, detail))
-        if (pkgId && detail?.events.length) {
-          await this.db.upsertEvents(
-            detail.events.map((e) => ({
-              package_id: pkgId,
-              occurred_at: toIso(e.date, e.time),
-              office: e.office ?? null,
-              description: e.description,
-              status: null,
-              source: 'cargotrack',
-            })),
-          )
-        }
+        await this.persist(p.id, row.almacenId, row, detail)
         count++
       }
+
+      // List is most-recent-first: if this page already fell out of the window, stop paging.
+      if (recent.length < mine.length) break
     }
     return count
   }
 
-  /** Tries to ingest a warehouse number into each active provider (for the email trigger without a provider). */
+  /** Tries to ingest a warehouse number into each active provider (email trigger without a provider). */
   async ingestOneAnyProvider(almacenId: string): Promise<string | null> {
     const providers = await this.db.getActiveProviders()
     for (const p of providers) {
@@ -234,12 +278,12 @@ export class IngestService {
     return null
   }
 
-  async ingestAll(maxPages = 1): Promise<Record<string, number>> {
+  async ingestAll(maxPages = 1, windowDays = INGEST_WINDOW_DAYS): Promise<Record<string, number>> {
     const providers = await this.db.getActiveProviders()
     const out: Record<string, number> = {}
     for (const p of providers) {
       try {
-        out[p.code] = await this.ingestProvider(p.code, maxPages)
+        out[p.code] = await this.ingestProvider(p.code, maxPages, windowDays)
       } catch (e) {
         console.error(`[ingest] ${p.code} failed:`, (e as Error).message)
         out[p.code] = -1
