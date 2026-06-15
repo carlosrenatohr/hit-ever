@@ -16,6 +16,10 @@
   // Never put credentials here.
   "vars": {
     "EVEREST_BASE_URL": "https://everest.cargotrack.net"
+  },
+  // ─── Cron: backup ingestion every 6h (primary freshness = email trigger) ───
+  "triggers": {
+    "crons": ["0 */6 * * *"]
   }
   // ─── Future: Cloudflare Browser Rendering ─────────────────────────────────
   // Uncomment once Browser Rendering API is enabled in your CF account.

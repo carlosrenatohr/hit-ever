@@ -4,9 +4,12 @@ import { logger } from 'hono/logger'
 import { prettyJSON } from 'hono/pretty-json'
 import { secureHeaders } from 'hono/secure-headers'
 import { timing } from 'hono/timing'
+import { almacenIdFromEmail } from './lib/cargotrack.js'
 import { Res } from './lib/response.js'
 import { adminRouter } from './routes/admin.js'
+import { hooksRouter } from './routes/hooks.js'
 import { trackRouter } from './routes/track.js'
+import { IngestService } from './services/ingest.js'
 import type { CloudflareBindings } from './types/index.js'
 
 // ─── App ──────────────────────────────────────────────────────────────────────
@@ -28,8 +31,8 @@ app.use(
   '*',
   cors({
     origin: [
-      'https://hitcargo.com',
-      'https://www.hitcargo.com',
+      'https://hit-cargo.com',
+      'https://www.hit-cargo.com',
       'http://localhost:4321',   // Astro dev
       'http://localhost:3000',
     ],
@@ -64,6 +67,7 @@ app.get('/', (c) =>
 // Mount sub-routers
 app.route('/track', trackRouter)
 app.route('/admin', adminRouter)
+app.route('/hooks', hooksRouter)
 
 // ─── 404 Catch-all ────────────────────────────────────────────────────────────
 app.notFound((c) =>
@@ -82,4 +86,27 @@ app.onError((err, c) => {
 })
 
 // ─── Export ───────────────────────────────────────────────────────────────────
-export default app
+export default {
+  fetch: app.fetch,
+
+  // Cron (wrangler triggers): periodic backup refresh. The main freshness mechanism
+  // is the email trigger; this covers whatever the email does not reach.
+  async scheduled(_event: unknown, env: CloudflareBindings, ctx: { waitUntil(p: Promise<unknown>): void }) {
+    ctx.waitUntil(new IngestService(env).ingestAll(2))
+  },
+
+  // Cloudflare Email Routing: route the Cargotrack update email to this Worker.
+  // Validates the sender, extracts the warehouse number, and re-scrapes that package.
+  async email(message: any, env: CloudflareBindings, ctx: { waitUntil(p: Promise<unknown>): void }) {
+    try {
+      const from = String(message.from ?? '').toLowerCase()
+      if (!from.endsWith('@cargotrack.email')) return
+      const raw = await new Response(message.raw).text()
+      const id = almacenIdFromEmail(raw) ?? almacenIdFromEmail(String(message.headers?.get?.('subject') ?? ''))
+      if (!id) return
+      ctx.waitUntil(new IngestService(env).ingestOneAnyProvider(id))
+    } catch (e) {
+      console.error('[email]', (e as Error).message)
+    }
+  },
+}
