@@ -197,6 +197,12 @@ export class InsforgeClient implements TrackingRepository {
     await this.upsert('events', rows, 'package_id,occurred_at,description')
   }
 
+  /** Stores provider Notas (dedup by unique(package_id, body, author, noted_at)). */
+  async upsertProviderNotes(rows: Record<string, unknown>[]): Promise<void> {
+    if (rows.length === 0) return
+    await this.upsert('package_provider_notes', rows, 'package_id,body,author,noted_at')
+  }
+
   // ─── Internal tool (B6) ────────────────────────────────────────────────────────
   async setManualStatus(packageId: string, status: ShipmentStatus, by: string, note?: string, at?: string): Promise<void> {
     await this.patch('packages', `id=eq.${encodeURIComponent(packageId)}`, {

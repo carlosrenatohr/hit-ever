@@ -1,4 +1,4 @@
-import { parseAlmacenList, parseDetail, isHitPackage, type DetailData, type DetailEvent, type ListRow } from '../lib/cargotrack.js'
+import { parseAlmacenList, parseDetail, isHitPackage, type DetailData, type DetailEvent, type ListRow, type ProviderNote } from '../lib/cargotrack.js'
 import { getRepository, type TrackingRepository } from '../lib/repository.js'
 import { UpstashRedisClient } from '../lib/session.js'
 import type { CloudflareBindings } from '../types/index.js'
@@ -165,7 +165,7 @@ export class CargotrackClient {
 function toPackageRow(providerId: string, almacenId: string, list?: ListRow, detail?: DetailData): Record<string, unknown> {
   const status: ShipmentStatus = list?.status ?? detail?.statusFromDetail ?? 'desconocido'
   const lastEvent = detail?.events.at(-1)
-  return {
+  const row: Record<string, unknown> = {
     provider_id: providerId,
     almacen_id: almacenId,
     tracking_number: detail?.trackingNumber ?? null,
@@ -187,6 +187,18 @@ function toPackageRow(providerId: string, almacenId: string, list?: ListRow, det
     scraped_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }
+
+  // Providers that don't flip to "delivered" by color (Global Connection) record it as a
+  // "RETIRADO" note. Mirror it into the manual status override. Everest already shows it by
+  // color, so `status !== 'entregado'` keeps this effectively GC-only and never clobbers an
+  // existing override (when no RETIRADO note, manual_status is omitted and stays untouched).
+  const retirado = detail?.notes.find((n) => /retirad/i.test(n.body))
+  if (retirado && status !== 'entregado') {
+    row.manual_status = 'entregado'
+    row.manual_status_by = 'cargotrack-note'
+    row.manual_status_at = toIso(retirado.notedAt) ?? new Date().toISOString()
+  }
+  return row
 }
 
 export class IngestService {
@@ -216,6 +228,11 @@ export class IngestService {
         })),
       )
     }
+    if (pkgId && detail?.notes.length) {
+      await this.db.upsertProviderNotes(
+        detail.notes.map((n) => ({ package_id: pkgId, body: n.body, author: n.author ?? null, noted_at: n.notedAt ?? null })),
+      )
+    }
   }
 
   /**
@@ -228,6 +245,7 @@ export class IngestService {
 
     const pkgRows: Record<string, unknown>[] = []
     const eventsByAlmacen = new Map<string, DetailEvent[]>()
+    const notesByAlmacen = new Map<string, ProviderNote[]>()
     for (const row of candidates) {
       if (pkgRows.length > 0) await sleep(THROTTLE_MS + Math.floor(Math.random() * 600))
       let detail: DetailData | undefined
@@ -240,6 +258,7 @@ export class IngestService {
       if (p.casilleroFilter && detail?.consigneeId && detail.consigneeId !== p.casilleroFilter) continue
       pkgRows.push(toPackageRow(p.id, row.almacenId, row, detail))
       if (detail?.events.length) eventsByAlmacen.set(row.almacenId, detail.events)
+      if (detail?.notes.length) notesByAlmacen.set(row.almacenId, detail.notes)
     }
     if (pkgRows.length === 0) return 0
 
@@ -255,6 +274,16 @@ export class IngestService {
       }
     }
     await this.db.upsertEvents(eventRows)
+
+    const noteRows: Record<string, unknown>[] = []
+    for (const [almacen, ns] of notesByAlmacen) {
+      const pid = idByAlmacen.get(almacen)
+      if (!pid) continue
+      for (const n of ns) {
+        noteRows.push({ package_id: pid, body: n.body, author: n.author ?? null, noted_at: n.notedAt ?? null })
+      }
+    }
+    await this.db.upsertProviderNotes(noteRows)
     return pkgRows.length
   }
 

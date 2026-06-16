@@ -17,6 +17,7 @@ export interface TrackingRepository {
   upsertPackage(pkg: Record<string, unknown>): Promise<string | null>
   upsertPackages(rows: Record<string, unknown>[]): Promise<{ id: string; almacen_id: string }[]>
   upsertEvents(rows: Record<string, unknown>[]): Promise<void>
+  upsertProviderNotes(rows: Record<string, unknown>[]): Promise<void>
   setManualStatus(packageId: string, status: ShipmentStatus, by: string, note?: string, at?: string): Promise<void>
   addTag(packageId: string, label: string, value: string | null, by: string): Promise<void>
   addNote(packageId: string, body: string, by: string): Promise<void>
@@ -150,6 +151,10 @@ export class MemoryRepository implements TrackingRepository {
     for (const p of this.packages.values()) {
       if (p.id === packageId) p.manualStatus = status
     }
+  }
+
+  async upsertProviderNotes(): Promise<void> {
+    /* no-op in demo mode */
   }
 
   async addTag(): Promise<void> {

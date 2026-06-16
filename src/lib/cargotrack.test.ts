@@ -47,10 +47,12 @@ describe('parseDetail', () => {
     expect(d.trackingNumber).not.toMatch(/\s/) // no spaces despite the line break in the HTML
   })
 
-  it('parses events and notes', () => {
+  it('parses events and structured notes', () => {
     expect(d.events.length).toBeGreaterThanOrEqual(1)
     expect(d.events[0].description).toMatch(/recib/i)
     expect(d.notes.length).toBeGreaterThanOrEqual(1)
+    expect(d.notes[0].body).toMatch(/flete|recib/i)
+    expect(d.notes[0].author).toMatch(/everest|loreta/i)
   })
 })
 

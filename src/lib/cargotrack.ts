@@ -107,6 +107,12 @@ export interface DetailEvent {
   description: string
 }
 
+export interface ProviderNote {
+  body: string
+  author?: string
+  notedAt?: string // raw source date, e.g. "5/28/2026 11:32:00 AM"
+}
+
 export interface DetailData {
   almacenId?: string
   date?: string
@@ -125,7 +131,7 @@ export interface DetailData {
   estadoText?: string // package status, e.g. "In Transit"
   statusFromDetail: ShipmentStatus
   events: DetailEvent[]
-  notes: string[]
+  notes: ProviderNote[]
 }
 
 function inputVal(html: string, name: string): string | undefined {
@@ -174,12 +180,15 @@ export function parseDetail(html: string): DetailData {
 
   // Notes: "Notas" table → each <td class="ntextrow"> is a note (except the header).
   const notesBlock = sliceBetween(html, /<td[^>]*>Notas<\/td>/i, /Archivo/i)
-  const notes: string[] = []
+  const notes: ProviderNote[] = []
   const noteRe = /<td[^>]*class="ntextrow"[^>]*>([\s\S]*?)<\/td>/gi
   let nt: RegExpExecArray | null
   while ((nt = noteRe.exec(notesBlock)) !== null) {
     const text = stripTags(nt[1])
-    if (text) notes.push(text)
+    if (!text) continue
+    // "<body> Creado por <author> el <date>"
+    const m = /^(.*?)\s*creado por\s+(.+?)\s+el\s+(.+)$/i.exec(text)
+    notes.push(m ? { body: m[1].trim(), author: m[2].trim(), notedAt: m[3].trim() } : { body: text })
   }
 
   // Package status (e.g. "In Transit") in the measurements table.
