@@ -1,175 +1,192 @@
 # hit-ever-scraper
 
-> **Cloudflare Worker • Hono API** — Everest CargoTrack silent scraper for [Hit Cargo](https://hitcargo.com).
+> **Cloudflare Worker • Hono API** — tracking API for [Hit Cargo](https://hit-cargo.com).
 
-**Workspace:** en el monolocal de carpetas, el contexto de producto (prioridades, otros repos, equipo part-time) está en [`../CLAUDE.md`](../CLAUDE.md) en la raíz del workspace `hit` (navegación relativa: un nivel arriba de esta carpeta).
+**Workspace:** product context (priorities, other repos, part-time team) lives in [`../CLAUDE.md`](../CLAUDE.md) at the root of the `hit` workspace (one level up from this folder).
 
-Microservice that scrapes `everest.cargotrack.net` (Classic ASP) and exposes a clean REST API for shipment tracking. Powers the dynamic tracking form on the Hit Cargo Astro website.
+The Worker exposes a clean public tracking API that the Hit Cargo Astro site consumes. It **reads from our own database (InsForge)** — it does **not** scrape live on request. A background pipeline scrapes Cargotrack (Everest + Global Connection), filters to HIT's mailbox, and writes InsForge; the public `/track` endpoint then serves a minimal, PII-free payload from that database.
+
+For the full, copy-pasteable request/response catalog (every endpoint, every status code, curl + Postman), see **[docs/e2e-testing.md](docs/e2e-testing.md)** — it is the source of truth for the API contract.
 
 ---
 
 ## Architecture
 
 ```
-Astro Website
-     │
-     │  GET /track/:id
-     ▼
-Cloudflare Worker  (this repo)
-  ├─ Hono API  ──────────────────── routes/track.ts
-  ├─ Session Store ──────────────── Upstash Redis (via REST)
-  └─ Scraper Service ────────────── services/scraper.ts
-         │
-         │  fetch() with ASPSESSIONID cookies
-         ▼
-  everest.cargotrack.net
-  (Classic ASP logistics system)
+Astro site ──GET /track/:guia──▶ Worker ──read──▶ InsForge (Postgres)
+                                    ▲                  ▲
+                                    │ write            │
+                       Ingestion (background) ─────────┘
+                         ├─ cron every 2h (recent window)
+                         ├─ email hook  /hooks/provider-email
+                         └─ manual      POST /admin/ingest
+                                    │ scrape (login + list + detail)
+                                    ▼
+                       Cargotrack (Classic ASP)
+                       ├─ Everest  (mailbox 37458 filter)
+                       └─ Global Connection (account 100% HIT)
 ```
 
-**Future path**: Replace `fetch()` scraping with **Cloudflare Browser Rendering** + Playwright for full JS-rendered pages.
+The site reads InsForge through the Worker, never Cargotrack directly. Scraping is throttled, recent-window, and runs in the background, so a public lookup is a fast DB read (no live login).
 
 ---
 
 ## Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/` | API root / info |
-| `GET` | `/track/:id` | Fetch shipment tracking data |
-| `GET` | `/admin/health` | Health check |
-| `POST` | `/admin/session/refresh` | Force fresh Everest login |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/` | — | API root / info |
+| `GET` | `/track/:id` | public | Public tracking. Minimal payload from InsForge (no PII/mailbox/value/photo). `200 / 404 / 422 / 429 / 503`. |
+| `GET` | `/admin/health` | — | Health check (`environment: configured \| missing-env`) |
+| `POST` | `/admin/ingest` | Bearer | Run ingestion. `?pages=N&days=D` or chunked `?offset=N&days=D`. |
+| `POST` | `/admin/packages/:guia/status` | Bearer | Manual status override (wins over scraped). |
+| `POST` | `/admin/packages/:guia/tags` | Bearer | Internal tag (not exposed publicly). |
+| `POST` | `/admin/packages/:guia/notes` | Bearer | Internal note (not exposed publicly). |
+| `POST` | `/hooks/provider-email` | `X-Hook-Secret` | Re-scrape one package from a provider update email. |
 
-### Example response — `GET /track/852786`
+Bearer = `Authorization: Bearer <ADMIN_SECRET>`. Cloudflare Email Routing also delivers the Cargotrack update email straight to the Worker's `email()` handler (same re-scrape path).
+
+### Response envelope
+
+All responses share one envelope. Add `?pretty=1` for indented JSON.
+
+- Success: `{ "ok": true, "data": { … }, "meta"?: { "cachedAt"?, "latencyMs"? } }`
+- Error: `{ "ok": false, "error": { "code": "…", "message": "…" } }`
+
+### `GET /track/:guia` — `data` is a `PublicShipment`
 
 ```json
 {
   "ok": true,
   "data": {
-    "trackingId": "852786",
-    "status": "at_warehouse",
-    "weight": "3.20 lbs",
-    "events": [
-      { "date": "20/01/2025", "time": "14:32", "description": "Ingreso a almacén Miami", "status": "at_warehouse" }
-    ],
-    "scrapedAt": 1741780000000
+    "guia": "910500",
+    "status": "en_transito",
+    "statusLabel": "En camino",
+    "step": 2,
+    "serviceType": "aereo",
+    "weightLb": 2.75,
+    "pieces": 1,
+    "receivedAt": "2026-06-12T14:31:00Z",
+    "lastEventAt": "2026-06-12T14:31:00Z",
+    "events": [{ "date": "2026-06-12T14:31:00Z", "description": "Recibido", "office": "MIA" }]
   },
-  "meta": {
-    "scrapedAt": 1741780000000,
-    "latencyMs": 1240
-  }
+  "meta": { "cachedAt": 1749731460000, "latencyMs": 42 }
 }
 ```
 
+`status` (internal enum): `en_almacen | parcial | en_transito | en_destino | entregado | excepcion | desconocido`. `statusLabel` is the Spanish user label and `step` (1..4, `0` for excepción/desconocido) drives the site's 4-step bar (Miami → En tránsito → Nicaragua → Entregado). A manual override (`/admin/packages/:guia/status`) wins over the scraped status. Full status/label/step mapping and the `404`/`422` cases are in [docs/e2e-testing.md §1.3](docs/e2e-testing.md).
+
 ---
 
-## Local Development
-
-### 1. Install dependencies
+## Local development
 
 ```bash
 pnpm install
+cp .dev.vars.example .dev.vars   # fill in secrets (see below)
+pnpm dev                          # → http://localhost:8787
 ```
 
-### 2. Configure secrets
+**Demo mode:** leave `INSFORGE_API_URL` empty and the Worker falls back to an in-memory repository seeded with sample data — `/track` works with zero external services, handy for UI work.
 
 ```bash
-cp .dev.vars.example .dev.vars
-# then fill in your Everest credentials, Upstash Redis, etc.
-```
-
-### 3. Run dev server
-
-```bash
-pnpm dev
-# → http://localhost:8787
-```
-
-### 4. Test endpoints
-
-```bash
-# Health check
 curl http://localhost:8787/admin/health
+curl "http://localhost:8787/track/910500?pretty=1"
+```
 
-# Track a shipment (requires valid Everest session)
-curl http://localhost:8787/track/852786
+### Test & gate
 
-# Force session refresh
-curl -X POST http://localhost:8787/admin/session/refresh \
-  -H "Content-Type: application/json" \
-  -d '{"secret":"your-admin-secret"}'
+```bash
+pnpm test     # vitest (parser fixtures + route validation)
+pnpm check    # gate: vitest + `wrangler deploy --dry-run` (the CI merge gate, F3)
 ```
 
 ---
 
 ## Deployment
 
-### Set secrets in Cloudflare
+Secrets are Cloudflare secrets (`wrangler secret put <KEY>`), already set in prod:
 
 ```bash
+wrangler secret put INSFORGE_API_URL
+wrangler secret put INSFORGE_API_KEY     # admin key — server only, never in the site
 wrangler secret put EVEREST_USERNAME
 wrangler secret put EVEREST_PASSWORD
+wrangler secret put GC_USERNAME          # Global Connection
+wrangler secret put GC_PASSWORD
 wrangler secret put UPSTASH_REDIS_URL
 wrangler secret put UPSTASH_REDIS_TOKEN
-wrangler secret put OPENAI_API_KEY     # optional
-wrangler secret put ADMIN_SECRET
+wrangler secret put ADMIN_SECRET         # Bearer for /admin/* and /hooks/*
 ```
-
-### Deploy
 
 ```bash
-pnpm deploy
+pnpm run deploy   # wrangler deploy --minify   (note: `pnpm deploy` collides with pnpm's builtin)
+pnpm cf-typegen   # regenerate CloudflareBindings types
 ```
 
-### Generate TypeScript bindings
-
-```bash
-pnpm cf-typegen
-```
+Cron (`0 */2 * * *`) runs a recent-window ingestion as a backstop; the email hook is the primary freshness mechanism. DB schema lives in `db/*.sql` (applied via `npx @insforge/cli db`).
 
 ---
 
-## Project Structure
+## Cargotrack scraping — operational rules
+
+- **Login follows a redirect chain:** `GET /` → `POST /` (`user`/`password`/`action=login`/`Submit=Log In`) → `validate.asp` → `validate_final.asp` → `/appl2.0/agent/default.asp`. The `accessdenied=` in those URLs is part of a **successful** login, not a denial. Workers' `fetch` drops cookies across redirects, so the Worker walks the chain manually, accumulating cookies. List: `/appl2.0/agent/whs.asp?offset=15,30,…` (15 rows/page). Detail: `/appl2.0/agent/whs_detail.asp?id=<guia>`.
+- **Single session:** Cargotrack allows one active session per account. A Worker login while a human is logged into the browser returns empty lists. **Run ingestion when no human is logged in.** Sessions last ~2-3 min; the Worker caches one in Upstash.
+
+---
+
+## Project structure
 
 ```
 src/
-├── index.ts              # Hono app + middleware (CORS, logger, timing, headers)
+├── index.ts                 # Hono app + middleware; fetch/scheduled(cron)/email handlers
 ├── types/
-│   └── index.ts          # Shared TypeScript interfaces
+│   ├── tracking.ts          # domain types + toPublicShipment() + status mapping
+│   └── index.ts             # CloudflareBindings
 ├── lib/
-│   ├── response.ts       # Typed API response helpers (Res.ok / Res.err)
-│   ├── session.ts        # Upstash Redis client + SessionStore
-│   └── parser.ts         # Regex HTML parser + GPT-4o-mini AI fallback
+│   ├── repository.ts        # TrackingRepository interface; InsforgeClient + in-memory demo
+│   ├── insforge.ts          # InsForge (PostgREST-style) client
+│   ├── cargotrack.ts        # login + list/detail HTML parsers + mailbox filter
+│   ├── response.ts          # Res.ok / Res.err envelope helpers
+│   ├── ratelimit.ts         # per-IP rate limit (Upstash; fails open)
+│   ├── session.ts           # Upstash session cache
+│   └── parser.ts            # legacy/aux parser helpers
 ├── services/
-│   └── scraper.ts        # EverestScraperService (login, fetch, parse)
+│   ├── ingest.ts            # IngestService: scrape → filter → upsert (chunked + batched)
+│   └── scraper.ts           # Cargotrack fetch/login orchestration
 └── routes/
-    ├── track.ts           # GET /track/:id
-    └── admin.ts           # GET /admin/health, POST /admin/session/refresh
+    ├── track.ts             # GET /track/:id  (+ route validation test)
+    ├── admin.ts             # /admin/health, /admin/ingest, /admin/packages/:guia/*
+    └── hooks.ts             # POST /hooks/provider-email
 
-docs/
-├── everest-scraper-plan.md   # Architecture & roadmap
-└── playwright-plan.md        # Playwright integration guide + checklist
+db/        0001_init.sql, 0002_provider_notes.sql   # InsForge schema
+fixtures/  captured Cargotrack HTML for parser tests
+docs/      e2e-testing.md (API contract), everest-scraper-plan.md, playwright-plan.md
 ```
 
 ---
 
 ## Roadmap
 
-- [x] **v1.0.0** — Hono API scaffold, SessionStore, regex parser, AI parser stub
-- [ ] **v1.1.0** — Playwright login script (external) + `/admin/session/refresh` integration
-- [ ] **v1.2.0** — Tune regex parser from real HTML samples
-- [ ] **v1.3.0** — Cloudflare Browser Rendering (replace external Playwright)
-- [ ] **v2.0.0** — Supabase integration (shipment history, client portal)
+- [x] Public tracking API reading from InsForge (live, real data)
+- [x] Multi-provider ingestion (Everest + Global Connection) — chunked, batched, strict mailbox filter
+- [x] Admin tools: manual status override, tags, notes
+- [x] Email trigger (Cloudflare Email Routing + `/hooks/provider-email`) re-scrape
+- [x] Delivery harness (`pnpm check` + CI on PR)
+- [ ] Global Connection backfill (provider seeded; returns 0 until logged out of GC in the browser — single session)
+- [ ] Email-trigger bridge wired (Make.com → `/hooks/provider-email`)
+- [ ] Custom API domain `api.hit-cargo.com` (currently `*.workers.dev`)
+- [ ] Write notes back to Cargotrack (`remarks.asp`) + HIT's own notes / billing custom fields
+- [ ] Automated web↔worker integration test (today: unit + route + parser tests only)
 
 ---
 
-## Tech Stack
+## Tech stack
 
 | Layer | Technology |
 |-------|-----------|
 | Runtime | Cloudflare Workers |
 | Framework | [Hono](https://hono.dev) v4 |
-| Validation | [Zod](https://zod.dev) + `@hono/zod-validator` |
-| Session Cache | [Upstash Redis](https://upstash.com) (HTTP REST) |
-| Future Scraping | Cloudflare Browser Rendering + Playwright |
-| Future AI Parsing | GPT-4o-mini |
-| Future Persistence | Supabase PostgreSQL |
+| Validation | [Zod](https://zod.dev) v4 + `@hono/zod-validator` |
+| Persistence | [InsForge](https://insforge.dev) (Postgres + REST) behind a repository interface |
+| Session cache / rate limit | [Upstash Redis](https://upstash.com) (HTTP REST) |
+| Scraping source | Cargotrack (Classic ASP) — Everest + Global Connection |
