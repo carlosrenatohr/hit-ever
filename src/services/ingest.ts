@@ -1,4 +1,4 @@
-import { parseAlmacenList, parseDetail, isHitPackage, type DetailData, type ListRow } from '../lib/cargotrack.js'
+import { parseAlmacenList, parseDetail, isHitPackage, type DetailData, type DetailEvent, type ListRow } from '../lib/cargotrack.js'
 import { getRepository, type TrackingRepository } from '../lib/repository.js'
 import { UpstashRedisClient } from '../lib/session.js'
 import type { CloudflareBindings } from '../types/index.js'
@@ -15,8 +15,8 @@ import type { Provider, ShipmentStatus } from '../types/tracking.js'
 //   - detail: GET /appl2.0/agent/whs_detail.asp?id=N
 const LIST_PATH = '/appl2.0/agent/whs.asp'
 const DETAIL_PATH = '/appl2.0/agent/whs_detail.asp'
-const SESSION_TTL_SEC = 13 * 60
-const LOGIN_BACKOFF_SEC = 15 * 60 // after an access-denied, wait before trying to log in again
+const SESSION_TTL_SEC = 2 * 60 // Cargotrack sessions die in ~2-3 min; cache no longer than that
+const LOGIN_BACKOFF_SEC = 15 * 60 // after a genuine login failure, wait before trying again
 const INGEST_WINDOW_DAYS = 7 // only ingest packages received within this window
 const THROTTLE_MS = 900 // base delay between detail fetches (keep the footprint low)
 const UA =
@@ -80,11 +80,10 @@ export class CargotrackClient {
   }
 
   private async login(): Promise<string> {
-    // Cargotrack enforces a single session / anti-abuse guard: logging in again while a
-    // session is active (or too frequently) returns validate.asp?accessdenied. Back off
-    // after a denial so we never hammer the provider.
+    // Back off only after a genuine login failure (couldn't reach the agent area), so we
+    // never hammer the provider. Cargotrack sessions are short (~2-3 min) — see SESSION_TTL_SEC.
     if (await this.redis.get<number>(this.blockKey)) {
-      throw new Error('Login backing off after a recent access-denied; reusing nothing.')
+      throw new Error('Login backing off after a recent failure; not retrying yet.')
     }
 
     // Accumulate cookies across the whole flow (GET → POST → agent landing); the authenticated
@@ -113,14 +112,23 @@ export class CargotrackClient {
     })
     merge(post)
 
-    // Denied (concurrent session / cooldown): record a backoff and stop.
-    if (/validate\.asp|accessdenied/i.test(post.headers.get('location') ?? '')) {
-      await this.redis.set(this.blockKey, 1, LOGIN_BACKOFF_SEC)
-      throw new Error('Cargotrack denied the login (validate.asp?accessdenied) — concurrent session or anti-abuse cooldown.')
+    // 3. Follow the redirect chain, accumulating cookies, until we land in the agent area.
+    //    A successful login goes /validate.asp → /validate_final.asp → /appl2.0/agent/default.asp;
+    //    the "accessdenied=" in those URLs is part of the NORMAL flow, not a denial.
+    let res = post
+    let url = `${this.baseUrl}/`
+    for (let hop = 0; hop < 6 && (res.status === 301 || res.status === 302); hop++) {
+      const loc = res.headers.get('location')
+      if (!loc) break
+      url = new URL(loc, this.baseUrl).toString()
+      res = await fetch(url, { headers: { 'User-Agent': UA, Cookie: cookieHeader(), Referer: `${this.baseUrl}/` }, redirect: 'manual' })
+      merge(res)
     }
 
-    // 3. Follow to the agent landing to capture the authenticated session cookie.
-    merge(await fetch(`${this.baseUrl}/appl2.0/agent/default.asp`, { headers: { 'User-Agent': UA, Cookie: cookieHeader(), Referer: `${this.baseUrl}/` }, redirect: 'manual' }))
+    if (!/\/appl2\.0\/agent\//i.test(url)) {
+      await this.redis.set(this.blockKey, 1, LOGIN_BACKOFF_SEC)
+      throw new Error(`Login failed (${this.baseUrl}): did not reach the agent area (ended at ${url}).`)
+    }
 
     const cookie = cookieHeader()
     if (!cookie) throw new Error(`Login failed (${this.baseUrl}): no session cookie.`)
@@ -146,9 +154,9 @@ export class CargotrackClient {
     return this.fetchHtml(`${DETAIL_PATH}?id=${encodeURIComponent(almacenId)}`)
   }
 
-  fetchListPage(page = 1): Promise<string> {
-    // Page 1 is the default Warehouse view (most recent first); enough for the 7-day window.
-    const q = page > 1 ? `?page=${page}` : ''
+  fetchListPage(offset = 0): Promise<string> {
+    // The Warehouse list paginates by row offset (15 rows/page): offset 0, 15, 30, ...
+    const q = offset > 0 ? `?offset=${offset}` : ''
     return this.fetchHtml(`${LIST_PATH}${q}`)
   }
 }
@@ -210,6 +218,46 @@ export class IngestService {
     }
   }
 
+  /**
+   * Fetches details for the given page rows, applies the strict mailbox (casillero) filter,
+   * and writes them in BULK (one package upsert + one event upsert) to stay under the Worker
+   * subrequest limit. Everest: only the configured mailbox; other providers: keep all.
+   */
+  private async ingestRows(p: Provider, client: CargotrackClient, rows: ListRow[], windowDays: number): Promise<number> {
+    const candidates = (p.casilleroFilter ? rows.filter(isHitPackage) : rows).filter((r) => withinDays(r.fecha, windowDays))
+
+    const pkgRows: Record<string, unknown>[] = []
+    const eventsByAlmacen = new Map<string, DetailEvent[]>()
+    for (const row of candidates) {
+      if (pkgRows.length > 0) await sleep(THROTTLE_MS + Math.floor(Math.random() * 600))
+      let detail: DetailData | undefined
+      try {
+        detail = parseDetail(await client.fetchDetail(row.almacenId))
+      } catch {
+        detail = undefined
+      }
+      // Strict ownership: when the provider filters by mailbox, require the detail's casillero to match.
+      if (p.casilleroFilter && detail?.consigneeId && detail.consigneeId !== p.casilleroFilter) continue
+      pkgRows.push(toPackageRow(p.id, row.almacenId, row, detail))
+      if (detail?.events.length) eventsByAlmacen.set(row.almacenId, detail.events)
+    }
+    if (pkgRows.length === 0) return 0
+
+    // BULK writes: one package upsert (returns ids) + one event upsert — minimal subrequests.
+    const upserted = await this.db.upsertPackages(pkgRows)
+    const idByAlmacen = new Map(upserted.map((u) => [u.almacen_id, u.id]))
+    const eventRows: Record<string, unknown>[] = []
+    for (const [almacen, evs] of eventsByAlmacen) {
+      const pid = idByAlmacen.get(almacen)
+      if (!pid) continue
+      for (const e of evs) {
+        eventRows.push({ package_id: pid, occurred_at: toIso(e.date, e.time), office: e.office ?? null, description: e.description, status: null, source: 'cargotrack' })
+      }
+    }
+    await this.db.upsertEvents(eventRows)
+    return pkgRows.length
+  }
+
   /** Ingests ONE package by warehouse number (used by the email trigger). */
   async ingestOne(providerCode: string, almacenId: string): Promise<boolean> {
     const providers = await this.db.getActiveProviders()
@@ -240,29 +288,47 @@ export class IngestService {
 
     let count = 0
     for (let page = 1; page <= maxPages; page++) {
-      const rows = parseAlmacenList(await client.fetchListPage(page))
+      const rows = parseAlmacenList(await client.fetchListPage((page - 1) * 15))
       if (rows.length === 0) break
 
-      // Shared accounts (casilleroFilter set) → only HIT's packages.
       const mine = p.casilleroFilter ? rows.filter(isHitPackage) : rows
       const recent = mine.filter((r) => withinDays(r.fecha, windowDays))
-
-      for (const row of recent) {
-        if (count > 0) await sleep(THROTTLE_MS + Math.floor(Math.random() * 600))
-        let detail: DetailData | undefined
-        try {
-          detail = parseDetail(await client.fetchDetail(row.almacenId))
-        } catch {
-          detail = undefined
-        }
-        await this.persist(p.id, row.almacenId, row, detail)
-        count++
-      }
+      count += await this.ingestRows(p, client, rows, windowDays)
 
       // List is most-recent-first: if this page already fell out of the window, stop paging.
       if (recent.length < mine.length) break
     }
     return count
+  }
+
+  /**
+   * Ingests a SINGLE list page at a given row offset (for chunked backfills that fit the
+   * Worker time limit). Reuses the cached session across calls, so a multi-offset backfill
+   * only logs in once.
+   */
+  async ingestPage(providerCode: string, offset: number, windowDays = INGEST_WINDOW_DAYS): Promise<number> {
+    const providers = await this.db.getActiveProviders()
+    const p = providers.find((x) => x.code === providerCode)
+    if (!p) return 0
+    const client = this.clientFor(p)
+    if (!client) return 0
+
+    const rows = parseAlmacenList(await client.fetchListPage(offset))
+    return this.ingestRows(p, client, rows, windowDays)
+  }
+
+  async ingestAllAtOffset(offset: number, windowDays = INGEST_WINDOW_DAYS): Promise<Record<string, number>> {
+    const providers = await this.db.getActiveProviders()
+    const out: Record<string, number> = {}
+    for (const p of providers) {
+      try {
+        out[p.code] = await this.ingestPage(p.code, offset, windowDays)
+      } catch (e) {
+        console.error(`[ingest] ${p.code}@offset${offset} failed:`, (e as Error).message)
+        out[p.code] = -1
+      }
+    }
+    return out
   }
 
   /** Tries to ingest a warehouse number into each active provider (email trigger without a provider). */
