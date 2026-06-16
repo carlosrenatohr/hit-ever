@@ -147,7 +147,9 @@ export class CargotrackClient {
       await this.redis.del(this.sessionKey)
       return this.fetchHtml(path, true)
     }
-    return res.text()
+    // Cargotrack serves Classic-ASP pages in Windows-1252, not UTF-8; decoding as UTF-8 turns
+    // accented characters (ó, í, ñ) into U+FFFD. Decode the raw bytes as Windows-1252.
+    return new TextDecoder('windows-1252').decode(await res.arrayBuffer())
   }
 
   fetchDetail(almacenId: string): Promise<string> {
