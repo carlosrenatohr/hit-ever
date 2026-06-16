@@ -37,7 +37,7 @@ track.get(
     '/:id',
     zValidator('param', trackParamSchema, (result, c) => {
         if (!result.success) {
-            return Res.err(c, 'INVALID_PARAM', result.error.errors[0]?.message ?? 'Validation error', 422)
+            return Res.err(c, 'INVALID_PARAM', result.error.issues[0]?.message ?? 'Validation error', 422)
         }
     }),
     async (c) => {
