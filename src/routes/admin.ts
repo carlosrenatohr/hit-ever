@@ -72,11 +72,19 @@ admin.post(
 admin.post('/ingest', async (c) => {
   const days = Math.min(120, Math.max(1, Number(c.req.query('days') ?? '7')))
   const offsetParam = c.req.query('offset')
+  const provider = c.req.query('provider')
   try {
     const svc = new IngestService(c.env)
     // Chunked backfill: ?offset=N ingests just that one list page (fits the Worker time limit).
     if (offsetParam !== undefined) {
       const offset = Math.max(0, Number(offsetParam))
+      // ?provider=<code> ingests ONE provider per invocation. Providers without a mailbox
+      // filter (e.g. Global Connection) open a detail page per row, so running every provider
+      // in a single invocation can blow the Worker 50-subrequest limit; isolate them.
+      if (provider) {
+        const count = await svc.ingestPage(provider, offset, days)
+        return Res.ok(c, { provider, offset, days, count })
+      }
       const result = await svc.ingestAllAtOffset(offset, days)
       return Res.ok(c, { offset, days, result })
     }
