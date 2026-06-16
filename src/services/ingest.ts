@@ -229,9 +229,20 @@ export class IngestService {
       )
     }
     if (pkgId && detail?.notes.length) {
-      await this.db.upsertProviderNotes(
-        detail.notes.map((n) => ({ package_id: pkgId, body: n.body, author: n.author ?? null, noted_at: n.notedAt ?? null })),
-      )
+      const seen = new Set<string>()
+      const noteRows = detail.notes
+        .filter((n) => {
+          const key = `${n.body}|${n.author ?? ''}|${n.notedAt ?? ''}`
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
+        .map((n) => ({ package_id: pkgId, body: n.body, author: n.author ?? null, noted_at: n.notedAt ?? null }))
+      try {
+        await this.db.upsertProviderNotes(noteRows)
+      } catch (e) {
+        console.error('[ingest] provider notes upsert failed (non-fatal):', (e as Error).message)
+      }
     }
   }
 
@@ -276,14 +287,24 @@ export class IngestService {
     await this.db.upsertEvents(eventRows)
 
     const noteRows: Record<string, unknown>[] = []
+    const seen = new Set<string>()
     for (const [almacen, ns] of notesByAlmacen) {
       const pid = idByAlmacen.get(almacen)
       if (!pid) continue
       for (const n of ns) {
+        // Dedup within the batch — two identical notes would make ON CONFLICT hit the same row twice (500).
+        const key = `${pid}|${n.body}|${n.author ?? ''}|${n.notedAt ?? ''}`
+        if (seen.has(key)) continue
+        seen.add(key)
         noteRows.push({ package_id: pid, body: n.body, author: n.author ?? null, noted_at: n.notedAt ?? null })
       }
     }
-    await this.db.upsertProviderNotes(noteRows)
+    // Notes are supplementary — never fail the chunk (packages + events are already saved).
+    try {
+      await this.db.upsertProviderNotes(noteRows)
+    } catch (e) {
+      console.error('[ingest] provider notes upsert failed (non-fatal):', (e as Error).message)
+    }
     return pkgRows.length
   }
 
