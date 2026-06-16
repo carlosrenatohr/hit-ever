@@ -15,6 +15,7 @@ export interface TrackingRepository {
   getEvents(packageId: string): Promise<EventRecord[]>
   getActiveProviders(): Promise<Provider[]>
   upsertPackage(pkg: Record<string, unknown>): Promise<string | null>
+  upsertPackages(rows: Record<string, unknown>[]): Promise<{ id: string; almacen_id: string }[]>
   upsertEvents(rows: Record<string, unknown>[]): Promise<void>
   setManualStatus(packageId: string, status: ShipmentStatus, by: string, note?: string, at?: string): Promise<void>
   addTag(packageId: string, label: string, value: string | null, by: string): Promise<void>
@@ -124,6 +125,15 @@ export class MemoryRepository implements TrackingRepository {
       status: (pkg.status as ShipmentStatus) ?? 'desconocido',
     })
     return id
+  }
+
+  async upsertPackages(rows: Record<string, unknown>[]): Promise<{ id: string; almacen_id: string }[]> {
+    const out: { id: string; almacen_id: string }[] = []
+    for (const r of rows) {
+      const id = await this.upsertPackage(r)
+      if (id) out.push({ id, almacen_id: String(r.almacen_id ?? '') })
+    }
+    return out
   }
 
   async upsertEvents(rows: Record<string, unknown>[]): Promise<void> {

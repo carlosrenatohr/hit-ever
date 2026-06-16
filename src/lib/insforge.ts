@@ -171,12 +171,24 @@ export class InsforgeClient implements TrackingRepository {
 
   /** Upsert a package (conflict on provider_id, almacen_id). Returns its id. */
   async upsertPackage(pkg: Record<string, unknown>): Promise<string | null> {
-    await this.upsert('packages', [pkg], 'provider_id,almacen_id')
-    const rows = await this.get<{ id: string }>(
-      'packages',
-      `provider_id=eq.${pkg.provider_id}&almacen_id=eq.${pkg.almacen_id}&limit=1`,
-    )
+    const rows = await this.upsertPackages([pkg])
     return rows[0]?.id ?? null
+  }
+
+  /**
+   * Bulk upsert packages in ONE request, returning the rows (with ids) via
+   * `Prefer: return=representation`. Used by the page ingester to stay well under the
+   * Worker subrequest limit (1 call for the whole page instead of 2-3 per package).
+   */
+  async upsertPackages(rows: Record<string, unknown>[]): Promise<{ id: string; almacen_id: string }[]> {
+    if (rows.length === 0) return []
+    const res = await fetch(`${this.base}/packages?on_conflict=provider_id,almacen_id`, {
+      method: 'POST',
+      headers: { ...this.headers, Prefer: 'resolution=merge-duplicates,return=representation' },
+      body: JSON.stringify(rows),
+    })
+    if (!res.ok) throw new Error(`Insforge bulk upsert packages → ${res.status}`)
+    return (await res.json()) as { id: string; almacen_id: string }[]
   }
 
   /** Replaces a package's events (dedup by unique(package_id, occurred_at, description)). */
