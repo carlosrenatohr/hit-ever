@@ -182,13 +182,29 @@ export class InsforgeClient implements TrackingRepository {
    */
   async upsertPackages(rows: Record<string, unknown>[]): Promise<{ id: string; almacen_id: string }[]> {
     if (rows.length === 0) return []
-    const res = await fetch(`${this.base}/packages?on_conflict=provider_id,almacen_id`, {
-      method: 'POST',
-      headers: { ...this.headers, Prefer: 'resolution=merge-duplicates,return=representation' },
-      body: JSON.stringify(rows),
-    })
-    if (!res.ok) throw new Error(`Insforge bulk upsert packages → ${res.status}`)
-    return (await res.json()) as { id: string; almacen_id: string }[]
+    // PostgREST bulk insert requires every object in the array to share the SAME keys
+    // (else PGRST102 "All object keys must match"). Rows are not uniform: only packages with
+    // a RETIRADO note carry manual_status*. Group by key signature and send one request per
+    // group — this both satisfies PostgREST and keeps rows without an override from ever
+    // sending manual_status, so a merge-duplicates upsert never clobbers an admin override.
+    const groups = new Map<string, Record<string, unknown>[]>()
+    for (const r of rows) {
+      const sig = Object.keys(r).sort().join(',')
+      const g = groups.get(sig)
+      if (g) g.push(r)
+      else groups.set(sig, [r])
+    }
+    const out: { id: string; almacen_id: string }[] = []
+    for (const group of groups.values()) {
+      const res = await fetch(`${this.base}/packages?on_conflict=provider_id,almacen_id`, {
+        method: 'POST',
+        headers: { ...this.headers, Prefer: 'resolution=merge-duplicates,return=representation' },
+        body: JSON.stringify(group),
+      })
+      if (!res.ok) throw new Error(`Insforge bulk upsert packages → ${res.status}: ${(await res.text()).slice(0, 400)}`)
+      out.push(...((await res.json()) as { id: string; almacen_id: string }[]))
+    }
+    return out
   }
 
   /** Replaces a package's events (dedup by unique(package_id, occurred_at, description)). */
