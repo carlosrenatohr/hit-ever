@@ -96,10 +96,10 @@ user `hitcargo`) son **el MISMO motor Cargotrack** (Classic ASP). Mismo login, m
 
 ---
 
-## 5. Estado de GC (Global Connection) — RESUELTO ✓ (11 paquetes en BD)
+## 5. Estado de GC (Global Connection) — RESUELTO ✓ (13 paquetes vía Worker)
 
 Proveedor sembrado en `providers` (`global_connection`, `gc.cargotrack.net`, sin filtro de casillero).
-Ingesta funcionando; **GC tiene 11 paquetes** (cuenta chica, 100% HIT) — todos en InsForge, 4 marcados
+Ingesta funcionando vía Worker; **GC tiene 13 paquetes** (cuenta chica, 100% HIT) — todos en InsForge, 4 marcados
 `manual_status=entregado` por su nota `RETIRADO`. La cadena de bloqueos que hubo que vencer (en orden):
 
 1. **Secrets GC no estaban en el Worker.** Sí estaban Everest/Upstash/InsForge, pero nunca se corrió
@@ -108,7 +108,8 @@ Ingesta funcionando; **GC tiene 11 paquetes** (cuenta chica, 100% HIT) — todos
 2. **Credenciales GC malas.** Con los secrets puestos, el login devolvía la página `/default.asp` con
    `<strong>Alert:</strong> User and/or password are incorrect.` (evidencia dura, no asumida — se
    reprodujo con curl). El usuario corrigió `.dev.vars`; el user real tiene 8 chars (`hitcargo`).
-   Verificación: curl de login debe terminar en `/appl2.0/agent/default.asp`, no en `/default.asp`.
+   Verificación de creds: una página con `password are incorrect` = fallo. **OJO (corregido, ver #6):**
+   un login *correcto* del Worker NO termina en `/appl2.0/agent/` — termina en `/default.asp`.
 3. **Límite de subrequests.** `/admin/ingest?offset=N` corría AMBOS providers en UNA invocación;
    Everest (~14 subreq) + GC sin filtro (un detalle por fila) pasaba de 50 → `Too many subrequests`.
    Fix: **`?provider=<code>` ingiere UN provider por invocación** (`src/routes/admin.ts` → `ingestPage`).
@@ -117,8 +118,15 @@ Ingesta funcionando; **GC tiene 11 paquetes** (cuenta chica, 100% HIT) — todos
    `manual_status*` y el resto no → keys mezcladas. Fix en `upsertPackages`: **agrupar las filas por
    firma de keys y un POST por grupo** (los sin override nunca mandan `manual_status`, así
    merge-duplicates no pisa un override manual del admin). Ver gotcha #9.
-5. **GC no pagina.** `whs.asp?offset=15/30/...` devuelve SIEMPRE las mismas 11 filas (cabe en 1 página;
-   el offset se ignora con <15 filas). No es bug — son 11 paquetes reales. Everest sí pagina (66).
+5. **GC no pagina.** `whs.asp?offset=15/30/...` devuelve SIEMPRE las mismas filas (cabe en 1 página;
+   el offset se ignora con <15 filas). No es bug — son pocos paquetes reales. Everest sí pagina (66).
+6. **Landing de login GC ≠ Everest (último bloqueo, resuelto).** Aun con creds buenas, el login del
+   Worker terminaba en `/default.asp` (no `/appl2.0/agent/`): la navegación al área de agente la hace
+   JS de cliente que el Worker (sólo HTTP, sin JS) no ejecuta. El check exigía `/appl2.0/agent/` → GC
+   daba `-1` («did not reach the agent area»). **Fix:** aceptar el landing `/default.asp` confirmando
+   por CONTENIDO (`Desconectar` presente y sin `password are incorrect`), no por URL — porque el fallo
+   de creds también cae en `/default.asp`. Everest sin cambios. Verificado: GC ingiere 13 vía Worker.
+   Commit `fix: accept Global Connection's root login landing` (`src/services/ingest.ts`).
 
 **Runbook GC (deslogueado de GC en el navegador, sesión única):**
 `curl -s -X POST -H "Authorization: Bearer <ADMIN_SECRET>" "<worker>/admin/ingest?provider=global_connection&offset=0&days=60"`
