@@ -112,20 +112,36 @@ export class CargotrackClient {
     })
     merge(post)
 
-    // 3. Follow the redirect chain, accumulating cookies, until we land in the agent area.
-    //    A successful login goes /validate.asp → /validate_final.asp → /appl2.0/agent/default.asp;
-    //    the "accessdenied=" in those URLs is part of the NORMAL flow, not a denial.
+    // 3. Follow the redirect chain, accumulating cookies, until we land in the authenticated area.
+    //    The chain goes /validate.asp → /validate_final.asp → a home page; the "accessdenied="
+    //    in those URLs is part of the NORMAL flow, not a denial. The landing differs by provider:
+    //      - Everest:           /appl2.0/agent/default.asp
+    //      - Global Connection: /default.asp (root) — the agent assets load client-side afterwards.
+    //    Both then serve the same list (/appl2.0/agent/whs.asp) and detail paths with the cookie.
     let res = post
     let url = `${this.baseUrl}/`
+    let sawValidateFinal = false
     for (let hop = 0; hop < 6 && (res.status === 301 || res.status === 302); hop++) {
       const loc = res.headers.get('location')
       if (!loc) break
       url = new URL(loc, this.baseUrl).toString()
+      if (/validate_final\.asp/i.test(url)) sawValidateFinal = true
       res = await fetch(url, { headers: { 'User-Agent': UA, Cookie: cookieHeader(), Referer: `${this.baseUrl}/` }, redirect: 'manual' })
       merge(res)
     }
 
-    if (!/\/appl2\.0\/agent\//i.test(url)) {
+    // Success: Everest lands in the agent area; Global Connection HTTP-terminates on the root
+    // /default.asp (its agent UI loads client-side, which we don't execute). A FAILED login also
+    // returns to /default.asp but with a credentials error, so when we land there we confirm by
+    // page content — an authenticated home carries the "Desconectar" (logout) control, whereas a
+    // failure says the user/password is incorrect. Content is the only reliable discriminator here.
+    const reachedAgent = /\/appl2\.0\/agent\//i.test(url)
+    let reachedHome = false
+    if (!reachedAgent && sawValidateFinal && /\/default\.asp(?:[?#]|$)/i.test(url)) {
+      const landing = await res.text()
+      reachedHome = /desconectar/i.test(landing) && !/password are incorrect/i.test(landing)
+    }
+    if (!reachedAgent && !reachedHome) {
       await this.redis.set(this.blockKey, 1, LOGIN_BACKOFF_SEC)
       throw new Error(`Login failed (${this.baseUrl}): did not reach the agent area (ended at ${url}).`)
     }
