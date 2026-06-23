@@ -91,8 +91,18 @@ export default {
 
   // Cron (wrangler triggers): periodic backup refresh. The main freshness mechanism
   // is the email trigger; this covers whatever the email does not reach.
-  async scheduled(_event: unknown, env: CloudflareBindings, ctx: { waitUntil(p: Promise<unknown>): void }) {
-    ctx.waitUntil(new IngestService(env).ingestAll(2))
+  //
+  // Staggered per provider so each invocation stays under the Workers free-plan
+  // 50-subrequest limit: a no-mailbox-filter provider (Global Connection opens one detail
+  // page per row) can't share an invocation with Everest. Even hours refresh Everest;
+  // :30 past refreshes Global Connection (see wrangler.jsonc triggers).
+  async scheduled(event: { cron: string }, env: CloudflareBindings, ctx: { waitUntil(p: Promise<unknown>): void }) {
+    const svc = new IngestService(env)
+    const job =
+      event.cron === '30 */2 * * *'
+        ? svc.ingestProvider('global_connection', 1)
+        : svc.ingestProvider('everest', 2)
+    ctx.waitUntil(job.catch((e) => console.error('[cron]', event.cron, (e as Error).message)))
   },
 
   // Cloudflare Email Routing: route the Cargotrack update email to this Worker.

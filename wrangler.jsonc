@@ -18,11 +18,13 @@
     "EVEREST_BASE_URL": "https://everest.cargotrack.net"
   },
   // ─── Cron: routine ingestion every 2h (recent window). ──────────────────────
-  // Near-real-time freshness comes from the email trigger (Zapier → /hooks). Frequency
-  // is a tradeoff: more often = fresher, but more re-logins against Cargotrack's
-  // single-session guard. Tune against live behavior.
+  // Staggered per provider: each tick ingests ONE provider so a single invocation stays
+  // under the Workers free-plan 50-subrequest limit (a no-mailbox-filter provider opens a
+  // detail page per row). Even hours → Everest; :30 past even hours → Global Connection.
+  // The scheduled handler branches on event.cron. Near-real-time freshness comes from the
+  // email trigger (→ /hooks); frequency trades freshness against Cargotrack re-logins.
   "triggers": {
-    "crons": ["0 */2 * * *"]
+    "crons": ["0 */2 * * *", "30 */2 * * *"]
   }
   // ─── Future: Cloudflare Browser Rendering ─────────────────────────────────
   // Uncomment once Browser Rendering API is enabled in your CF account.
