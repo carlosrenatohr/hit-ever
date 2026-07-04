@@ -14,10 +14,10 @@ For the full, copy-pasteable request/response catalog (every endpoint, every sta
 
 ```
 Astro site ──GET /track/:guia──▶ Worker ──read──▶ InsForge (Postgres)
-                                    ▲                  ▲
-                                    │ write            │
-                       Ingestion (background) ─────────┘
-                         ├─ cron every 2h (recent window)
+                                    ▲                  ▲    ▲
+                                    │ write            │    │ read (per-user JWT + RLS)
+                       Ingestion (background) ─────────┘    │
+                         ├─ cron, staggered per provider    hit-panel (internal dashboard)
                          ├─ email hook  /hooks/provider-email
                          └─ manual      POST /admin/ingest
                                     │ scrape (login + list + detail)
@@ -27,7 +27,9 @@ Astro site ──GET /track/:guia──▶ Worker ──read──▶ InsForge (
                        └─ Global Connection (account 100% HIT)
 ```
 
-The site reads InsForge through the Worker, never Cargotrack directly. Scraping is throttled, recent-window, and runs in the background, so a public lookup is a fast DB read (no live login).
+The site reads InsForge through the Worker, never Cargotrack directly, so a public lookup is a fast DB read with no live login involved. The internal panel (`hit-panel`, a separate repo) talks to InsForge directly instead of going through the Worker — it authenticates each staff member with their own InsForge account and relies on row-level security to decide what they can see and change, rather than the Worker's single admin API key.
+
+Cargotrack itself only tolerates one active session per account, so all scraping — cron, the email hook, and manual backfills — funnels through one cached login and stays throttled. Running several ingestion requests at once just kicks each other's sessions out; there's no way to speed this up by parallelizing.
 
 ---
 
@@ -123,7 +125,9 @@ pnpm run deploy   # wrangler deploy --minify   (note: `pnpm deploy` collides wit
 pnpm cf-typegen   # regenerate CloudflareBindings types
 ```
 
-Cron (`0 */2 * * *`) runs a recent-window ingestion as a backstop; the email hook is the primary freshness mechanism. DB schema lives in `db/*.sql` (applied via `npx @insforge/cli db`).
+Two cron schedules run as a backstop (the email hook is the primary freshness mechanism): `0 */2 * * *` refreshes Everest, `30 */2 * * *` refreshes Global Connection. They're split on purpose — Global Connection has no mailbox filter, so it opens a detail page per row, and running both providers in one invocation blows past the Workers free-plan subrequest limit.
+
+The base schema lives in `db/*.sql`; everything added for the internal dashboard (staff roles, RLS policies, the write RPCs, the `effective_status` column) is in `migrations/*.sql`, applied with `npx @insforge/cli db migrations up --all` against the linked InsForge project.
 
 ---
 
@@ -131,6 +135,7 @@ Cron (`0 */2 * * *`) runs a recent-window ingestion as a backstop; the email hoo
 
 - **Login follows a redirect chain:** `GET /` → `POST /` (`user`/`password`/`action=login`/`Submit=Log In`) → `validate.asp` → `validate_final.asp` → `/appl2.0/agent/default.asp`. The `accessdenied=` in those URLs is part of a **successful** login, not a denial. Workers' `fetch` drops cookies across redirects, so the Worker walks the chain manually, accumulating cookies. List: `/appl2.0/agent/whs.asp?offset=15,30,…` (15 rows/page). Detail: `/appl2.0/agent/whs_detail.asp?id=<guia>`.
 - **Single session:** Cargotrack allows one active session per account. A Worker login while a human is logged into the browser returns empty lists. **Run ingestion when no human is logged in.** Sessions last ~2-3 min; the Worker caches one in Upstash.
+- **History goes back further than you'd guess:** Everest's warehouse list is a persistent ledger, not just a "recent activity" view — we've paged back to April 2025 without hitting a wall. A one-time deep backfill (e.g. "everything since January") is just walking `?offset=` further than the routine 60-day window; find the right offset by checking the dates on a page, not by guessing. Global Connection is the opposite: its list caps out around a dozen rows regardless of offset, so whatever's there is already everything there is.
 
 ---
 
@@ -158,9 +163,11 @@ src/
     ├── admin.ts             # /admin/health, /admin/ingest, /admin/packages/:guia/*
     └── hooks.ts             # POST /hooks/provider-email
 
-db/        0001_init.sql, 0002_provider_notes.sql   # InsForge schema
-fixtures/  captured Cargotrack HTML for parser tests
-docs/      e2e-testing.md (API contract), everest-scraper-plan.md, playwright-plan.md
+db/         0001_init.sql, 0002_provider_notes.sql        # base InsForge schema
+migrations/ dashboard-auth.sql, dashboard-effective-status.sql  # staff roles, RLS, RPCs for hit-panel
+fixtures/   captured Cargotrack HTML for parser tests
+docs/       e2e-testing.md (API contract), production-deployment.md (go-live runbook),
+            session-log-2026-06.md (Cargotrack gotchas, written the hard way)
 ```
 
 ---
@@ -172,7 +179,9 @@ docs/      e2e-testing.md (API contract), everest-scraper-plan.md, playwright-pl
 - [x] Admin tools: manual status override, tags, notes
 - [x] Email trigger (Cloudflare Email Routing + `/hooks/provider-email`) re-scrape
 - [x] Delivery harness (`pnpm check` + CI on PR)
-- [ ] Global Connection backfill (provider seeded; returns 0 until logged out of GC in the browser — single session)
+- [x] Global Connection backfilled and ingesting on its own cron tick
+- [x] Historical backfill back to January 2026 (Everest — see `docs/backfill-runbook.md`)
+- [x] Internal dashboard (`hit-panel`) reading InsForge directly via per-user auth + RLS
 - [ ] Email-trigger bridge wired (Make.com → `/hooks/provider-email`)
 - [ ] Custom API domain `api.hit-cargo.com` (currently `*.workers.dev`)
 - [ ] Write notes back to Cargotrack (`remarks.asp`) + HIT's own notes / billing custom fields
