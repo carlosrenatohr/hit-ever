@@ -70,7 +70,9 @@ admin.post(
 
 /** POST /admin/ingest?pages=N — triggers ingestion of all active providers (backfill/manual). */
 admin.post('/ingest', async (c) => {
-  const days = Math.min(120, Math.max(1, Number(c.req.query('days') ?? '7')))
+  // Capped at 250d (~8 months) — high enough for a deep one-time historical backfill without
+  // letting the window grow unbounded (each chunk still opens one detail page per candidate row).
+  const days = Math.min(250, Math.max(1, Number(c.req.query('days') ?? '7')))
   const offsetParam = c.req.query('offset')
   const provider = c.req.query('provider')
   try {
