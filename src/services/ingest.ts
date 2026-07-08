@@ -326,6 +326,31 @@ export class IngestService {
     return pkgRows.length
   }
 
+  /**
+   * Revisits open (not-yet-delivered) packages directly by id, bypassing the list walk.
+   * Fixes a real gap: once a package scrolls past the offsets the routine cron checks, new
+   * provider notes (e.g. a RETIRADO added weeks after receipt) never get re-scraped — the list
+   * walk only sees whatever page a package currently sits on. Oldest-last-event-first, capped
+   * per call to stay well under the Worker subrequest limit.
+   */
+  async refreshOpenPackages(providerCode: string, limit = 20): Promise<number> {
+    const providers = await this.db.getActiveProviders()
+    const p = providers.find((x) => x.code === providerCode)
+    if (!p) return 0
+
+    const ids = await this.db.getOpenAlmacenIds(p.id, limit)
+    let count = 0
+    for (const id of ids) {
+      if (count > 0) await sleep(THROTTLE_MS + Math.floor(Math.random() * 600))
+      try {
+        if (await this.ingestOne(providerCode, id)) count++
+      } catch (e) {
+        console.error(`[refresh-open] ${providerCode}/${id} failed:`, (e as Error).message)
+      }
+    }
+    return count
+  }
+
   /** Ingests ONE package by warehouse number (used by the email trigger). */
   async ingestOne(providerCode: string, almacenId: string): Promise<boolean> {
     const providers = await this.db.getActiveProviders()

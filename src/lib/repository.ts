@@ -14,6 +14,9 @@ export interface TrackingRepository {
   getPackageByTracking(tracking: string): Promise<PackageRecord | null>
   getEvents(packageId: string): Promise<EventRecord[]>
   getActiveProviders(): Promise<Provider[]>
+  /** Warehouse numbers for a provider's still-open packages (effective status != entregado) —
+   * lets ingestion revisit them by id, independent of where they've scrolled to in the list. */
+  getOpenAlmacenIds(providerId: string, limit: number): Promise<string[]>
   upsertPackage(pkg: Record<string, unknown>): Promise<string | null>
   upsertPackages(rows: Record<string, unknown>[]): Promise<{ id: string; almacen_id: string }[]>
   upsertEvents(rows: Record<string, unknown>[]): Promise<void>
@@ -112,6 +115,13 @@ export class MemoryRepository implements TrackingRepository {
 
   async getActiveProviders(): Promise<Provider[]> {
     return SEED_PROVIDERS
+  }
+
+  async getOpenAlmacenIds(providerId: string, limit: number): Promise<string[]> {
+    return [...this.packages.values()]
+      .filter((p) => p.providerId === providerId && (p.manualStatus ?? p.status) !== 'entregado')
+      .slice(0, limit)
+      .map((p) => p.almacenId)
   }
 
   async upsertPackage(pkg: Record<string, unknown>): Promise<string | null> {

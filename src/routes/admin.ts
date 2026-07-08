@@ -30,6 +30,7 @@ const adminAuth = async (c: any, next: any) => {
 }
 admin.use('/packages/*', adminAuth)
 admin.use('/ingest', adminAuth)
+admin.use('/refresh-open', adminAuth)
 
 /** GET /admin/health */
 admin.get('/health', (c) => {
@@ -95,6 +96,35 @@ admin.post('/ingest', async (c) => {
     return Res.ok(c, { pages, days, result })
   } catch (error) {
     return Res.err(c, 'INGEST_FAILED', (error as Error).message, 500)
+  }
+})
+
+/** POST /admin/refresh-open?provider=X&limit=N — revisit open packages by id (see cron docs). */
+admin.post('/refresh-open', async (c) => {
+  const provider = c.req.query('provider')
+  if (!provider) return Res.err(c, 'MISSING_PROVIDER', '?provider=<code> is required.', 400)
+  // Capped at 10: persist() costs ~4 subrequests/package (fetch + package + events + notes),
+  // measured hitting the Worker's 50-subrequest ceiling around package #7 at limit=20.
+  const limit = Math.min(10, Math.max(1, Number(c.req.query('limit') ?? '8')))
+  try {
+    const count = await new IngestService(c.env).refreshOpenPackages(provider, limit)
+    return Res.ok(c, { provider, limit, count })
+  } catch (error) {
+    return Res.err(c, 'REFRESH_FAILED', (error as Error).message, 500)
+  }
+})
+
+/** POST /admin/packages/:guia/refresh?provider=X — force-refresh one package right now. */
+admin.post('/packages/:guia/refresh', async (c) => {
+  const { guia } = c.req.param()
+  const provider = c.req.query('provider')
+  try {
+    const svc = new IngestService(c.env)
+    const found = provider ? (await svc.ingestOne(provider, guia)) && provider : await svc.ingestOneAnyProvider(guia)
+    if (!found) return Res.err(c, 'NOT_FOUND', `Could not refresh ${guia} (not found or ownership filter rejected it).`, 404)
+    return Res.ok(c, { guia, provider: found })
+  } catch (error) {
+    return Res.err(c, 'REFRESH_FAILED', (error as Error).message, 500)
   }
 })
 

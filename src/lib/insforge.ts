@@ -156,6 +156,14 @@ export class InsforgeClient implements TrackingRepository {
     return rows.map(rowToEvent)
   }
 
+  async getOpenAlmacenIds(providerId: string, limit: number): Promise<string[]> {
+    const rows = await this.get<{ almacen_id: string }>(
+      'packages',
+      `provider_id=eq.${encodeURIComponent(providerId)}&effective_status=neq.entregado&select=almacen_id&order=last_event_at.asc&limit=${limit}`,
+    )
+    return rows.map((r) => r.almacen_id)
+  }
+
   // ─── Ingestion (B3) ──────────────────────────────────────────────────────────
   async getActiveProviders(): Promise<Provider[]> {
     const rows = await this.get<DbProviderRow>('providers', 'active=eq.true')

@@ -17,14 +17,18 @@
   "vars": {
     "EVEREST_BASE_URL": "https://everest.cargotrack.net"
   },
-  // ─── Cron: routine ingestion every 2h (recent window). ──────────────────────
-  // Staggered per provider: each tick ingests ONE provider so a single invocation stays
-  // under the Workers free-plan 50-subrequest limit (a no-mailbox-filter provider opens a
-  // detail page per row). Even hours → Everest; :30 past even hours → Global Connection.
+  // ─── Cron: routine ingestion every 2h (recent window) + open-package refresh every 6h. ──
+  // Staggered per provider AND per job type: each tick does ONE thing so a single invocation
+  // stays under the Workers free-plan 50-subrequest limit. List-walk (0/30 past even hours)
+  // covers Everest/GC recent activity. Open-refresh (15/45 past every 6th hour) revisits
+  // not-yet-delivered packages directly by id — catches provider notes (e.g. a RETIRADO)
+  // added after a package has scrolled past whatever page the list-walk checks. persist()
+  // is per-package (~4 subrequests: fetch + package + events + notes), so it can't share an
+  // invocation with the list-walk — that's why it's a separate, less-frequent schedule.
   // The scheduled handler branches on event.cron. Near-real-time freshness comes from the
   // email trigger (→ /hooks); frequency trades freshness against Cargotrack re-logins.
   "triggers": {
-    "crons": ["0 */2 * * *", "30 */2 * * *"]
+    "crons": ["0 */2 * * *", "30 */2 * * *", "15 */6 * * *", "45 */6 * * *"]
   }
   // ─── Future: Cloudflare Browser Rendering ─────────────────────────────────
   // Uncomment once Browser Rendering API is enabled in your CF account.

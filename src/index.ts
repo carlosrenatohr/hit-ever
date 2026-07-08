@@ -92,16 +92,20 @@ export default {
   // Cron (wrangler triggers): periodic backup refresh. The main freshness mechanism
   // is the email trigger; this covers whatever the email does not reach.
   //
-  // Staggered per provider so each invocation stays under the Workers free-plan
-  // 50-subrequest limit: a no-mailbox-filter provider (Global Connection opens one detail
-  // page per row) can't share an invocation with Everest. Even hours refresh Everest;
-  // :30 past refreshes Global Connection (see wrangler.jsonc triggers).
+  // Each tick does ONE job for ONE provider so it stays under the Workers free-plan
+  // 50-subrequest limit — see the triggers comment in wrangler.jsonc for why list-walk and
+  // open-refresh can't share an invocation.
   async scheduled(event: { cron: string }, env: CloudflareBindings, ctx: { waitUntil(p: Promise<unknown>): void }) {
     const svc = new IngestService(env)
-    const job =
-      event.cron === '30 */2 * * *'
-        ? svc.ingestProvider('global_connection', 1)
-        : svc.ingestProvider('everest', 2)
+    const jobs: Record<string, Promise<unknown>> = {
+      '0 */2 * * *': svc.ingestProvider('everest', 2),
+      '30 */2 * * *': svc.ingestProvider('global_connection', 1),
+      // 8, not 12: persist() costs ~4 subrequests/package (fetch + package + events + notes) —
+      // measured hitting the 50-subrequest ceiling around package #7 at limit=20/21 in testing.
+      '15 */6 * * *': svc.refreshOpenPackages('everest', 8),
+      '45 */6 * * *': svc.refreshOpenPackages('global_connection', 8),
+    }
+    const job = jobs[event.cron] ?? svc.ingestProvider('everest', 2)
     ctx.waitUntil(job.catch((e) => console.error('[cron]', event.cron, (e as Error).message)))
   },
 
