@@ -153,8 +153,15 @@ function sliceBetween(html: string, startMarker: RegExp, endMarker: RegExp): str
 
 function mapService(raw?: string): ServiceType | undefined {
   if (!raw) return undefined
-  if (/a[eé]reo|air/i.test(raw)) return 'aereo'
-  if (/mar[ií]timo|ocean|sea/i.test(raw)) return 'maritimo'
+  const v = raw.trim()
+  // Everest's hidden field spells the word out ("AÉREO"/"MARÍTIMO"). Global Connection's only
+  // carries the <select name="shipping_instructions"> OPTION CODE (A/O/T) — confirmed on guia
+  // 158374's real HTML, whose "Instrucciones" dropdown showed MARÍTIMO selected but the hidden
+  // field was just "O". A bare code letter never matched the word regexes below, so it silently
+  // fell through to service_type = null for every GC package this happened on.
+  if (/^a$/i.test(v) || /a[eé]reo|air/i.test(v)) return 'aereo'
+  if (/^o$/i.test(v) || /mar[ií]timo|ocean|sea/i.test(v)) return 'maritimo'
+  // 'T' = terrestre, a real Cargotrack option — just not one of the two HIT tracks.
   return undefined
 }
 
@@ -202,7 +209,13 @@ export function parseDetail(html: string): DetailData {
   // Package status (e.g. "In Transit") in the measurements table.
   const estadoText = (html.match(/\b(In Transit|Received|Delivered|At Destination|Partial|On Hold|Hold)\b/i) ?? [])[0]
 
-  const service = mapService(inputVal(html, 'shipping_type2') ?? inputVal(html, 'shipping_instructions2'))
+  // shipping_instructions2 mirrors the real "Instrucciones" <select> (its value is the option
+  // code A/O/T) on BOTH providers — confirmed live on Everest and GC. shipping_type2 is not a
+  // reliable alternate source: it was "" for GC and the literal string "NONE" for Everest in
+  // every sample checked, and being a non-empty string it used to win the old `??` precedence,
+  // silently discarding the good field. Try the real field first; shipping_type2 is now only a
+  // last-resort fallback in case some page variant actually populates it with a real word.
+  const service = mapService(inputVal(html, 'shipping_instructions2')) ?? mapService(inputVal(html, 'shipping_type2'))
 
   return {
     almacenId: inputVal(html, 'id'),
