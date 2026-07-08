@@ -54,6 +54,25 @@ describe('parseDetail', () => {
     expect(d.notes[0].body).toMatch(/flete|recib/i)
     expect(d.notes[0].author).toMatch(/everest|loreta/i)
   })
+
+  it('reads status from the summary-row color, not the "Hold" form field (Everest red = en_transito)', () => {
+    // The disabled <select name="hold"> sits earlier in the HTML; a naive scan grabbed it and
+    // marked every detail-refreshed package as excepcion. Status must come from ntextrowbg<color>.
+    expect(d.estadoText).toBe('In Transit')
+    expect(d.statusFromDetail).toBe('en_transito')
+  })
+
+  it('maps Global Connection "On Hand" (green) to en_almacen, never excepcion', () => {
+    const gc = parseDetail(fixture('detalle_gc.html'))
+    expect(gc.estadoText).toBe('On Hand')
+    expect(gc.statusFromDetail).toBe('en_almacen')
+  })
+
+  it('maps "In Country" (blue = arrived in Nicaragua) to en_destino', () => {
+    const gc = parseDetail(fixture('detalle_gc_incountry.html'))
+    expect(gc.estadoText).toBe('In Country')
+    expect(gc.statusFromDetail).toBe('en_destino')
+  })
 })
 
 describe('almacenIdFromEmail', () => {

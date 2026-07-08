@@ -88,12 +88,17 @@ export interface PublicShipment {
 }
 
 // ─── Status mappings ──────────────────────────────────────────────────────────
-// Cargotrack row color → status (official legend).
+// Cargotrack color → status (official legend). Two spellings coexist across the app: the
+// Warehouse LIST uses hex bgcolors (see HEX_TO_STATUS in cargotrack.ts), while the DETAIL page
+// summary row uses named CSS classes ntextrowbg<color>. The names below cover BOTH — verified
+// live on Everest and GC: green="On Hand", red="In Transit", blue="In Country" (destination
+// country = Nicaragua, the #ccccff/"purple" state in the list legend), orange="Delivered".
 export const COLOR_TO_STATUS: Record<string, ShipmentStatus> = {
   green: 'en_almacen',
   yellow: 'parcial',
   red: 'en_transito',
   pink: 'en_transito',
+  blue: 'en_destino',
   purple: 'en_destino',
   orange: 'entregado',
 }
@@ -101,10 +106,10 @@ export const COLOR_TO_STATUS: Record<string, ShipmentStatus> = {
 // Text of the "Estado" field / events (Cargotrack mixes English and Spanish) → status.
 const TEXT_STATUS_PATTERNS: [RegExp, ShipmentStatus][] = [
   [/entregad|delivered|retirad/i, 'entregado'],
-  [/destino|destination|arriv|lleg/i, 'en_destino'],
+  [/destino|destination|arriv|lleg|in country/i, 'en_destino'],
   [/transit|tr[áa]nsito|enviad|shipped|loaded/i, 'en_transito'],
   [/parcial|partial/i, 'parcial'],
-  [/recib|received|almac[eé]n|warehouse/i, 'en_almacen'],
+  [/recib|received|almac[eé]n|warehouse|on hand|en mano/i, 'en_almacen'],
   [/reten|hold|bloque|block/i, 'excepcion'],
 ]
 

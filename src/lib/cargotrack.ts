@@ -1,5 +1,5 @@
 import type { ServiceType, ShipmentStatus } from '../types/tracking.js'
-import { statusFromText } from '../types/tracking.js'
+import { COLOR_TO_STATUS, statusFromText } from '../types/tracking.js'
 
 // ============================================================================
 // Cargotrack parser (Everest + Global Connection share the same engine).
@@ -206,8 +206,19 @@ export function parseDetail(html: string): DetailData {
   const photoMatch = /<a[^>]+href="([^"]+)"/i.exec(archivoBlock)
   const photoUrl = photoMatch ? photoMatch[1] : undefined
 
-  // Package status (e.g. "In Transit") in the measurements table.
-  const estadoText = (html.match(/\b(In Transit|Received|Delivered|At Destination|Partial|On Hold|Hold)\b/i) ?? [])[0]
+  // Package status lives in the measurements/summary row, whose cells all carry
+  // class="ntextrowbg<color>". That color is the SAME legend the Warehouse list uses
+  // (confirmed live on both providers: green="On Hand"=en_almacen, red="In Transit"=en_transito),
+  // so the color — not a free-text scan — is the authoritative status source on the detail page.
+  // A naive whole-document /Hold/ match used to fire on the page's disabled "Hold" <select>
+  // (which sits earlier in the HTML) and wrongly flagged every detail-refreshed package as
+  // excepcion. Read the color from the summary cells; take the last non-empty cell as the
+  // human-readable "Estado" text ("On Hand" / "In Transit" / …) — it's the last column of that row.
+  const bgCells = [...html.matchAll(/class="ntextrowbg([a-z]+)"[^>]*>\s*<div[^>]*>([\s\S]*?)<\/div>/gi)]
+  const detailColor = bgCells[0]?.[1]?.toLowerCase()
+  const estadoText = bgCells.map((mm) => stripTags(mm[2])).filter(Boolean).at(-1)
+  const statusFromDetail: ShipmentStatus =
+    (detailColor ? COLOR_TO_STATUS[detailColor] : undefined) ?? (estadoText ? statusFromText(estadoText) : 'desconocido')
 
   // shipping_instructions2 mirrors the real "Instrucciones" <select> (its value is the option
   // code A/O/T) on BOTH providers — confirmed live on Everest and GC. shipping_type2 is not a
@@ -233,7 +244,7 @@ export function parseDetail(html: string): DetailData {
     held: (inputVal(html, 'hold2') ?? 'N').toUpperCase() === 'Y',
     serviceType: service,
     estadoText: estadoText || undefined,
-    statusFromDetail: estadoText ? statusFromText(estadoText) : 'desconocido',
+    statusFromDetail,
     events,
     notes,
     photoUrl,
