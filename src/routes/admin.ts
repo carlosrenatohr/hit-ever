@@ -114,7 +114,12 @@ admin.post('/refresh-open', async (c) => {
   }
 })
 
-/** POST /admin/packages/:guia/refresh?provider=X — force-refresh one package right now. */
+/**
+ * POST /admin/packages/:guia/refresh?provider=X — force-refresh one package right now.
+ * Future panel button (see hit-panel/docs/09-roadmap-and-scaling.md): needs a server-side proxy
+ * (InsForge Edge Function) that checks the caller's role before forwarding here — this route's
+ * ADMIN_SECRET must never reach the browser.
+ */
 admin.post('/packages/:guia/refresh', async (c) => {
   const { guia } = c.req.param()
   const provider = c.req.query('provider')
