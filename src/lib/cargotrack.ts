@@ -132,6 +132,7 @@ export interface DetailData {
   statusFromDetail: ShipmentStatus
   events: DetailEvent[]
   notes: ProviderNote[]
+  photoUrl?: string // relative to the provider's host, e.g. "/items/DP_....jpg" — resolve before storing
 }
 
 function inputVal(html: string, name: string): string | undefined {
@@ -191,6 +192,13 @@ export function parseDetail(html: string): DetailData {
     notes.push(m ? { body: m[1].trim(), author: m[2].trim(), notedAt: m[3].trim() } : { body: text })
   }
 
+  // Uploaded photo (not always present): "Archivo" table → first <a href> is the file link.
+  // The href is a plain relative path on the provider's own host, no auth query params —
+  // confirmed publicly reachable (e.g. https://gc.cargotrack.net/items/DP_....jpg).
+  const archivoBlock = sliceBetween(html, /<td[^>]*>Archivo<\/td>/i, /<\/table>/i)
+  const photoMatch = /<a[^>]+href="([^"]+)"/i.exec(archivoBlock)
+  const photoUrl = photoMatch ? photoMatch[1] : undefined
+
   // Package status (e.g. "In Transit") in the measurements table.
   const estadoText = (html.match(/\b(In Transit|Received|Delivered|At Destination|Partial|On Hold|Hold)\b/i) ?? [])[0]
 
@@ -215,6 +223,7 @@ export function parseDetail(html: string): DetailData {
     statusFromDetail: estadoText ? statusFromText(estadoText) : 'desconocido',
     events,
     notes,
+    photoUrl,
   }
 }
 

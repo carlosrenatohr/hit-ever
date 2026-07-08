@@ -180,7 +180,7 @@ export class CargotrackClient {
 }
 
 // Builds the DB row by combining list + detail.
-function toPackageRow(providerId: string, almacenId: string, list?: ListRow, detail?: DetailData): Record<string, unknown> {
+function toPackageRow(providerId: string, baseUrl: string, almacenId: string, list?: ListRow, detail?: DetailData): Record<string, unknown> {
   const status: ShipmentStatus = list?.status ?? detail?.statusFromDetail ?? 'desconocido'
   const lastEvent = detail?.events.at(-1)
   const row: Record<string, unknown> = {
@@ -196,6 +196,9 @@ function toPackageRow(providerId: string, almacenId: string, list?: ListRow, det
     origin_office: detail?.origin ?? null,
     dest_office: detail?.destination ?? list?.dest ?? null,
     description: detail?.description ?? null,
+    // Uploaded photo, when present — not always. Resolved to an absolute URL here since the
+    // parser only sees the relative href and doesn't know which provider host it belongs to.
+    photo_ref: detail?.photoUrl ? new URL(detail.photoUrl, baseUrl).toString() : null,
     remitente: detail?.shipper ?? list?.remitente ?? null,
     referencia_name: detail?.reference ?? null,
     casillero: detail?.consigneeId ?? null,
@@ -232,8 +235,8 @@ export class IngestService {
     return new CargotrackClient(p.baseUrl, creds.user, creds.pass, this.env, p.code)
   }
 
-  private async persist(providerId: string, almacenId: string, list: ListRow | undefined, detail: DetailData | undefined): Promise<void> {
-    const pkgId = await this.db.upsertPackage(toPackageRow(providerId, almacenId, list, detail))
+  private async persist(providerId: string, baseUrl: string, almacenId: string, list: ListRow | undefined, detail: DetailData | undefined): Promise<void> {
+    const pkgId = await this.db.upsertPackage(toPackageRow(providerId, baseUrl, almacenId, list, detail))
     if (pkgId && detail?.events.length) {
       await this.db.upsertEvents(
         detail.events.map((e) => ({
@@ -285,7 +288,7 @@ export class IngestService {
       }
       // Strict ownership: when the provider filters by mailbox, require the detail's casillero to match.
       if (p.casilleroFilter && detail?.consigneeId && detail.consigneeId !== p.casilleroFilter) continue
-      pkgRows.push(toPackageRow(p.id, row.almacenId, row, detail))
+      pkgRows.push(toPackageRow(p.id, p.baseUrl, row.almacenId, row, detail))
       if (detail?.events.length) eventsByAlmacen.set(row.almacenId, detail.events)
       if (detail?.notes.length) notesByAlmacen.set(row.almacenId, detail.notes)
     }
@@ -363,7 +366,7 @@ export class IngestService {
     // Ownership filter: if the provider filters by mailbox (casillero), require a match.
     if (p.casilleroFilter && detail.consigneeId !== p.casilleroFilter) return false
 
-    await this.persist(p.id, almacenId, undefined, detail)
+    await this.persist(p.id, p.baseUrl, almacenId, undefined, detail)
     return true
   }
 
