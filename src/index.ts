@@ -26,16 +26,25 @@ app.use('*', timing())
 // Security headers (no X-Frame-Options clicks, CSP, etc.)
 app.use('*', secureHeaders())
 
-// CORS – allow the Hit Cargo Astro site + local dev
+// CORS – allow the Hit Cargo Astro site (custom domain), its Cloudflare Pages deploys
+// (production alias + preview hashes) and local dev. The /track payload is public and minimal,
+// so this is defense-in-depth, not the primary control.
+const STATIC_ALLOWED_ORIGINS = new Set([
+  'https://hit-cargo.com',
+  'https://www.hit-cargo.com',
+  'http://localhost:4321', // Astro dev
+  'http://localhost:3000',
+])
+// Landing Pages project: hit-landing-34b.pages.dev and every <hash>.hit-landing-34b.pages.dev preview.
+const PAGES_ORIGIN_RE = /^https:\/\/([a-z0-9-]+\.)?hit-landing-34b\.pages\.dev$/
 app.use(
   '*',
   cors({
-    origin: [
-      'https://hit-cargo.com',
-      'https://www.hit-cargo.com',
-      'http://localhost:4321',   // Astro dev
-      'http://localhost:3000',
-    ],
+    origin: (origin) => {
+      if (!origin) return undefined
+      if (STATIC_ALLOWED_ORIGINS.has(origin) || PAGES_ORIGIN_RE.test(origin)) return origin
+      return null // not allowed → no ACAO header → browser blocks the response
+    },
     allowMethods: ['GET', 'POST', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
     maxAge: 86400,
