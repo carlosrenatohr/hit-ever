@@ -200,6 +200,7 @@ export async function runMigration(
         client_name_raw: inv.isVoid ? 'ANULADO' : inv.clientRaw,
         issue_date: inv.issueDate,
         status,
+        paid_at: status === 'PAID' ? inv.paidAt : null,
         address: inv.address,
         special_price: inv.specialPrice,
         observations: inv.observations,

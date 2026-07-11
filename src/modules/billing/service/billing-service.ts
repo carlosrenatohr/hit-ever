@@ -46,6 +46,7 @@ export interface InvoiceView {
   clientId: string | null
   clientName: string | null
   issueDate: string | null
+  paidAt: string | null
   status: InvoiceStatus
   address: string | null
   specialPrice: boolean
@@ -146,6 +147,7 @@ export function toView(b: InvoiceBundle): InvoiceView {
     clientId: b.header.client_id,
     clientName: b.header.client_name_raw,
     issueDate: b.header.issue_date,
+    paidAt: b.header.paid_at,
     status: b.header.status,
     address: b.header.address,
     specialPrice: b.header.special_price,
@@ -277,6 +279,7 @@ export class BillingService {
         fiscalYear: h.fiscal_year,
         clientName: h.client_name_raw,
         issueDate: h.issue_date,
+        paidAt: h.paid_at,
         status: h.status,
         total: h.total,
         profit: h.profit,
@@ -366,7 +369,8 @@ export class BillingService {
     const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
     const paidUsd = round2(b.payments.reduce((s, p) => s + (p.amount_usd || 0), 0) + (amountUsd ?? 0))
     const status = computeStatus(b.header.status, total, paidUsd)
-    await this.repo.setInvoiceStatus(id, status)
+    // Stamp paid_at when the invoice reaches PAID (for the issued->paid days badge).
+    await this.repo.setInvoiceStatus(id, status, status === 'PAID' ? { paid_at: input.paidAt ?? new Date().toISOString() } : {})
     await this.repo.setInvoiceTotals(id, { total, profit: round2(b.lines.reduce((s, l) => s + (l.profit || 0), 0)), paidUsd })
     return (await this.get(id))!
   }
