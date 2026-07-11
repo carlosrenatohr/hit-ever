@@ -22,7 +22,7 @@ import type { Context, MiddlewareHandler } from 'hono'
 import { Res } from '../../../lib/response.js'
 import type { CloudflareBindings } from '../../../types/index.js'
 
-export type BillingRole = 'admin' | 'staff' | 'viewer'
+export type BillingRole = 'admin' | 'billing' | 'staff' | 'viewer'
 export type BillingPermission = 'invoices:read' | 'invoices:write'
 
 export interface BillingSession {
@@ -32,12 +32,14 @@ export interface BillingSession {
   role: BillingRole
 }
 
-// Reserved permission map. Tighten per the owner's future role model without
-// touching handlers — they only ask for a permission, never a role.
+// Permission map. `billing` is the dedicated billing role; `admin` is superuser;
+// `staff` (ops) gets read-only billing; `viewer` has none. Handlers only ask for a
+// permission, never a role, so this is the single place to retune access.
 const ROLE_PERMISSIONS: Record<BillingRole, BillingPermission[]> = {
   admin: ['invoices:read', 'invoices:write'],
-  staff: ['invoices:read', 'invoices:write'],
-  viewer: ['invoices:read'],
+  billing: ['invoices:read', 'invoices:write'],
+  staff: ['invoices:read'],
+  viewer: [],
 }
 
 export function roleHasPermission(role: BillingRole, permission: BillingPermission): boolean {

@@ -34,6 +34,7 @@ export interface InvoiceHeaderDbRow {
   observations: string | null
   tracking_orders: string[]
   agent_id: string | null
+  public_token: string | null
   created_at: string
   updated_at: string
 }
@@ -138,6 +139,8 @@ export interface BillingRepository {
   listInvoices(filter: ListFilter): Promise<{ rows: InvoiceHeaderDbRow[]; count: number }>
   getInvoiceBundle(invoiceId: string): Promise<InvoiceBundle | null>
   getBundlesByDateRange(from: string, to: string): Promise<InvoiceBundle[]>
+  setPublicToken(invoiceId: string, token: string): Promise<void>
+  getPublicBundle(token: string): Promise<InvoiceBundle | null>
   // Exception queue (import + ongoing data-quality flags):
   getExceptions(): Promise<ExceptionsPayload>
   // Package linking:
@@ -286,6 +289,18 @@ export class InsforgeBillingRepo implements BillingRepository {
       this.get<PackageLinkDbRow>('invoice_packages', `invoice_id=eq.${invoiceId}`),
     ])
     return { header, lines, payments, packages }
+  }
+
+  async setPublicToken(invoiceId: string, token: string): Promise<void> {
+    await this.patch('invoices', `id=eq.${encodeURIComponent(invoiceId)}`, { public_token: token })
+  }
+
+  async getPublicBundle(token: string): Promise<InvoiceBundle | null> {
+    const headers = await this.get<InvoiceHeaderDbRow>('invoices', `public_token=eq.${encodeURIComponent(token)}&limit=1`)
+    const header = headers[0]
+    if (!header) return null
+    const lines = await this.get<LineItemDbRow>('invoice_line_items', `invoice_id=eq.${header.id}&order=line_no.asc`)
+    return { header, lines, payments: [], packages: [] }
   }
 
   async getBundlesByDateRange(from: string, to: string): Promise<InvoiceBundle[]> {

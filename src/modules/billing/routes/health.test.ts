@@ -40,11 +40,12 @@ function stubBackend(opts: { validToken?: string; users?: Record<string, unknown
 afterEach(() => vi.unstubAllGlobals())
 
 describe('roleHasPermission', () => {
-  it('grants read+write to admin/staff, read-only to viewer', () => {
+  it('admin/billing read+write, staff read-only, viewer none', () => {
     expect(roleHasPermission('admin', 'invoices:write')).toBe(true)
-    expect(roleHasPermission('staff', 'invoices:write')).toBe(true)
-    expect(roleHasPermission('viewer', 'invoices:read')).toBe(true)
-    expect(roleHasPermission('viewer', 'invoices:write')).toBe(false)
+    expect(roleHasPermission('billing', 'invoices:write')).toBe(true)
+    expect(roleHasPermission('staff', 'invoices:read')).toBe(true)
+    expect(roleHasPermission('staff', 'invoices:write')).toBe(false)
+    expect(roleHasPermission('viewer', 'invoices:read')).toBe(false)
   })
 })
 

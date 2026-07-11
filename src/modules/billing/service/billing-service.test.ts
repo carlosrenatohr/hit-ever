@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { InvoiceBundle } from '../repo/billing-repo.js'
-import { aggregateClose, aggregateYear, computeStatus, paymentUsd, toView } from './billing-service.js'
+import type { BillingRepository } from '../repo/billing-repo.js'
+import { aggregateClose, aggregateYear, BillingService, computeStatus, paymentUsd, toView } from './billing-service.js'
 
 describe('computeStatus', () => {
   it('keeps VOID terminal', () => {
@@ -63,6 +64,25 @@ describe('aggregateClose', () => {
     expect(close.receivables).toBe(20)
     expect(close.byFreight.AIR).toEqual({ revenue: 32.5, profit: 10, lbs: 5 })
     expect(close.byFreight.MAR).toEqual({ revenue: 20, profit: 8, lbs: 8 })
+  })
+})
+
+describe('publicReceipt', () => {
+  it('exposes only customer-safe fields (no cost/profit/margin/freightCost)', async () => {
+    const repo = {
+      getPublicBundle: async () =>
+        bundle({ status: 'PAID', invoice_number: 5, client_name_raw: 'Ana', issue_date: '2026-06-10', paid_usd: 32.5 }, [
+          { freight_type: 'AIR', total: 32.5, profit: 10, freight_cost: 22.5, unit_price: 6.5, quantity_lbs: 5 },
+        ]),
+    } as unknown as BillingRepository
+    const r = await new BillingService(repo).publicReceipt('tok')
+    expect(r).not.toBeNull()
+    expect(r!.total).toBe(32.5)
+    expect(r!.invoiceNumber).toBe(5)
+    const line = r!.lines[0] as Record<string, unknown>
+    expect(line).not.toHaveProperty('profit')
+    expect(line).not.toHaveProperty('freightCost')
+    expect(line.total).toBe(32.5)
   })
 })
 

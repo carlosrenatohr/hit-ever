@@ -6,6 +6,7 @@ import { secureHeaders } from 'hono/secure-headers'
 import { timing } from 'hono/timing'
 import { almacenIdFromEmail } from './lib/cargotrack.js'
 import { billingRouter } from './modules/billing/routes/index.js'
+import { publicReceiptRouter } from './modules/billing/routes/public.js'
 import { Res } from './lib/response.js'
 import { adminRouter } from './routes/admin.js'
 import { hooksRouter } from './routes/hooks.js'
@@ -83,6 +84,8 @@ app.route('/track', trackRouter)
 app.route('/admin', adminRouter)
 app.route('/hooks', hooksRouter)
 app.route('/api/billing', billingRouter)
+// Public, unauthenticated printable receipt (tokenized) — separate from the gated router.
+app.route('/billing/r', publicReceiptRouter)
 
 // ─── 404 Catch-all ────────────────────────────────────────────────────────────
 app.notFound((c) =>

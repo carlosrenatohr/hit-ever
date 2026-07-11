@@ -199,6 +199,18 @@ billing.post(
   },
 )
 
+/** POST /api/billing/invoices/:id/share — get/create the public receipt link. */
+billing.post('/invoices/:id/share', billingAuth('invoices:write'), async (c) => {
+  const svc = new BillingService(getBillingRepo(c.env))
+  try {
+    const token = await svc.shareInvoice(c.req.param('id'))
+    const origin = new URL(c.req.url).origin
+    return Res.ok(c, { token, url: `${origin}/billing/r/${token}` })
+  } catch (e) {
+    return fail(c, e)
+  }
+})
+
 /** POST /api/billing/invoices/:id/packages — manually link a package by id or guía. */
 billing.post(
   '/invoices/:id/packages',

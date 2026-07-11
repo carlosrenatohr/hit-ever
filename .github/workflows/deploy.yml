@@ -1,0 +1,38 @@
+name: Deploy
+# Auto-deploy the Worker to production once the gate passes, on the integration
+# branches. Fires after a billing PR is merged in. Requires repo secret
+# CLOUDFLARE_API_TOKEN (Workers deploy scope). Optionally set repo variable
+# WORKER_URL for the post-deploy health check (defaults to the prod URL).
+on:
+  push:
+    branches: [main, feat/tracker-api]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Gate before shipping — same check as CI/local.
+      - run: pnpm check
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: deploy --minify
+      - name: Health check
+        run: |
+          set -e
+          BASE="${{ vars.WORKER_URL || 'https://hit-ever-scraper.honchkrow1995.workers.dev' }}"
+          root=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/")
+          billing=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/billing/health")
+          echo "root=$root billing-health=$billing"
+          # Root must be 200; billing health must be 401 (mounted + gated, i.e. alive).
+          test "$root" = "200"
+          test "$billing" = "401"
+          echo "Deploy healthy."

@@ -92,6 +92,18 @@ export interface MonthlyClose {
   byFreight: Record<FreightType, { revenue: number; profit: number; lbs: number }>
 }
 
+/** Customer-safe receipt — deliberately omits cost, profit, margin, freight cost, OC. */
+export interface PublicReceipt {
+  invoiceNumber: number
+  issueDate: string | null
+  clientName: string | null
+  status: InvoiceStatus
+  lines: Array<{ description: string | null; freightType: FreightType; quantityLbs: number; unitPrice: number; total: number }>
+  total: number
+  paidUsd: number
+  outstanding: number
+}
+
 export interface YearReport {
   year: number
   invoices: number
@@ -395,5 +407,35 @@ export class BillingService {
 
   async exceptions(): Promise<ExceptionsPayload> {
     return this.repo.getExceptions()
+  }
+
+  /** Get (or lazily create) the invoice's public share token. */
+  async shareInvoice(id: string): Promise<string> {
+    const b = await this.repo.getInvoiceBundle(id)
+    if (!b) throw new Error('Invoice not found.')
+    let token = b.header.public_token
+    if (!token) {
+      token = crypto.randomUUID()
+      await this.repo.setPublicToken(id, token)
+    }
+    return token
+  }
+
+  /** Customer-safe receipt by public token, or null if the token is unknown. */
+  async publicReceipt(token: string): Promise<PublicReceipt | null> {
+    const b = await this.repo.getPublicBundle(token)
+    if (!b) return null
+    const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
+    const paidUsd = round2(b.header.paid_usd || 0)
+    return {
+      invoiceNumber: b.header.invoice_number,
+      issueDate: b.header.issue_date,
+      clientName: b.header.client_name_raw,
+      status: b.header.status,
+      lines: b.lines.map((l) => ({ description: l.description, freightType: l.freight_type, quantityLbs: l.quantity_lbs, unitPrice: l.unit_price, total: l.total })),
+      total,
+      paidUsd,
+      outstanding: outstandingOf(b.header.status, total, paidUsd),
+    }
   }
 }
