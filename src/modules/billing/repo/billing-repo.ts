@@ -257,7 +257,7 @@ export class InsforgeBillingRepo implements BillingRepository {
 
   async listInvoices(filter: ListFilter): Promise<{ rows: InvoiceHeaderDbRow[]; count: number }> {
     const page = Math.max(1, filter.page ?? 1)
-    const pageSize = Math.min(200, Math.max(1, filter.pageSize ?? 25))
+    const pageSize = Math.min(1000, Math.max(1, filter.pageSize ?? 25))
     const parts: string[] = ['select=*', 'order=fiscal_year.desc,invoice_number.desc']
     if (filter.status) parts.push(`status=eq.${filter.status}`)
     if (filter.fiscalYear) parts.push(`fiscal_year=eq.${filter.fiscalYear}`)

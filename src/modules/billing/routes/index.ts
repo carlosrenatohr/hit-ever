@@ -100,7 +100,7 @@ billing.get(
       from: z.string().optional(),
       to: z.string().optional(),
       page: z.coerce.number().int().positive().optional(),
-      pageSize: z.coerce.number().int().positive().max(200).optional(),
+      pageSize: z.coerce.number().int().positive().max(1000).optional(),
     }),
   ),
   async (c) => {
