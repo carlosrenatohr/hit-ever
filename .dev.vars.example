@@ -4,17 +4,27 @@
 # For production, add each key via: wrangler secret put <KEY>
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Everest credentials
+# Insforge DB (own database for the tracker). Leave INSFORGE_API_URL empty to run the worker
+# in in-memory DEMO mode (the /track endpoint serves seeded sample data, no external services).
+INSFORGE_API_URL=
+INSFORGE_API_KEY=
+
+# Everest credentials (provider 1 — shared account, filtered by mailbox 37458)
 EVEREST_USERNAME=your_everest_username
 EVEREST_PASSWORD=your_everest_password
 EVEREST_BASE_URL=https://everest.cargotrack.net
 
-# Upstash Redis (get from https://console.upstash.com)
-UPSTASH_REDIS_URL=https://your-db.upstash.io
-UPSTASH_REDIS_TOKEN=your_upstash_token_here
+# Global Connection (provider 2 — same Cargotrack engine, account is 100% HIT)
+GC_USERNAME=
+GC_PASSWORD=
 
-# OpenAI (optional: needed for AI parsing fallback)
-OPENAI_API_KEY=sk-...
+# Upstash Redis — used for the session cache and rate limiting. Optional in dev:
+# the rate limiter fails open if unreachable. (https://console.upstash.com)
+UPSTASH_REDIS_URL=
+UPSTASH_REDIS_TOKEN=
 
-# Admin endpoint secret (simple string, make it long and random)
+# OpenAI (optional: AI parsing fallback, not used yet)
+OPENAI_API_KEY=
+
+# Secret for internal endpoints (/admin/*, /hooks/*). Make it long and random.
 ADMIN_SECRET=change-me-to-a-long-random-string

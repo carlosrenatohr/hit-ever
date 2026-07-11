@@ -1,8 +1,10 @@
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { RateLimiter } from '../lib/ratelimit.js'
+import { getRepository } from '../lib/repository.js'
 import { Res } from '../lib/response.js'
-import { EverestScraperService } from '../services/scraper.js'
+import { normalizeTracking, toPublicShipment } from '../types/tracking.js'
 import type { CloudflareBindings } from '../types/index.js'
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
@@ -20,52 +22,68 @@ const track = new Hono<{ Bindings: CloudflareBindings }>()
 /**
  * GET /track/:id
  *
- * Returns structured shipment data for the given tracking ID.
+ * Reads from OUR database (Supabase), it does not scrape live. Ingestion (B3) fills the DB.
  *
- * Flow:
- *  1. Validate :id param
- *  2. Instantiate EverestScraperService (uses env bindings)
- *  3. Scrape & parse the Everest page
- *  4. Return JSON or 404/500
+ *  - PRIMARY lookup by waybill number / warehouse number (e.g. "926791").
+ *  - If not found, SECONDARY attempt by the carrier tracking number.
+ *
+ * Security:
+ *  - Per-IP rate limit (anti-abuse/enumeration).
+ *  - The DB only contains HIT's packages (mailbox filter during ingestion),
+ *    so a foreign id simply does not exist → 404 (bounded surface).
+ *  - Returns a MINIMAL payload: no mailbox (casillero), customer name, value, or photo.
  */
 track.get(
     '/:id',
     zValidator('param', trackParamSchema, (result, c) => {
         if (!result.success) {
-            return Res.err(c, 'INVALID_PARAM', result.error.errors[0]?.message ?? 'Validation error', 422)
+            return Res.err(c, 'INVALID_PARAM', result.error.issues[0]?.message ?? 'Validation error', 422)
         }
     }),
     async (c) => {
         const { id } = c.req.valid('param')
         const start = Date.now()
 
-        try {
-            const scraper = new EverestScraperService(c.env)
-            const data = await scraper.track(id)
+        // ─── Rate limit ───────────────────────────────────────────────────────
+        const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
+        const limiter = new RateLimiter(c.env.UPSTASH_REDIS_URL, c.env.UPSTASH_REDIS_TOKEN)
+        const rl = await limiter.check(ip)
+        if (!rl.allowed) {
+            c.header('Retry-After', '60')
+            return Res.err(c, 'RATE_LIMITED', 'Too many requests. Please try again in a moment.', 429)
+        }
 
-            if (!data) {
+        try {
+            const db = getRepository(c.env)
+
+            // Primary by waybill number (guía); fallback by carrier tracking.
+            let pkg = await db.getPackageByGuia(id)
+            if (!pkg) pkg = await db.getPackageByTracking(normalizeTracking(id))
+
+            if (!pkg || !pkg.id) {
                 return Res.err(
                     c,
                     'NOT_FOUND',
-                    `No tracking data found for ID "${id}". The shipment may not exist or the system is unavailable.`,
+                    `We could not find a shipment with "${id}". Please check the waybill number (guía).`,
                     404,
                 )
             }
 
-            return Res.ok(c, data, {
-                scrapedAt: data.scrapedAt,
+            const events = await db.getEvents(pkg.id)
+            const shipment = toPublicShipment(pkg, events)
+
+            return Res.ok(c, shipment, {
+                cachedAt: pkg.scrapedAt ? Date.parse(pkg.scrapedAt) : undefined,
                 latencyMs: Date.now() - start,
             })
         } catch (error) {
-            const message = error instanceof Error ? error.message : 'Unknown scraper error'
-            console.error(`[track/${id}] Scraper error:`, message)
-
+            const message = error instanceof Error ? error.message : 'Unknown error'
+            console.error(`[track/${id}] error:`, message)
             return Res.err(
                 c,
-                'SCRAPER_ERROR',
-                'Failed to retrieve tracking data. Please try again in a moment.',
+                'TRACK_ERROR',
+                'We could not retrieve the shipment status. Please try again in a moment.',
                 503,
-                process.env.NODE_ENV === 'development' ? message : undefined,
             )
         }
     },

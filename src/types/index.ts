@@ -9,8 +9,20 @@ export interface CloudflareBindings {
     EVEREST_PASSWORD: string
     EVEREST_BASE_URL: string // https://everest.cargotrack.net
 
+    // Global Connection (2nd provider, same Cargotrack engine) — optional until activated
+    GC_USERNAME?: string
+    GC_PASSWORD?: string
+    GC_BASE_URL?: string
+
     // OpenAI (future: AI parsing)
     OPENAI_API_KEY: string
+
+    // Insforge (own DB: control + cache + history + tags)
+    INSFORGE_API_URL: string       // base without trailing slash, e.g. https://<proj>.insforge.dev
+    INSFORGE_API_KEY: string       // backend API key — only in the Worker, NEVER in the client
+
+    // Auth for internal endpoints (admin / email hook)
+    ADMIN_SECRET: string
 
     // Cloudflare Browser Rendering (future binding)
     // BROWSER: Fetcher  // uncomment when Browser Rendering API is enabled
