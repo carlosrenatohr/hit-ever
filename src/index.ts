@@ -5,6 +5,7 @@ import { prettyJSON } from 'hono/pretty-json'
 import { secureHeaders } from 'hono/secure-headers'
 import { timing } from 'hono/timing'
 import { almacenIdFromEmail } from './lib/cargotrack.js'
+import { billingRouter } from './modules/billing/routes/index.js'
 import { Res } from './lib/response.js'
 import { adminRouter } from './routes/admin.js'
 import { hooksRouter } from './routes/hooks.js'
@@ -37,15 +38,18 @@ const STATIC_ALLOWED_ORIGINS = new Set([
 ])
 // Landing Pages project: hit-landing-34b.pages.dev and every <hash>.hit-landing-34b.pages.dev preview.
 const PAGES_ORIGIN_RE = /^https:\/\/([a-z0-9-]+\.)?hit-landing-34b\.pages\.dev$/
+// Internal panel (hit-panel): its Cloudflare Pages production alias + preview hashes.
+// The panel calls the authenticated /api/billing/* endpoints from the browser.
+const PANEL_ORIGIN_RE = /^https:\/\/([a-z0-9-]+\.)?hit-panel\.pages\.dev$/
 app.use(
   '*',
   cors({
     origin: (origin) => {
       if (!origin) return undefined
-      if (STATIC_ALLOWED_ORIGINS.has(origin) || PAGES_ORIGIN_RE.test(origin)) return origin
+      if (STATIC_ALLOWED_ORIGINS.has(origin) || PAGES_ORIGIN_RE.test(origin) || PANEL_ORIGIN_RE.test(origin)) return origin
       return null // not allowed → no ACAO header → browser blocks the response
     },
-    allowMethods: ['GET', 'POST', 'OPTIONS'],
+    allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
     maxAge: 86400,
   }),
@@ -69,6 +73,7 @@ app.get('/', (c) =>
       track: 'GET /track/:id',
       health: 'GET /admin/health',
       refreshSession: 'POST /admin/session/refresh',
+      billing: 'GET /api/billing/health (auth)',
     },
   }),
 )
@@ -77,6 +82,7 @@ app.get('/', (c) =>
 app.route('/track', trackRouter)
 app.route('/admin', adminRouter)
 app.route('/hooks', hooksRouter)
+app.route('/api/billing', billingRouter)
 
 // ─── 404 Catch-all ────────────────────────────────────────────────────────────
 app.notFound((c) =>
