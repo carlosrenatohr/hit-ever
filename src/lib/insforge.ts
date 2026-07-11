@@ -142,7 +142,10 @@ export class InsforgeClient implements TrackingRepository {
 
   // ─── Public read ───────────────────────────────────────────────────────────────
   async getPackageByGuia(guia: string): Promise<PackageRecord | null> {
-    const rows = await this.get<DbPackageRow>('packages', `almacen_id=eq.${encodeURIComponent(guia)}&limit=1`)
+    // almacen_id is NOT unique on its own (uniqueness is provider_id+almacen_id, and Everest/GC
+    // warehouse numbers can collide). Order by most-recently-scraped so the lookup is deterministic
+    // instead of returning an arbitrary provider's row.
+    const rows = await this.get<DbPackageRow>('packages', `almacen_id=eq.${encodeURIComponent(guia)}&order=scraped_at.desc&limit=1`)
     return rows[0] ? rowToPackage(rows[0]) : null
   }
 
