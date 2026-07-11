@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { InvoiceBundle } from '../repo/billing-repo.js'
-import { aggregateClose, computeStatus, paymentUsd, toView } from './billing-service.js'
+import { aggregateClose, aggregateYear, computeStatus, paymentUsd, toView } from './billing-service.js'
 
 describe('computeStatus', () => {
   it('keeps VOID terminal', () => {
@@ -63,5 +63,21 @@ describe('aggregateClose', () => {
     expect(close.receivables).toBe(20)
     expect(close.byFreight.AIR).toEqual({ revenue: 32.5, profit: 10, lbs: 5 })
     expect(close.byFreight.MAR).toEqual({ revenue: 20, profit: 8, lbs: 8 })
+  })
+})
+
+describe('aggregateYear', () => {
+  it('buckets revenue by month + freight, tracks receivables, skips VOID', () => {
+    const r = aggregateYear(2026, [
+      bundle({ status: 'PAID', issue_date: '2026-01-15', total: 32.5, paid_usd: 32.5 }, [{ freight_type: 'AIR', total: 32.5, profit: 10, quantity_lbs: 5 }]),
+      bundle({ status: 'ISSUED', issue_date: '2026-03-02', total: 20, paid_usd: 0 }, [{ freight_type: 'MAR', total: 20, profit: 8, quantity_lbs: 8 }]),
+      bundle({ status: 'VOID', issue_date: '2026-03-05', total: 99 }, [{ freight_type: 'AIR', total: 99, profit: 50, quantity_lbs: 9 }]),
+    ])
+    expect(r.invoices).toBe(2)
+    expect(r.revenue).toBe(52.5)
+    expect(r.receivables).toBe(20)
+    expect(r.byMonth[0]).toEqual({ month: 1, revenue: 32.5, profit: 10, invoices: 1 })
+    expect(r.byMonth[2]).toEqual({ month: 3, revenue: 20, profit: 8, invoices: 1 })
+    expect(r.byFreight.AIR.revenue).toBe(32.5)
   })
 })

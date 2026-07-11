@@ -106,6 +106,20 @@ function rowToCatalog(r: PricingCatalogRow): CatalogEntry {
 
 export type Row = Record<string, unknown>
 
+export interface ExceptionRow {
+  invoiceId: string
+  invoiceNumber: number
+  fiscalYear: number
+  client: string | null
+  detail: string
+}
+export interface ExceptionsPayload {
+  offCatalog: ExceptionRow[]
+  quarantinedPayments: ExceptionRow[]
+  orphanInvoices: ExceptionRow[]
+  clientsToReview: { id: string; name: string }[]
+}
+
 // ─── Port ───────────────────────────────────────────────────────────────────
 export interface BillingRepository {
   getCatalog(): Promise<CatalogEntry[]>
@@ -124,6 +138,8 @@ export interface BillingRepository {
   listInvoices(filter: ListFilter): Promise<{ rows: InvoiceHeaderDbRow[]; count: number }>
   getInvoiceBundle(invoiceId: string): Promise<InvoiceBundle | null>
   getBundlesByDateRange(from: string, to: string): Promise<InvoiceBundle[]>
+  // Exception queue (import + ongoing data-quality flags):
+  getExceptions(): Promise<ExceptionsPayload>
   // Package linking:
   findPackageIdByToken(token: string): Promise<string | null>
   linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string): Promise<void>
@@ -280,6 +296,37 @@ export class InsforgeBillingRepo implements BillingRepository {
         return { header, lines, payments: [], packages: [] }
       }),
     )
+  }
+
+  async getExceptions(): Promise<ExceptionsPayload> {
+    type Emb = { invoice_number: number; fiscal_year: number; client_name_raw: string | null }
+    // Off-catalog line prices.
+    const offRows = await this.get<{ invoice_id: string; unit_price: number; freight_type: string; invoices: Emb }>(
+      'invoice_line_items',
+      'price_off_catalog=eq.true&select=invoice_id,unit_price,freight_type,invoices(invoice_number,fiscal_year,client_name_raw)',
+    )
+    // Quarantined payment cells.
+    const qRows = await this.get<{ invoice_id: string; raw: string | null; invoices: Emb }>(
+      'invoice_payments',
+      'quarantined=eq.true&select=invoice_id,raw,invoices(invoice_number,fiscal_year,client_name_raw)',
+    )
+    // Invoices carrying OC tokens but with no linked package (orphans).
+    const withOc = await this.get<{ id: string; invoice_number: number; fiscal_year: number; client_name_raw: string | null; tracking_orders: string[] }>(
+      'invoices',
+      'status=neq.VOID&select=id,invoice_number,fiscal_year,client_name_raw,tracking_orders&limit=2000',
+    )
+    const linkedRows = await this.get<{ invoice_id: string }>('invoice_packages', 'select=invoice_id&limit=5000')
+    const linked = new Set(linkedRows.map((r) => r.invoice_id))
+    const clients = await this.get<{ id: string; name: string }>('billing_clients', 'to_review=eq.true&select=id,name')
+
+    return {
+      offCatalog: offRows.map((r) => ({ invoiceId: r.invoice_id, invoiceNumber: r.invoices?.invoice_number, fiscalYear: r.invoices?.fiscal_year, client: r.invoices?.client_name_raw ?? null, detail: `${r.freight_type} @ ${r.unit_price}/lb` })),
+      quarantinedPayments: qRows.map((r) => ({ invoiceId: r.invoice_id, invoiceNumber: r.invoices?.invoice_number, fiscalYear: r.invoices?.fiscal_year, client: r.invoices?.client_name_raw ?? null, detail: r.raw ?? '(vacío)' })),
+      orphanInvoices: withOc
+        .filter((i) => (i.tracking_orders?.length ?? 0) > 0 && !linked.has(i.id))
+        .map((i) => ({ invoiceId: i.id, invoiceNumber: i.invoice_number, fiscalYear: i.fiscal_year, client: i.client_name_raw ?? null, detail: (i.tracking_orders ?? []).join(', ') })),
+      clientsToReview: clients.map((c) => ({ id: c.id, name: c.name })),
+    }
   }
 
   async findPackageIdByToken(token: string): Promise<string | null> {

@@ -231,6 +231,24 @@ billing.delete('/invoices/:id/packages/:packageId', billingAuth('invoices:write'
   }
 })
 
+/** GET /api/billing/reports?year=2026 — monthly + by-freight revenue/profit for charts. */
+billing.get(
+  '/reports',
+  zValidator('query', z.object({ year: z.coerce.number().int() }), (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_QUERY', 'year is required.', 422)
+  }),
+  async (c) => {
+    const svc = new BillingService(getBillingRepo(c.env))
+    return Res.ok(c, await svc.yearReport(c.req.valid('query').year))
+  },
+)
+
+/** GET /api/billing/exceptions — data-quality queue (off-catalog, quarantined pay, orphans). */
+billing.get('/exceptions', async (c) => {
+  const svc = new BillingService(getBillingRepo(c.env))
+  return Res.ok(c, await svc.exceptions())
+})
+
 /** GET /api/billing/close-month?year=2026&month=6 — monthly aggregation (replaces TOTAL JUNIO). */
 billing.get(
   '/close-month',

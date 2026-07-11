@@ -10,7 +10,7 @@ import { CatalogService } from '../catalog/catalog.js'
 import { margin, round2 } from '../domain/calc.js'
 import type { Currency, FreightType, InvoiceStatus, PaymentBank, PaymentMethod, PriceTier } from '../domain/enums.js'
 import { normalizeClientName } from '../ingest/normalize/client.js'
-import type { BillingRepository, InvoiceBundle } from '../repo/billing-repo.js'
+import type { BillingRepository, ExceptionsPayload, InvoiceBundle } from '../repo/billing-repo.js'
 
 const EPS = 0.01
 
@@ -89,6 +89,16 @@ export interface MonthlyClose {
   revenue: number
   profit: number
   receivables: number
+  byFreight: Record<FreightType, { revenue: number; profit: number; lbs: number }>
+}
+
+export interface YearReport {
+  year: number
+  invoices: number
+  revenue: number
+  profit: number
+  receivables: number
+  byMonth: Array<{ month: number; revenue: number; profit: number; invoices: number }>
   byFreight: Record<FreightType, { revenue: number; profit: number; lbs: number }>
 }
 
@@ -194,6 +204,49 @@ export function aggregateClose(year: number, month: number, bundles: InvoiceBund
     f.lbs = round2(f.lbs)
   }
   return { year, month, invoices, revenue: round2(revenue), profit: round2(profit), receivables: round2(receivables), byFreight }
+}
+
+/** Aggregate a year's bundles into a monthly + by-freight report (excludes VOID). */
+export function aggregateYear(year: number, bundles: InvoiceBundle[]): YearReport {
+  const byMonth = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, revenue: 0, profit: 0, invoices: 0 }))
+  const byFreight: YearReport['byFreight'] = { AIR: { revenue: 0, profit: 0, lbs: 0 }, MAR: { revenue: 0, profit: 0, lbs: 0 } }
+  let revenue = 0
+  let profit = 0
+  let receivables = 0
+  let invoices = 0
+  for (const b of bundles) {
+    if (b.header.status === 'VOID') continue
+    invoices++
+    const m = b.header.issue_date ? new Date(b.header.issue_date).getUTCMonth() : null
+    for (const l of b.lines) {
+      revenue += l.total || 0
+      profit += l.profit || 0
+      const f = byFreight[l.freight_type]
+      if (f) {
+        f.revenue += l.total || 0
+        f.profit += l.profit || 0
+        f.lbs += l.quantity_lbs || 0
+      }
+      if (m != null) {
+        byMonth[m].revenue += l.total || 0
+        byMonth[m].profit += l.profit || 0
+      }
+    }
+    if (m != null) byMonth[m].invoices++
+    if (b.header.status === 'ISSUED' || b.header.status === 'PARTIAL') {
+      receivables += Math.max(0, (b.header.total || 0) - (b.header.paid_usd || 0))
+    }
+  }
+  for (const r of byMonth) {
+    r.revenue = round2(r.revenue)
+    r.profit = round2(r.profit)
+  }
+  for (const f of Object.values(byFreight)) {
+    f.revenue = round2(f.revenue)
+    f.profit = round2(f.profit)
+    f.lbs = round2(f.lbs)
+  }
+  return { year, invoices, revenue: round2(revenue), profit: round2(profit), receivables: round2(receivables), byMonth, byFreight }
 }
 
 export class BillingService {
@@ -333,5 +386,14 @@ export class BillingService {
     const to = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
     const bundles = await this.repo.getBundlesByDateRange(from, to)
     return aggregateClose(year, month, bundles)
+  }
+
+  async yearReport(year: number): Promise<YearReport> {
+    const bundles = await this.repo.getBundlesByDateRange(`${year}-01-01`, `${year}-12-31`)
+    return aggregateYear(year, bundles)
+  }
+
+  async exceptions(): Promise<ExceptionsPayload> {
+    return this.repo.getExceptions()
   }
 }
