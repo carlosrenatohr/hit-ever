@@ -3,6 +3,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { getRepository } from '../lib/repository.js'
 import { Res } from '../lib/response.js'
+import { intParam, timingSafeEqual } from '../lib/security.js'
 import { IngestService } from '../services/ingest.js'
 import { EverestScraperService } from '../services/scraper.js'
 import type { CloudflareBindings } from '../types/index.js'
@@ -23,7 +24,7 @@ const admin = new Hono<{ Bindings: CloudflareBindings }>()
 // Bearer auth for internal endpoints (writes). Replace with HMAC if the team grows.
 const adminAuth = async (c: any, next: any) => {
   const auth = c.req.header('Authorization') ?? ''
-  if (!c.env.ADMIN_SECRET || auth !== `Bearer ${c.env.ADMIN_SECRET}`) {
+  if (!c.env.ADMIN_SECRET || !(await timingSafeEqual(auth, `Bearer ${c.env.ADMIN_SECRET}`))) {
     return Res.err(c, 'UNAUTHORIZED', 'Invalid admin token.', 401)
   }
   await next()
@@ -51,7 +52,7 @@ admin.post(
   }),
   async (c) => {
     const { secret } = c.req.valid('json')
-    if (!c.env.ADMIN_SECRET || secret !== c.env.ADMIN_SECRET) {
+    if (!c.env.ADMIN_SECRET || !(await timingSafeEqual(secret, c.env.ADMIN_SECRET))) {
       return Res.err(c, 'UNAUTHORIZED', 'Invalid admin secret.', 401)
     }
     try {
@@ -63,8 +64,8 @@ admin.post(
         cookieCount: session.cookies.length,
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error'
-      return Res.err(c, 'SESSION_REFRESH_FAILED', message, 500)
+      console.error('session/refresh failed', error)
+      return Res.err(c, 'SESSION_REFRESH_FAILED', 'Session refresh failed.', 500)
     }
   },
 )
@@ -73,14 +74,14 @@ admin.post(
 admin.post('/ingest', async (c) => {
   // Capped at 250d (~8 months) — high enough for a deep one-time historical backfill without
   // letting the window grow unbounded (each chunk still opens one detail page per candidate row).
-  const days = Math.min(250, Math.max(1, Number(c.req.query('days') ?? '7')))
+  const days = intParam(c.req.query('days'), 7, 1, 250)
   const offsetParam = c.req.query('offset')
   const provider = c.req.query('provider')
   try {
     const svc = new IngestService(c.env)
     // Chunked backfill: ?offset=N ingests just that one list page (fits the Worker time limit).
     if (offsetParam !== undefined) {
-      const offset = Math.max(0, Number(offsetParam))
+      const offset = intParam(offsetParam, 0, 0, 100_000)
       // ?provider=<code> ingests ONE provider per invocation. Providers without a mailbox
       // filter (e.g. Global Connection) open a detail page per row, so running every provider
       // in a single invocation can blow the Worker 50-subrequest limit; isolate them.
@@ -91,11 +92,12 @@ admin.post('/ingest', async (c) => {
       const result = await svc.ingestAllAtOffset(offset, days)
       return Res.ok(c, { offset, days, result })
     }
-    const pages = Math.min(20, Math.max(1, Number(c.req.query('pages') ?? '1')))
+    const pages = intParam(c.req.query('pages'), 1, 1, 20)
     const result = await svc.ingestAll(pages, days)
     return Res.ok(c, { pages, days, result })
   } catch (error) {
-    return Res.err(c, 'INGEST_FAILED', (error as Error).message, 500)
+    console.error('ingest failed', error)
+    return Res.err(c, 'INGEST_FAILED', 'Ingestion failed.', 500)
   }
 })
 
@@ -105,12 +107,13 @@ admin.post('/refresh-open', async (c) => {
   if (!provider) return Res.err(c, 'MISSING_PROVIDER', '?provider=<code> is required.', 400)
   // Capped at 10: persist() costs ~4 subrequests/package (fetch + package + events + notes),
   // measured hitting the Worker's 50-subrequest ceiling around package #7 at limit=20.
-  const limit = Math.min(10, Math.max(1, Number(c.req.query('limit') ?? '8')))
+  const limit = intParam(c.req.query('limit'), 8, 1, 10)
   try {
     const count = await new IngestService(c.env).refreshOpenPackages(provider, limit)
     return Res.ok(c, { provider, limit, count })
   } catch (error) {
-    return Res.err(c, 'REFRESH_FAILED', (error as Error).message, 500)
+    console.error('refresh-open failed', error)
+    return Res.err(c, 'REFRESH_FAILED', 'Refresh failed.', 500)
   }
 })
 
@@ -129,7 +132,8 @@ admin.post('/packages/:guia/refresh', async (c) => {
     if (!found) return Res.err(c, 'NOT_FOUND', `Could not refresh ${guia} (not found or ownership filter rejected it).`, 404)
     return Res.ok(c, { guia, provider: found })
   } catch (error) {
-    return Res.err(c, 'REFRESH_FAILED', (error as Error).message, 500)
+    console.error('package refresh failed', error)
+    return Res.err(c, 'REFRESH_FAILED', 'Refresh failed.', 500)
   }
 })
 
