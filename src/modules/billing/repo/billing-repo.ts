@@ -35,6 +35,7 @@ export interface InvoiceHeaderDbRow {
   tracking_orders: string[]
   agent_id: string | null
   public_token: string | null
+  paid_at: string | null
   created_at: string
   updated_at: string
 }
@@ -304,13 +305,17 @@ export class InsforgeBillingRepo implements BillingRepository {
   }
 
   async getBundlesByDateRange(from: string, to: string): Promise<InvoiceBundle[]> {
-    const headers = await this.get<InvoiceHeaderDbRow>('invoices', `issue_date=gte.${from}&issue_date=lte.${to}&select=*`)
-    return Promise.all(
-      headers.map(async (header) => {
-        const lines = await this.get<LineItemDbRow>('invoice_line_items', `invoice_id=eq.${header.id}`)
-        return { header, lines, payments: [], packages: [] }
-      }),
-    )
+    // Embed line-items in ONE request (PostgREST child embed) instead of N+1 per-invoice
+    // queries — a full year is ~150 invoices and the Worker caps at 50 subrequests, so the
+    // old fan-out blew the limit and 500'd. `limit=5000` covers any realistic range.
+    type Row = InvoiceHeaderDbRow & { invoice_line_items: LineItemDbRow[] }
+    const rows = await this.get<Row>('invoices', `issue_date=gte.${from}&issue_date=lte.${to}&select=*,invoice_line_items(*)&limit=5000`)
+    return rows.map(({ invoice_line_items, ...header }) => ({
+      header: header as InvoiceHeaderDbRow,
+      lines: invoice_line_items ?? [],
+      payments: [],
+      packages: [],
+    }))
   }
 
   async getExceptions(): Promise<ExceptionsPayload> {
