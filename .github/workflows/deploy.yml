@@ -33,3 +33,14 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: b91df20a84a77a2eda9dcc47a7bead73
           command: deploy --minify
+      - name: Health check
+        run: |
+          set -e
+          BASE="${{ vars.WORKER_URL || 'https://hit-ever-scraper.honchkrow1995.workers.dev' }}"
+          root=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/")
+          billing=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/billing/health")
+          echo "root=$root billing-health=$billing"
+          # Root must be 200; billing health must be 401 (mounted + gated, i.e. alive).
+          test "$root" = "200"
+          test "$billing" = "401"
+          echo "Deploy healthy."
