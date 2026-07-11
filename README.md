@@ -38,15 +38,18 @@ Cargotrack itself only tolerates one active session per account, so all scraping
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/` | — | API root / info |
-| `GET` | `/track/:id` | public | Public tracking. Minimal payload from InsForge (no PII/mailbox/value/photo). `200 / 404 / 422 / 429 / 503`. |
+| `GET` | `/track/:id` | public + per-IP rate limit | Public tracking. Minimal payload from InsForge (no PII/mailbox/value/photo). `200 / 404 / 422 / 429 / 503`. |
 | `GET` | `/admin/health` | — | Health check (`environment: configured \| missing-env`) |
-| `POST` | `/admin/ingest` | Bearer | Run ingestion. `?pages=N&days=D` or chunked `?offset=N&days=D`. |
+| `POST` | `/admin/session/refresh` | body `{secret}` | ⚠ **Legacy/broken** — forces a Cargotrack login via the dead `scraper.ts` path (wrong form fields, won't authenticate). The real login lives in `ingest.ts`. |
+| `POST` | `/admin/ingest` | Bearer | Run ingestion for **one** provider. `?provider=<code>&pages=N&days=D` or chunked `?offset=N&days=D` (`days` cap 250). |
+| `POST` | `/admin/refresh-open` | Bearer | Re-scrape all still-open (non-delivered) packages of a provider. |
+| `POST` | `/admin/packages/:guia/refresh` | Bearer | Re-scrape one package by guía. |
 | `POST` | `/admin/packages/:guia/status` | Bearer | Manual status override (wins over scraped). |
 | `POST` | `/admin/packages/:guia/tags` | Bearer | Internal tag (not exposed publicly). |
 | `POST` | `/admin/packages/:guia/notes` | Bearer | Internal note (not exposed publicly). |
-| `POST` | `/hooks/provider-email` | `X-Hook-Secret` | Re-scrape one package from a provider update email. |
+| `POST` | `/hooks/provider-email` | `X-Hook-Secret` or `?secret=` | Re-scrape one package from a provider update email. |
 
-Bearer = `Authorization: Bearer <ADMIN_SECRET>`. Cloudflare Email Routing also delivers the Cargotrack update email straight to the Worker's `email()` handler (same re-scrape path).
+Bearer = `Authorization: Bearer <ADMIN_SECRET>`. Cloudflare Email Routing also delivers the Cargotrack update email straight to the Worker's `email()` handler (same re-scrape path). Full request/response detail (params, status codes, curl) is in [docs/e2e-testing.md](docs/e2e-testing.md).
 
 ### Response envelope
 
@@ -125,9 +128,9 @@ pnpm run deploy   # wrangler deploy --minify   (note: `pnpm deploy` collides wit
 pnpm cf-typegen   # regenerate CloudflareBindings types
 ```
 
-Two cron schedules run as a backstop (the email hook is the primary freshness mechanism): `0 */2 * * *` refreshes Everest, `30 */2 * * *` refreshes Global Connection. They're split on purpose — Global Connection has no mailbox filter, so it opens a detail page per row, and running both providers in one invocation blows past the Workers free-plan subrequest limit.
+**Four** cron schedules run as a backstop (the email hook is the primary freshness mechanism), staggered so no two providers scrape at once: `0 */2 * * *` ingests Everest and `30 */2 * * *` ingests Global Connection (list-walk within `INGEST_WINDOW_DAYS`, default **7 days**); `15 */6 * * *` and `45 */6 * * *` re-scrape each provider's still-open packages so late provider notes aren't missed. They're split on purpose — Global Connection has no mailbox filter, so it opens a detail page per row, and running both providers in one invocation blows past the Workers free-plan subrequest limit. Source of truth: `wrangler.jsonc` `triggers.crons` + the `scheduled()` dispatch in `index.ts`.
 
-The base schema lives in `db/*.sql`; everything added for the internal dashboard (staff roles, RLS policies, the write RPCs, the `effective_status` column) is in `migrations/*.sql`, applied with `npx @insforge/cli db migrations up --all` against the linked InsForge project.
+The base schema lives in `db/*.sql`; everything added for the internal dashboard (staff roles, RLS policies, the write RPCs, the `effective_status` and `status_rank` generated columns) is in `migrations/*.sql`, applied with `npx @insforge/cli db migrations up --all` against the linked InsForge project.
 
 ---
 
@@ -135,7 +138,7 @@ The base schema lives in `db/*.sql`; everything added for the internal dashboard
 
 - **Login follows a redirect chain:** `GET /` → `POST /` (`user`/`password`/`action=login`/`Submit=Log In`) → `validate.asp` → `validate_final.asp` → `/appl2.0/agent/default.asp`. The `accessdenied=` in those URLs is part of a **successful** login, not a denial. Workers' `fetch` drops cookies across redirects, so the Worker walks the chain manually, accumulating cookies. List: `/appl2.0/agent/whs.asp?offset=15,30,…` (15 rows/page). Detail: `/appl2.0/agent/whs_detail.asp?id=<guia>`.
 - **Single session:** Cargotrack allows one active session per account. A Worker login while a human is logged into the browser returns empty lists. **Run ingestion when no human is logged in.** Sessions last ~2-3 min; the Worker caches one in Upstash.
-- **History goes back further than you'd guess:** Everest's warehouse list is a persistent ledger, not just a "recent activity" view — we've paged back to April 2025 without hitting a wall. A one-time deep backfill (e.g. "everything since January") is just walking `?offset=` further than the routine 60-day window; find the right offset by checking the dates on a page, not by guessing. Global Connection is the opposite: its list caps out around a dozen rows regardless of offset, so whatever's there is already everything there is.
+- **History goes back further than you'd guess:** Everest's warehouse list is a persistent ledger, not just a "recent activity" view — we've paged back to April 2025 without hitting a wall. A one-time deep backfill (e.g. "everything since January") is just walking `?offset=` further than the routine ingestion window (`INGEST_WINDOW_DAYS`, currently **7 days**); find the right offset by checking the dates on a page, not by guessing. Global Connection is the opposite: its list caps out around a dozen rows regardless of offset, so whatever's there is already everything there is.
 
 ---
 
@@ -156,18 +159,18 @@ src/
 │   ├── session.ts           # Upstash session cache
 │   └── parser.ts            # legacy/aux parser helpers
 ├── services/
-│   ├── ingest.ts            # IngestService: scrape → filter → upsert (chunked + batched)
-│   └── scraper.ts           # Cargotrack fetch/login orchestration
+│   ├── ingest.ts            # IngestService: scrape → filter → upsert (chunked + batched) — THE live path
+│   └── scraper.ts           # ⚠ legacy/dead path (EverestScraperService); only refreshSession() is reachable, and its login uses wrong form fields — do not build on this
 └── routes/
     ├── track.ts             # GET /track/:id  (+ route validation test)
     ├── admin.ts             # /admin/health, /admin/ingest, /admin/packages/:guia/*
     └── hooks.ts             # POST /hooks/provider-email
 
-db/         0001_init.sql, 0002_provider_notes.sql        # base InsForge schema
-migrations/ dashboard-auth.sql, dashboard-effective-status.sql  # staff roles, RLS, RPCs for hit-panel
+db/         0001_init.sql, 0002_provider_notes.sql        # base InsForge schema (⚠ global_connection provider row is commented out — lives in DB but not reproducible from SQL)
+migrations/ dashboard-auth · dashboard-effective-status · packages-status-rank  # staff roles, RLS, write RPCs + generated columns for hit-panel
 fixtures/   captured Cargotrack HTML for parser tests
 docs/       e2e-testing.md (API contract), production-deployment.md (go-live runbook),
-            session-log-2026-06.md (Cargotrack gotchas, written the hard way)
+            backfill-runbook.md (deep backfill procedure), session-log-2026-06.md (Cargotrack gotchas)
 ```
 
 ---
