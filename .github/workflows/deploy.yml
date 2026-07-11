@@ -1,11 +1,19 @@
-name: Deploy
-# Auto-deploy the Worker to production once the gate passes, on the integration
-# branches. Fires after a billing PR is merged in. Requires repo secret
-# CLOUDFLARE_API_TOKEN (Workers deploy scope). Optionally set repo variable
-# WORKER_URL for the post-deploy health check (defaults to the prod URL).
+name: Deploy Worker to Cloudflare
+
+# The hit-ever-scraper Worker deploys manually (`wrangler deploy --minify`); there's no native
+# git-integrated build like the marketing site's Pages project. This runs the same gate as CI and
+# then deploys on every push to feat/tracker-api (the worker's active/production line) and on manual
+# dispatch.
+#
+# Requires one repo secret: CLOUDFLARE_API_TOKEN — a token with "Workers Scripts: Edit" on the
+# Honchkrow1995 account (b91df20a84a77a2eda9dcc47a7bead73). Runtime secrets (ADMIN_SECRET, InsForge
+# key, Upstash, etc.) are NOT needed here — they're already set on the Worker via `wrangler secret
+# put`; a deploy only uploads code + wrangler.jsonc vars.
+
 on:
   push:
-    branches: [main, feat/tracker-api]
+    branches: [feat/tracker-api]
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -18,12 +26,12 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Gate before shipping — same check as CI/local.
       - run: pnpm check
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: b91df20a84a77a2eda9dcc47a7bead73
           command: deploy --minify
       - name: Health check
         run: |
