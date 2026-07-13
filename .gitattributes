@@ -1,0 +1,3 @@
+# Keep GitHub language stats focused on source, not captured HTML fixtures.
+fixtures/** linguist-vendored
+*.html linguist-detectable=false
