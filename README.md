@@ -1,12 +1,10 @@
-# hit-ever-scraper
+# hit-ever
 
-> **Cloudflare Worker • Hono API** — tracking API for [Hit Cargo](https://hit-cargo.com).
+Tracking API for [Hit Cargo](https://hit-cargo.com), a logistics business moving packages between the US and Nicaragua.
 
-**Workspace:** product context (priorities, other repos, part-time team) lives in [`../CLAUDE.md`](../CLAUDE.md) at the root of the `hit` workspace (one level up from this folder).
+It runs on Cloudflare Workers at the edge and serves package tracking to the public site as a fast database read — never a live scrape on request. A background pipeline keeps that database fresh by pulling from two upstream carrier systems, one of them a Classic ASP portal that only allows a single active session at a time. That constraint, plus the Workers runtime, shaped most of the interesting decisions here: a repository interface you can swap for an in-memory seed to run the whole API with zero external services, a single response envelope, and a `pnpm check` gate wired into CI.
 
-The Worker exposes a clean public tracking API that the Hit Cargo Astro site consumes. It **reads from our own database (InsForge)** — it does **not** scrape live on request. A background pipeline scrapes Cargotrack (Everest + Global Connection), filters to HIT's mailbox, and writes InsForge; the public `/track` endpoint then serves a minimal, PII-free payload from that database.
-
-For the full, copy-pasteable request/response catalog (every endpoint, every status code, curl + Postman), see **[docs/e2e-testing.md](docs/e2e-testing.md)** — it is the source of truth for the API contract.
+For the full request/response catalog (every endpoint, every status code, curl + Postman), see **[docs/e2e-testing.md](docs/e2e-testing.md)** — the source of truth for the API contract.
 
 ---
 
@@ -22,14 +20,14 @@ Astro site ──GET /track/:guia──▶ Worker ──read──▶ InsForge (
                          └─ manual      POST /admin/ingest
                                     │ scrape (login + list + detail)
                                     ▼
-                       Cargotrack (Classic ASP)
-                       ├─ Everest  (mailbox 37458 filter)
-                       └─ Global Connection (account 100% HIT)
+                       Upstream carrier portals (Classic ASP)
+                       ├─ Provider A (mailbox-filtered)
+                       └─ Provider B (dedicated account)
 ```
 
-The site reads InsForge through the Worker, never Cargotrack directly, so a public lookup is a fast DB read with no live login involved. The internal panel (`hit-panel`, a separate repo) talks to InsForge directly instead of going through the Worker — it authenticates each staff member with their own InsForge account and relies on row-level security to decide what they can see and change, rather than the Worker's single admin API key.
+The site reads InsForge through the Worker, never the carrier portals directly, so a public lookup is a fast DB read with no live login involved. The internal panel (`hit-panel`, a separate repo) talks to InsForge directly instead of going through the Worker — it authenticates each staff member with their own InsForge account and relies on row-level security to decide what they can see and change, rather than the Worker's single admin API key.
 
-Cargotrack itself only tolerates one active session per account, so all scraping — cron, the email hook, and manual backfills — funnels through one cached login and stays throttled. Running several ingestion requests at once just kicks each other's sessions out; there's no way to speed this up by parallelizing.
+The upstream tolerates only one active session per account, so all scraping — cron, the email hook, and manual backfills — funnels through one cached login and stays throttled. Running several ingestion requests at once just evicts each other's sessions; there's no way to speed this up by parallelizing.
 
 ---
 
@@ -46,7 +44,7 @@ Cargotrack itself only tolerates one active session per account, so all scraping
 | `POST` | `/admin/packages/:guia/notes` | Bearer | Internal note (not exposed publicly). |
 | `POST` | `/hooks/provider-email` | `X-Hook-Secret` | Re-scrape one package from a provider update email. |
 
-Bearer = `Authorization: Bearer <ADMIN_SECRET>`. Cloudflare Email Routing also delivers the Cargotrack update email straight to the Worker's `email()` handler (same re-scrape path).
+Bearer = `Authorization: Bearer <ADMIN_SECRET>`. Cloudflare Email Routing also delivers the carrier update email straight to the Worker's `email()` handler (same re-scrape path).
 
 ### Response envelope
 
@@ -61,7 +59,7 @@ All responses share one envelope. Add `?pretty=1` for indented JSON.
 {
   "ok": true,
   "data": {
-    "guia": "910500",
+    "guia": "100200",
     "status": "en_transito",
     "statusLabel": "En camino",
     "step": 2,
@@ -76,7 +74,7 @@ All responses share one envelope. Add `?pretty=1` for indented JSON.
 }
 ```
 
-`status` (internal enum): `en_almacen | parcial | en_transito | en_destino | entregado | excepcion | desconocido`. `statusLabel` is the Spanish user label and `step` (1..4, `0` for excepción/desconocido) drives the site's 4-step bar (Miami → En tránsito → Nicaragua → Entregado). A manual override (`/admin/packages/:guia/status`) wins over the scraped status. Full status/label/step mapping and the `404`/`422` cases are in [docs/e2e-testing.md §1.3](docs/e2e-testing.md).
+`status` (internal enum): `en_almacen | parcial | en_transito | en_destino | entregado | excepcion | desconocido`. `statusLabel` is the Spanish user label and `step` (1..4, `0` for excepción/desconocido) drives the site's 4-step bar (Miami → En tránsito → Nicaragua → Entregado). A manual override (`/admin/packages/:guia/status`) wins over the scraped status. Full status/label/step mapping and the `404`/`422` cases are in [docs/e2e-testing.md](docs/e2e-testing.md).
 
 ---
 
@@ -92,29 +90,29 @@ pnpm dev                          # → http://localhost:8787
 
 ```bash
 curl http://localhost:8787/admin/health
-curl "http://localhost:8787/track/910500?pretty=1"
+curl "http://localhost:8787/track/100200?pretty=1"
 ```
 
 ### Test & gate
 
 ```bash
 pnpm test     # vitest (parser fixtures + route validation)
-pnpm check    # gate: vitest + `wrangler deploy --dry-run` (the CI merge gate, F3)
+pnpm check    # gate: vitest + `wrangler deploy --dry-run` (the CI merge gate)
 ```
 
 ---
 
 ## Deployment
 
-Secrets are Cloudflare secrets (`wrangler secret put <KEY>`), already set in prod:
+Secrets are Cloudflare secrets (`wrangler secret put <KEY>`):
 
 ```bash
 wrangler secret put INSFORGE_API_URL
 wrangler secret put INSFORGE_API_KEY     # admin key — server only, never in the site
-wrangler secret put EVEREST_USERNAME
-wrangler secret put EVEREST_PASSWORD
-wrangler secret put GC_USERNAME          # Global Connection
-wrangler secret put GC_PASSWORD
+wrangler secret put PROVIDER_A_USERNAME
+wrangler secret put PROVIDER_A_PASSWORD
+wrangler secret put PROVIDER_B_USERNAME
+wrangler secret put PROVIDER_B_PASSWORD
 wrangler secret put UPSTASH_REDIS_URL
 wrangler secret put UPSTASH_REDIS_TOKEN
 wrangler secret put ADMIN_SECRET         # Bearer for /admin/* and /hooks/*
@@ -125,17 +123,19 @@ pnpm run deploy   # wrangler deploy --minify   (note: `pnpm deploy` collides wit
 pnpm cf-typegen   # regenerate CloudflareBindings types
 ```
 
-Two cron schedules run as a backstop (the email hook is the primary freshness mechanism): `0 */2 * * *` refreshes Everest, `30 */2 * * *` refreshes Global Connection. They're split on purpose — Global Connection has no mailbox filter, so it opens a detail page per row, and running both providers in one invocation blows past the Workers free-plan subrequest limit.
+Two cron schedules run as a backstop (the email hook is the primary freshness mechanism): one refreshes each provider on its own staggered tick. They're split on purpose — one provider has no mailbox filter, so it opens a detail page per row, and running both in a single invocation blows past the Workers free-plan subrequest limit.
 
 The base schema lives in `db/*.sql`; everything added for the internal dashboard (staff roles, RLS policies, the write RPCs, the `effective_status` column) is in `migrations/*.sql`, applied with `npx @insforge/cli db migrations up --all` against the linked InsForge project.
 
 ---
 
-## Cargotrack scraping — operational rules
+## Upstream scraping — engineering notes
 
-- **Login follows a redirect chain:** `GET /` → `POST /` (`user`/`password`/`action=login`/`Submit=Log In`) → `validate.asp` → `validate_final.asp` → `/appl2.0/agent/default.asp`. The `accessdenied=` in those URLs is part of a **successful** login, not a denial. Workers' `fetch` drops cookies across redirects, so the Worker walks the chain manually, accumulating cookies. List: `/appl2.0/agent/whs.asp?offset=15,30,…` (15 rows/page). Detail: `/appl2.0/agent/whs_detail.asp?id=<guia>`.
-- **Single session:** Cargotrack allows one active session per account. A Worker login while a human is logged into the browser returns empty lists. **Run ingestion when no human is logged in.** Sessions last ~2-3 min; the Worker caches one in Upstash.
-- **History goes back further than you'd guess:** Everest's warehouse list is a persistent ledger, not just a "recent activity" view — we've paged back to April 2025 without hitting a wall. A one-time deep backfill (e.g. "everything since January") is just walking `?offset=` further than the routine 60-day window; find the right offset by checking the dates on a page, not by guessing. Global Connection is the opposite: its list caps out around a dozen rows regardless of offset, so whatever's there is already everything there is.
+The carrier portals are Classic ASP apps, which forced a few non-obvious decisions:
+
+- **Cookies across redirects.** Login goes through a redirect chain, and the Workers `fetch` runtime doesn't carry cookies across redirects the way a browser does — so the Worker walks the chain manually and accumulates the session cookies itself.
+- **One session per account.** The upstream tolerates a single live session at a time, so every ingestion path (cron, email hook, manual backfill) funnels through one cached login and stays serialized. Concurrent logins just evict each other, so parallelizing is a non-starter. Sessions are short-lived and cached in Upstash.
+- **Pagination is a ledger, not a feed.** One provider exposes a persistent, deep history you can page back through; the other caps at a small window regardless of offset. Backfills are just walking pagination against a known date range rather than guessing.
 
 ---
 
@@ -154,20 +154,19 @@ src/
 │   ├── response.ts          # Res.ok / Res.err envelope helpers
 │   ├── ratelimit.ts         # per-IP rate limit (Upstash; fails open)
 │   ├── session.ts           # Upstash session cache
-│   └── parser.ts            # legacy/aux parser helpers
+│   └── parser.ts            # aux parser helpers
 ├── services/
 │   ├── ingest.ts            # IngestService: scrape → filter → upsert (chunked + batched)
-│   └── scraper.ts           # Cargotrack fetch/login orchestration
+│   └── scraper.ts           # fetch/login orchestration
 └── routes/
     ├── track.ts             # GET /track/:id  (+ route validation test)
     ├── admin.ts             # /admin/health, /admin/ingest, /admin/packages/:guia/*
     └── hooks.ts             # POST /hooks/provider-email
 
-db/         0001_init.sql, 0002_provider_notes.sql        # base InsForge schema
-migrations/ dashboard-auth.sql, dashboard-effective-status.sql  # staff roles, RLS, RPCs for hit-panel
-fixtures/   captured Cargotrack HTML for parser tests
-docs/       e2e-testing.md (API contract), production-deployment.md (go-live runbook),
-            session-log-2026-06.md (Cargotrack gotchas, written the hard way)
+db/         base InsForge schema
+migrations/ staff roles, RLS, RPCs for hit-panel
+fixtures/   captured HTML for parser tests
+docs/       e2e-testing.md — API contract
 ```
 
 ---
@@ -175,16 +174,16 @@ docs/       e2e-testing.md (API contract), production-deployment.md (go-live run
 ## Roadmap
 
 - [x] Public tracking API reading from InsForge (live, real data)
-- [x] Multi-provider ingestion (Everest + Global Connection) — chunked, batched, strict mailbox filter
+- [x] Multi-provider ingestion — chunked, batched, strict mailbox filter
 - [x] Admin tools: manual status override, tags, notes
 - [x] Email trigger (Cloudflare Email Routing + `/hooks/provider-email`) re-scrape
-- [x] Delivery harness (`pnpm check` + CI on PR)
-- [x] Global Connection backfilled and ingesting on its own cron tick
-- [x] Historical backfill back to January 2026 (Everest — see `docs/backfill-runbook.md`)
+- [x] Delivery gate (`pnpm check` + CI on PR)
+- [x] Second provider backfilled and ingesting on its own cron tick
+- [x] Historical backfill to January 2026
 - [x] Internal dashboard (`hit-panel`) reading InsForge directly via per-user auth + RLS
 - [ ] Email-trigger bridge wired (Make.com → `/hooks/provider-email`)
 - [ ] Custom API domain `api.hit-cargo.com` (currently `*.workers.dev`)
-- [ ] Write notes back to Cargotrack (`remarks.asp`) + HIT's own notes / billing custom fields
+- [ ] Write notes back upstream + HIT's own notes / billing custom fields
 - [ ] Automated web↔worker integration test (today: unit + route + parser tests only)
 
 ---
@@ -198,4 +197,4 @@ docs/       e2e-testing.md (API contract), production-deployment.md (go-live run
 | Validation | [Zod](https://zod.dev) v4 + `@hono/zod-validator` |
 | Persistence | [InsForge](https://insforge.dev) (Postgres + REST) behind a repository interface |
 | Session cache / rate limit | [Upstash Redis](https://upstash.com) (HTTP REST) |
-| Scraping source | Cargotrack (Classic ASP) — Everest + Global Connection |
+| Scraping source | Classic ASP carrier portals |
