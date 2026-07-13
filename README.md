@@ -4,8 +4,6 @@ Tracking API for [Hit Cargo](https://hit-cargo.com), a logistics business moving
 
 It runs on Cloudflare Workers at the edge and serves package tracking to the public site as a fast database read — never a live scrape on request. A background pipeline keeps that database fresh by pulling from two upstream carrier systems, one of them a Classic ASP portal that only allows a single active session at a time. That constraint, plus the Workers runtime, shaped most of the interesting decisions here: a repository interface you can swap for an in-memory seed to run the whole API with zero external services, a single response envelope, and a `pnpm check` gate wired into CI.
 
-For the full request/response catalog (every endpoint, every status code, curl + Postman), see **[docs/e2e-testing.md](docs/e2e-testing.md)** — the source of truth for the API contract.
-
 ---
 
 ## Architecture
@@ -74,7 +72,7 @@ All responses share one envelope. Add `?pretty=1` for indented JSON.
 }
 ```
 
-`status` (internal enum): `en_almacen | parcial | en_transito | en_destino | entregado | excepcion | desconocido`. `statusLabel` is the Spanish user label and `step` (1..4, `0` for excepción/desconocido) drives the site's 4-step bar (Miami → En tránsito → Nicaragua → Entregado). A manual override (`/admin/packages/:guia/status`) wins over the scraped status. Full status/label/step mapping and the `404`/`422` cases are in [docs/e2e-testing.md](docs/e2e-testing.md).
+`status` (internal enum): `en_almacen | parcial | en_transito | en_destino | entregado | excepcion | desconocido`. `statusLabel` is the Spanish user label and `step` (1..4, `0` for excepción/desconocido) drives the site's 4-step bar (Miami → En tránsito → Nicaragua → Entregado). A manual override (`/admin/packages/:guia/status`) wins over the scraped status.
 
 ---
 
@@ -166,7 +164,6 @@ src/
 db/         base InsForge schema
 migrations/ staff roles, RLS, RPCs for hit-panel
 fixtures/   captured HTML for parser tests
-docs/       e2e-testing.md — API contract
 ```
 
 ---
