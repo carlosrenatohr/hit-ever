@@ -162,7 +162,12 @@ export class InsforgeClient implements TrackingRepository {
   async getOpenAlmacenIds(providerId: string, limit: number): Promise<string[]> {
     const rows = await this.get<{ almacen_id: string }>(
       'packages',
-      `provider_id=eq.${encodeURIComponent(providerId)}&effective_status=neq.entregado&select=almacen_id&order=last_event_at.asc&limit=${limit}`,
+      // Order by scraped_at ASC (least-recently-scraped first), NOT last_event_at: with a capped
+      // batch, last_event ordering refreshes the same front subset every tick and STARVES packages
+      // with a newer last_event — they never get revisited (observed 2026-07-18: guia 945354 stayed
+      // frozen while others refreshed). scraped_at rotates round-robin so every open package is
+      // reached within a few ticks.
+      `provider_id=eq.${encodeURIComponent(providerId)}&effective_status=neq.entregado&select=almacen_id&order=scraped_at.asc&limit=${limit}`,
     )
     return rows.map((r) => r.almacen_id)
   }
