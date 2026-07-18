@@ -118,14 +118,15 @@ export default {
     const jobs: Record<string, Promise<unknown>> = {
       '0 */2 * * *': svc.ingestProvider('everest', 1),
       '30 */2 * * *': svc.ingestProvider('global_connection', 1),
-      // Batch of 4, NOT 8: the Workers Free plan caps external subrequests at 50/invocation, and
+      // Batch of 6, NOT 8: the Workers Free plan caps external subrequests at 50/invocation, and
       // persist() costs ~4 per package (fetch detail + upsert package + events + notes) plus login/
-      // session (~5) and Upstash reads. At 8, every cron tick blew past 50 and failed almost every
-      // package with "Too many subrequests", so the DB looked frozen for days (see
-      // docs/known-issues.md, 2026-07-18). 4 keeps a tick well under the ceiling. The real fix for
-      // higher throughput is Workers Paid (limit → 10,000) or batching persist()'s writes.
-      '15 */6 * * *': svc.refreshOpenPackages('everest', 4),
-      '45 */6 * * *': svc.refreshOpenPackages('global_connection', 4),
+      // session (~5) and Upstash reads. At 8, every tick blew past 50 and failed almost every package
+      // with "Too many subrequests" (DB looked frozen for days — see docs/known-issues.md 2026-07-18).
+      // 6 is verified to stay under the ceiling (refresh-open?limit=6 → count 6, no error). Combined
+      // with the scraped_at-ASC ordering in getOpenAlmacenIds, this now rotates through every open
+      // package. Higher throughput → Workers Paid (limit → 10,000) or batch persist()'s writes.
+      '15 */6 * * *': svc.refreshOpenPackages('everest', 6),
+      '45 */6 * * *': svc.refreshOpenPackages('global_connection', 6),
     }
     const job = jobs[event.cron] ?? svc.ingestProvider('everest', 1)
     ctx.waitUntil(job.catch((e) => console.error('[cron]', event.cron, (e as Error).message)))

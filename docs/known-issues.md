@@ -5,6 +5,25 @@ Registro de problemas conocidos del worker y su causa raíz, para no re-investig
 
 ---
 
+## 2026-07-18 · Paquetes abiertos que nunca se refrescan (*starvation* del cron)
+
+**Síntoma.** Un paquete queda con estado viejo (ej. `en_transito`) aunque en Cargotrack ya está
+`entregado`; el re-scrape manual lo corrige al instante, pero el cron nunca lo alcanza (guia 945354).
+
+**Causa.** `refreshOpenPackages` tomaba los abiertos ordenados por **`last_event_at ASC`** con un lote
+capado. Con ese orden, el cron refresca **siempre el mismo subconjunto del frente** y los paquetes con
+`last_event` más nuevo quedan pasados el corte del lote → **nunca se revisitan** (starvation). 945354
+tenía el `last_event` más nuevo del set abierto, así que se congeló indefinidamente.
+
+**Fix (aplicado).** `getOpenAlmacenIds` ahora ordena por **`scraped_at ASC`** (el menos-recientemente
+scrapeado primero): tras refrescar, su `scraped_at` salta a ahora y rota al fondo → **round-robin** por
+todos los abiertos. Se subió el lote del cron a **6** (verificado que cabe bajo 50 subrequests). Ver
+`src/lib/insforge.ts` (`getOpenAlmacenIds`) y `src/index.ts` (handler `scheduled`).
+
+**Verificar.** `select almacen_id, scraped_at from packages where effective_status<>'entregado' order
+by scraped_at asc` — con el fix, ningún abierto debería quedar con `scraped_at` mucho más viejo que el
+resto por varias vueltas del cron.
+
 ## 2026-07-18 · El cron "no deja registros nuevos" por días (límite de subrequests)
 
 **Síntoma.** En InsForge, `scraped_at` de `packages` deja huecos de 1+ día; parece que el cron no
