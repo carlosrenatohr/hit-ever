@@ -85,3 +85,47 @@ subir la frecuencia. Con 10,000 de límite hay margen de sobra.
 - El scraper es contra un **sistema viejo (Cargotrack, Classic ASP)**: no asumir, verificar con HTML
   real/fixtures antes de tocar el parser (`src/lib/cargotrack.ts`, con tests en
   `src/lib/cargotrack.test.ts`).
+
+## Migración a opencode — retos y beneficio
+
+**El beneficio (costo).** Real y grande: bajar el costo por token moviendo el desarrollo a opencode +
+un modelo más barato/propio. **Pero el ahorro solo se materializa si ese modelo produce trabajo
+CORRECTO.** Si produce trabajo sutilmente-mal que nadie atrapa, el "ahorro" se vuelve deuda técnica e
+incidentes en prod. La palanca que decide de qué lado caés es **el harness**.
+
+**Los retos, del mayor al menor:**
+
+1. **El harness tiene que ser el ancla de confianza — hoy es parcial.** Con un modelo más barato, la
+   confianza **no puede venir de la prosa del agente**; tiene que venir de **gates deterministas que
+   corran solos** (tests + CI + verificación en vivo). Estado actual: v1.2 y ever2 tienen `pnpm check`
+   + CI; el **panel no tiene tests** y varios flujos no tienen verificación automática. **Prerrequisito
+   #1: dejar el harness airtight en los 3 repos** antes de bajar de modelo. Sin eso, un modelo débil
+   mergea bugs con confianza.
+2. **Gap de capacidad del modelo.** Este código necesitó razonar sobre un **sistema viejo desconocido**
+   (Cargotrack) y cazar bugs sutiles (límite de subrequests, *starvation* del refresh, parsing de
+   `service_type`, RLS/auth, URL de InsForge baked en build). Un modelo más chico los pasa por alto con
+   facilidad. El hábito **"verificar con evidencia, no asumir"** es difícil de sostener para modelos
+   débiles → el harness y los fixtures son los que compensan.
+3. **Loop engineering / auto-mejora.** Que sea "auto-mejorable" = el agente corre el harness, lee el
+   fallo, arregla, re-corre, y **aprende** (memoria/feedback). Requiere: gates deterministas, buenas
+   superficies de error (mensajes claros, no swallow), un store de memoria, y **guardrails** para que
+   no derive ni haga cosas destructivas sin supervisión. Construir ese loop confiable es el trabajo
+   real — no es "prender opencode".
+4. **Guardrails / seguridad.** Esta sesión tuvo clasificadores bloqueando cosas riesgosas (deploys a
+   prod sin pedirlo, materializar credenciales en el transcript, auto-merge de PRs propios). opencode
+   self-hosted **necesita guardrails equivalentes** o human-in-the-loop, o hay riesgo real a prod y a
+   secretos (tenemos PAT de GitHub, ADMIN_SECRET, creds de Cargotrack/InsForge en juego).
+5. **Paridad de tooling.** Esta sesión usó: Cloudflare MCP (observability/logs), InsForge CLI, `gh` +
+   PAT, **lectura de screenshots**, subagents, y skills del repo. opencode necesita esos equivalentes
+   cableados (MCP, CLIs, credenciales en archivos gitignored). Algunos (leer capturas, verificación en
+   navegador real) pueden quedar más débiles y hay que suplirlos.
+6. **Contexto / conocimiento de dominio.** El proyecto tiene conocimiento tribal (gotchas de
+   Cargotrack, InsForge, la topología multi-repo, quirks de deploy/credenciales). Un modelo nuevo sin
+   el contexto de esta sesión depende de **estos docs + la memoria** para no re-romper cosas ya
+   resueltas. Por eso vale mantener `docs/` y el `ONBOARDING.md` al día — son el onboarding del próximo
+   agente.
+
+**Recomendación de secuencia:** (1) cerrar el harness en los 3 repos → (2) recién ahí bajar a un modelo
+más barato en opencode para las tareas mecánicas, dejando las de diseño/seguridad/parser al criterio
+humano o a un modelo fuerte → (3) construir el loop de auto-mejora encima de gates que ya son
+confiables. El orden importa: auto-mejora sobre un harness flojo amplifica errores, no los corrige.
