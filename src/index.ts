@@ -116,14 +116,18 @@ export default {
   async scheduled(event: { cron: string }, env: CloudflareBindings, ctx: { waitUntil(p: Promise<unknown>): void }) {
     const svc = new IngestService(env)
     const jobs: Record<string, Promise<unknown>> = {
-      '0 */2 * * *': svc.ingestProvider('everest', 2),
+      '0 */2 * * *': svc.ingestProvider('everest', 1),
       '30 */2 * * *': svc.ingestProvider('global_connection', 1),
-      // 8, not 12: persist() costs ~4 subrequests/package (fetch + package + events + notes) —
-      // measured hitting the 50-subrequest ceiling around package #7 at limit=20/21 in testing.
-      '15 */6 * * *': svc.refreshOpenPackages('everest', 8),
-      '45 */6 * * *': svc.refreshOpenPackages('global_connection', 8),
+      // Batch of 4, NOT 8: the Workers Free plan caps external subrequests at 50/invocation, and
+      // persist() costs ~4 per package (fetch detail + upsert package + events + notes) plus login/
+      // session (~5) and Upstash reads. At 8, every cron tick blew past 50 and failed almost every
+      // package with "Too many subrequests", so the DB looked frozen for days (see
+      // docs/known-issues.md, 2026-07-18). 4 keeps a tick well under the ceiling. The real fix for
+      // higher throughput is Workers Paid (limit → 10,000) or batching persist()'s writes.
+      '15 */6 * * *': svc.refreshOpenPackages('everest', 4),
+      '45 */6 * * *': svc.refreshOpenPackages('global_connection', 4),
     }
-    const job = jobs[event.cron] ?? svc.ingestProvider('everest', 2)
+    const job = jobs[event.cron] ?? svc.ingestProvider('everest', 1)
     ctx.waitUntil(job.catch((e) => console.error('[cron]', event.cron, (e as Error).message)))
   },
 

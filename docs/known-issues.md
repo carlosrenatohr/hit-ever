@@ -21,7 +21,10 @@ corre y que no se guarda nada nuevo.
   ```
   (más algún login fail intermitente de Everest: *"did not reach the agent area"* / *"backing off"*).
 
-**Causa raíz.** El plan **Workers Free** limita a **50 subrequests por invocación**. El camino
+**Causa raíz.** El plan **Workers Free** limita a **50 subrequests EXTERNOS por invocación**
+(verificado en docs de Cloudflare, 2026; Cargotrack, InsForge y Upstash cuentan todos como
+externos). El plan **Paid** sube ese límite a **10,000** por defecto, configurable hasta 10M vía
+`limits.subrequests`. El camino
 per-paquete `persist()` cuesta ~**4 subrequests/paquete** (fetch del detalle + upsert de
 `packages` + upsert de `events` + upsert de `package_provider_notes`), más el login/sesión
 (~3-5) y las lecturas de Upstash. Con `refreshOpenPackages(provider, 8)` en el cron, la invocación
@@ -40,9 +43,9 @@ list-walk y open-refresh no comparten invocación.
 2. **Estructural:** agrupar los 3 writes de `persist()` en menos llamadas a InsForge (como ya hace el
    camino bulk `ingestRows`), bajando el costo por paquete de ~4 a ~2 subrequests → se puede subir el
    batch sin reventar.
-3. **Definitivo:** subir a **Workers Paid ($5/mes)** → el límite pasa a **1000 subrequests/invocación**
-   y el problema desaparece; se pueden subir los batches y la frecuencia. Recomendado si el volumen
-   crece.
+3. **Definitivo:** subir a **Workers Paid ($5/mes)** → el límite pasa a **10,000 subrequests/invocación**
+   (configurable hasta 10M vía `limits.subrequests` en `wrangler.jsonc`); el problema desaparece y se
+   pueden subir los batches y la frecuencia. Recomendado si el volumen crece.
 
 **Cómo re-verificar a futuro.**
 - Actividad de escritura: `select date_trunc('day',scraped_at)::date d, count(*) from packages
