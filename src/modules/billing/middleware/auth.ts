@@ -23,7 +23,7 @@ import { Res } from '../../../lib/response.js'
 import type { CloudflareBindings } from '../../../types/index.js'
 
 export type BillingRole = 'admin' | 'billing' | 'staff' | 'viewer'
-export type BillingPermission = 'invoices:read' | 'invoices:write'
+export type BillingPermission = 'invoices:read' | 'invoices:write' | 'clients:read' | 'clients:write'
 
 export interface BillingSession {
   userId: string
@@ -36,9 +36,9 @@ export interface BillingSession {
 // `staff` (ops) gets read-only billing; `viewer` has none. Handlers only ask for a
 // permission, never a role, so this is the single place to retune access.
 const ROLE_PERMISSIONS: Record<BillingRole, BillingPermission[]> = {
-  admin: ['invoices:read', 'invoices:write'],
-  billing: ['invoices:read', 'invoices:write'],
-  staff: ['invoices:read'],
+  admin: ['invoices:read', 'invoices:write', 'clients:read', 'clients:write'],
+  billing: ['invoices:read', 'invoices:write', 'clients:read', 'clients:write'],
+  staff: ['invoices:read', 'clients:read'],
   viewer: [],
 }
 
