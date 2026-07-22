@@ -9,7 +9,7 @@ import { CustomerService } from '../service/customer-service.js'
 function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   const message = e instanceof Error ? e.message : 'Unexpected error.'
   if (/not found/i.test(message)) return Res.err(c, 'NOT_FOUND', message, 404)
-  if (/required|duplicate|unique/i.test(message)) return Res.err(c, 'INVALID_REQUEST', message, 422)
+  if (/required|duplicate|unique|409/i.test(message)) return Res.err(c, 'INVALID_REQUEST', message, 422)
   return Res.err(c, 'CUSTOMER_ERROR', message, 500)
 }
 
