@@ -17,6 +17,7 @@
   },
   "devDependencies": {
     "exceljs": "^4.4.0",
+    "lefthook": "^1.12.1",
     "tsx": "^4.19.2",
     "vitest": "^4.1.8",
     "wrangler": "^4.4.0"
