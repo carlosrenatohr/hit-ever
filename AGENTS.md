@@ -21,6 +21,18 @@ Key patterns:
 - For storage uploads, persist both the returned `url` and `key`.
 <!-- INSFORGE:END -->
 
+## Codebase Memory (knowledge graph)
+
+This project is indexed in Codebase Memory. **Preferir MCP tools sobre grep/glob/read:**
+
+1. **`search_graph`** — encontrar funciones/clases/routes/variables por patrón (BM25, regex, o semantic)
+2. **`trace_path`** — ver quién llama una función antes de tocarla (impact analysis, data flow)
+3. **`get_code_snippet`** — leer código de un símbolo exacto (no archivos enteros)
+4. **`detect_changes`** — antes de refactor significativo, cuantificar blast radius
+5. **`get_code_snippet` solo** para el símbolo exacto necesario
+
+**Nunca leer un archivo entero si no es el que estás editando.** Para strings literales/configs usar grep con `include` filter.
+
 ## Workspace context — AGENTS.md (root)
 
 This sub-repo (`hit-ever2`) is one of five in the workspace. The **canonical** AGENTS.md lives at the workspace root (`/hit/AGENTS.md`) and covers cross-repo architecture, coding standards, CI/deploy, security, and agent workflow. This file only adds repo-specific context; defer to the root AGENTS.md for everything else.
