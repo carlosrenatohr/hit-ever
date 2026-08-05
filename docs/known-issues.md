@@ -5,6 +5,28 @@ Registro de problemas conocidos del worker y su causa raíz, para no re-investig
 
 ---
 
+## 2026-08-05 · Paquete sin libraje y "el re-scrape no lo llenó" (endpoint equivocado)
+
+**Síntoma.** Dos guías en tránsito (955165, 961438) muestran "peso sin dato" en el panel.
+Se intentó rellenarlas con `POST /admin/ingest?almacen_id=955165` → devolvía `ok:true` pero
+el peso seguía null. En Cargotrack el detalle SÍ mostraba el peso ("3.6 pound(s)").
+
+**Causa.** `/admin/ingest` **no acepta `almacen_id`**: solo `pages` / `days` / `offset` /
+`provider`. La llamada con `almacen_id` hacía un ingest normal de la ventana reciente (que
+no incluía esas guías por estar fuera del window de 7 días), así que nunca tocaba el paquete.
+
+**Fix.** Usar el endpoint de re-scrape puntual:
+`POST /admin/packages/<GUIA>/refresh` (con `?provider=everest|global_connection` opcional;
+si se omite, `ingestOneAnyProvider` auto-detecta el proveedor). Ese re-scrapea el detalle
+de esa guía y upserta el paquete + eventos + notas. Verificado: 955165 → `weightLb 0.3`,
+961438 → `weightLb 3.6` (matchea la captura de Cargotrack).
+
+**Regla para no re-investigar.** Para refrescar UNA guía puntual, siempre
+`/admin/packages/:guia/refresh`. `/admin/ingest` es solo para recorrer el Almacén por
+ventana/páginas/offset. Documentado en `docs/e2e-testing.md` §1.4.3.
+
+---
+
 ## 2026-07-18 · Paquetes abiertos que nunca se refrescan (*starvation* del cron)
 
 **Síntoma.** Un paquete queda con estado viejo (ej. `en_transito`) aunque en Cargotrack ya está

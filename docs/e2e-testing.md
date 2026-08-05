@@ -384,6 +384,116 @@ detalle → filtro por casillero → upsert en InsForge), y que la autenticació
 protege la escritura. Tras esto, los datos deben verificarse en InsForge (sección 2) y
 vía `/track` (1.3).
 
+### 1.4.3 `POST /admin/packages/:guia/refresh` — re-scrape de UNA guía puntual
+
+**El endpoint a usar cuando falta actualizar un solo paquete** (datos incompletos,
+estado viejo, o re-extraer campos del detalle como `weight_lb` / `volume_cf` / `pieces`).
+Re-scrapea el detalle de esa guía en Cargotrack y upserta el paquete + eventos + notas
+en InsForge.
+
+> ⚠️ **No confundir con `/admin/ingest`:** ese endpoint **ignora cualquier `almacen_id`**
+> que se le pase — solo acepta `pages` / `days` / `offset` / `provider` y recorre el
+> Almacén reciente. Si necesitás refrescar una guía concreta, usá este de acá abajo.
+> Llamar `/admin/ingest?almacen_id=961438` NO toca esa guía (solo hace un ingest normal
+> de la ventana reciente).
+
+Parámetros de query:
+
+- `provider=X` — opcional. Si se omite, `ingestOneAnyProvider` intenta Everest y Global
+  Connection hasta dar con el proveedor dueño del paquete. Si se pasa (`everest` /
+  `global_connection`), solo prueba ese proveedor (más barato en subrequests).
+
+**Método + URL**
+
+```
+POST https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/961438/refresh
+```
+
+**Headers**
+
+```
+Authorization: Bearer <ADMIN_SECRET>
+```
+
+**curl (auto-detecta proveedor)**
+
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer <ADMIN_SECRET>" \
+  "https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/961438/refresh?pretty=1"
+```
+
+**curl (proveedor explícito)**
+
+```bash
+curl -s -X POST \
+  -H "Authorization: Bearer <ADMIN_SECRET>" \
+  "https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/961438/refresh?provider=everest&pretty=1"
+```
+
+**Respuesta esperada (200)**
+
+```json
+{ "ok": true, "data": { "guia": "961438", "provider": "everest" } }
+```
+
+**Guía no encontrada / filtro de casillero la rechaza → 404**
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Could not refresh 999999 (not found or ownership filter rejected it)."
+  }
+}
+```
+
+**Qué prueba:** que una guía puntual se re-scrapea (login → detalle → upsert) sin tocar
+el resto de la DB. Útil para rellenar campos que el código nuevo extrae del detalle
+(como `weight_lb`) en paquetes scrapeados antes del deploy, y para des-congelar un
+paquete atascado sin esperar al cron. Tras esto, verificar vía `/track` (1.3) o en el
+panel (que lee InsForge directo).
+
+### 1.4.4 `POST /staff/packages/:guia/refresh` — re-scrape desde el panel (JWT de usuario)
+
+Mismo trabajo que 1.4.3, pero **auth por sesión del panel en vez de `ADMIN_SECRET`**:
+el botón "Refrescar ahora" del panel (admin-only) llama este endpoint con el JWT del
+usuario (`Authorization: Bearer <access_token>`), nunca con el secret del Worker.
+
+- **Auth:** el Worker delega la verificación del JWT a InsForge (`/api/auth/sessions/current`)
+  y resuelve el rol del caller desde `app_users`. Solo `admin` puede re-scrapear.
+- **Cooldown por guía (5 min):** Upstash. Mientras dure, responde `429 RATE_LIMITED` con
+  `details.retryAfterSeconds` + header `Retry-After`. Protege la sesión única de
+  Cargotrack del martilleo del botón (la UI se deshabilita sola, pero el server manda).
+- **No requiere CORS nuevo:** el Worker ya permite `hit-panel.pages.dev` + previews.
+
+```
+POST https://hit-ever-scraper.honchkrow1995.workers.dev/staff/packages/961438/refresh
+Authorization: Bearer <panel-access-token>
+```
+
+**Respuesta esperada (200)**
+
+```json
+{ "ok": true, "data": { "guia": "961438", "provider": "everest" } }
+```
+
+**En cooldown (429)** — la UI muestra el countdown y el server rechaza llamadas extra:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "RATE_LIMITED",
+    "message": "Please wait before refreshing this package again.",
+    "details": { "retryAfterSeconds": 250 }
+  }
+}
+```
+
+**No-admin → 403**, token inválido/expirado → `401`, guía inexistente → `404`.
+
 ## 1.5 Herramientas internas (B6): status / tags / notes por guía
 
 Todos requieren **Bearer** (la regla `/packages/*` está protegida). Si la guía no
