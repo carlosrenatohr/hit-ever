@@ -131,6 +131,8 @@ export interface DetailData {
   estadoText?: string // package status, e.g. "In Transit"
   statusFromDetail: ShipmentStatus
   weightLb?: number // gross weight from "Peso Bruto" cell (pounds)
+  volumeCf?: number // volume from "Volúmen" cell (cubic feet)
+  pieces?: number // pieces from "Bultos" cell
   events: DetailEvent[]
   notes: ProviderNote[]
   photoUrl?: string // relative to the provider's host, e.g. "/items/DP_....jpg" — resolve before storing
@@ -235,6 +237,14 @@ export function parseDetail(html: string): DetailData {
   const weightMatch = /Peso Bruto<\/div>\s*<\/td>[\s\S]*?<tr[^>]*>[\s\S]*?<td>[\s\S]*?<\/td>[\s\S]*?<td>[\s\S]*?<div[^>]*>\s*([\d.,]+)/i.exec(html)
   const weightLb = weightMatch ? num(weightMatch[1]) : undefined
 
+  // Volume from "Volúmen" cell — third column in the same data row (after Bultos, Peso Bruto).
+  const volumeMatch = /Volúmen<\/div>\s*<\/td>[\s\S]*?<tr[^>]*>[\s\S]*?<td>[\s\S]*?<\/td>[\s\S]*?<td>[\s\S]*?<\/td>[\s\S]*?<td>[\s\S]*?<div[^>]*>\s*([\d.,]+)/i.exec(html)
+  const volumeCf = volumeMatch ? num(volumeMatch[1]) : undefined
+
+  // Pieces from "Bultos" cell — first column in the data row.
+  const piecesMatch = /Bultos<\/div>\s*<\/td>[\s\S]*?<tr[^>]*>[\s\S]*?<td>[\s\S]*?<div[^>]*>\s*([\d.,]+)/i.exec(html)
+  const pieces = piecesMatch ? num(piecesMatch[1]) : undefined
+
   return {
     almacenId: inputVal(html, 'id'),
     date: inputVal(html, 'date'),
@@ -253,6 +263,8 @@ export function parseDetail(html: string): DetailData {
     estadoText: estadoText || undefined,
     statusFromDetail,
     weightLb,
+    volumeCf,
+    pieces,
     events,
     notes,
     photoUrl,
