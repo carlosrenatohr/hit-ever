@@ -522,7 +522,7 @@ hace POST con el cuerpo del email, el Worker extrae el nº de almacén y vuelve 
 ese paquete. (El handler nativo de Cloudflare Email Routing está en `index.ts` →
 `email()`; este hook es la variante HTTP.)
 
-**Auth:** secreto compartido en el header `X-Hook-Secret` (o `?secret=`).
+**Auth:** secreto compartido en el header `X-Hook-Secret` únicamente. (El fallback `?secret=` en query string se removió en la auditoría de seguridad de 2026-07 — los query strings quedan en los logs HTTP de Cloudflare.)
 **Body:** el texto/HTML del email. Query opcional `?provider=everest|global_connection`
 (si se omite, intenta con todos los proveedores activos).
 
