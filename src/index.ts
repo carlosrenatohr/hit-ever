@@ -11,6 +11,7 @@ import { customerRouter } from './modules/customer/routes/index.js'
 import { Res } from './lib/response.js'
 import { adminRouter } from './routes/admin.js'
 import { hooksRouter } from './routes/hooks.js'
+import { staffRouter } from './routes/staff.js'
 import { trackRouter } from './routes/track.js'
 import { IngestService } from './services/ingest.js'
 import type { CloudflareBindings } from './types/index.js'
@@ -83,6 +84,7 @@ app.get('/', (c) =>
 // Mount sub-routers
 app.route('/track', trackRouter)
 app.route('/admin', adminRouter)
+app.route('/staff', staffRouter)
 app.route('/hooks', hooksRouter)
 app.route('/api/billing', billingRouter)
 app.route('/api/customer', customerRouter)
