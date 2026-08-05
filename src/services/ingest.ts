@@ -180,7 +180,7 @@ export class CargotrackClient {
 }
 
 // Builds the DB row by combining list + detail.
-function toPackageRow(providerId: string, baseUrl: string, almacenId: string, list?: ListRow, detail?: DetailData): Record<string, unknown> {
+export function toPackageRow(providerId: string, baseUrl: string, almacenId: string, list?: ListRow, detail?: DetailData): Record<string, unknown> {
   const status: ShipmentStatus = list?.status ?? detail?.statusFromDetail ?? 'desconocido'
   const lastEvent = detail?.events.at(-1)
   const row: Record<string, unknown> = {
