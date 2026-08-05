@@ -47,7 +47,7 @@ Cargotrack itself only tolerates one active session per account, so all scraping
 | `POST` | `/admin/packages/:guia/status` | Bearer | Manual status override (wins over scraped). |
 | `POST` | `/admin/packages/:guia/tags` | Bearer | Internal tag (not exposed publicly). |
 | `POST` | `/admin/packages/:guia/notes` | Bearer | Internal note (not exposed publicly). |
-| `POST` | `/hooks/provider-email` | `X-Hook-Secret` or `?secret=` | Re-scrape one package from a provider update email. |
+| `POST` | `/hooks/provider-email` | `X-Hook-Secret` (header only) | Re-scrape one package from a provider update email. The `?secret=` query-string fallback was removed (security audit 2026-07, H1) — query strings leak into Cloudflare HTTP logs. |
 
 Bearer = `Authorization: Bearer <ADMIN_SECRET>`. Cloudflare Email Routing also delivers the Cargotrack update email straight to the Worker's `email()` handler (same re-scrape path). Full request/response detail (params, status codes, curl) is in [docs/e2e-testing.md](docs/e2e-testing.md).
 
