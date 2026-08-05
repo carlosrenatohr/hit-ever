@@ -130,6 +130,7 @@ export interface DetailData {
   serviceType?: ServiceType
   estadoText?: string // package status, e.g. "In Transit"
   statusFromDetail: ShipmentStatus
+  weightLb?: number // gross weight from "Peso Bruto" cell (pounds)
   events: DetailEvent[]
   notes: ProviderNote[]
   photoUrl?: string // relative to the provider's host, e.g. "/items/DP_....jpg" — resolve before storing
@@ -228,6 +229,12 @@ export function parseDetail(html: string): DetailData {
   // last-resort fallback in case some page variant actually populates it with a real word.
   const service = mapService(inputVal(html, 'shipping_instructions2')) ?? mapService(inputVal(html, 'shipping_type2'))
 
+  // Gross weight from "Peso Bruto" cell — the header is in one <td>, the value in the second
+  // <td> of the data row (first <td> is "Bultos"/pieces). Both providers (Everest, GC) use the
+  // same table layout: header row → data row with class="heading".
+  const weightMatch = /Peso Bruto<\/div>\s*<\/td>[\s\S]*?<tr[^>]*>[\s\S]*?<td>[\s\S]*?<\/td>[\s\S]*?<td>[\s\S]*?<div[^>]*>\s*([\d.,]+)/i.exec(html)
+  const weightLb = weightMatch ? num(weightMatch[1]) : undefined
+
   return {
     almacenId: inputVal(html, 'id'),
     date: inputVal(html, 'date'),
@@ -245,6 +252,7 @@ export function parseDetail(html: string): DetailData {
     serviceType: service,
     estadoText: estadoText || undefined,
     statusFromDetail,
+    weightLb,
     events,
     notes,
     photoUrl,

@@ -190,7 +190,7 @@ function toPackageRow(providerId: string, baseUrl: string, almacenId: string, li
     status,
     raw_status: detail?.estadoText ?? list?.rawColor ?? null,
     service_type: detail?.serviceType ?? list?.serviceType ?? null,
-    weight_lb: list?.weightLb ?? null,
+    weight_lb: list?.weightLb ?? detail?.weightLb ?? null,
     volume_cf: list?.volumeCf ?? null,
     pieces: list?.pieces ?? null,
     origin_office: detail?.origin ?? null,
