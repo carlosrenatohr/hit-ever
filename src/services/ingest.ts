@@ -179,35 +179,46 @@ export class CargotrackClient {
   }
 }
 
-// Builds the DB row by combining list + detail.
-function toPackageRow(providerId: string, baseUrl: string, almacenId: string, list?: ListRow, detail?: DetailData): Record<string, unknown> {
+// Builds the DB row by combining list + detail. Exported for the test suite only — the rest of
+// the worker should go through `IngestService.persist`.
+export function toPackageRow(providerId: string, baseUrl: string, almacenId: string, list?: ListRow, detail?: DetailData): Record<string, unknown> {
   const status: ShipmentStatus = list?.status ?? detail?.statusFromDetail ?? 'desconocido'
   const lastEvent = detail?.events.at(-1)
   const row: Record<string, unknown> = {
     provider_id: providerId,
     almacen_id: almacenId,
-    tracking_number: detail?.trackingNumber ?? null,
     status,
-    raw_status: detail?.estadoText ?? list?.rawColor ?? null,
-    service_type: detail?.serviceType ?? list?.serviceType ?? null,
-    weight_lb: list?.weightLb ?? null,
-    volume_cf: list?.volumeCf ?? null,
-    pieces: list?.pieces ?? null,
-    origin_office: detail?.origin ?? null,
-    dest_office: detail?.destination ?? list?.dest ?? null,
-    description: detail?.description ?? null,
-    // Uploaded photo, when present — not always. Resolved to an absolute URL here since the
-    // parser only sees the relative href and doesn't know which provider host it belongs to.
-    photo_ref: detail?.photoUrl ? new URL(detail.photoUrl, baseUrl).toString() : null,
-    remitente: detail?.shipper ?? list?.remitente ?? null,
-    referencia_name: detail?.reference ?? null,
-    casillero: detail?.consigneeId ?? null,
-    declared_value: detail?.declaredValue ?? list?.declaredValue ?? null,
-    received_at: toIso(detail?.events[0]?.date, detail?.events[0]?.time) ?? toIso(list?.fecha) ?? null,
-    last_event_at: toIso(lastEvent?.date, lastEvent?.time) ?? null,
     scraped_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }
+
+  // Only include a column when we actually have a value. The merge-duplicate upsert in
+  // `upsertPackages` leaves absent columns untouched, so a re-scrape that only sees the detail
+  // (email trigger, refresh-open) won't clobber weight_lb/volume_cf/pieces/dates/notes that the
+  // original list-walk ingest pulled from Cargotrack. Same trick the manual_status* branch uses
+  // below. Without this, every email-trigger re-scrape erased the list-only fields to NULL.
+  const setIf = (k: string, v: unknown) => {
+    if (v !== null && v !== undefined && v !== '') row[k] = v
+  }
+
+  setIf('tracking_number', detail?.trackingNumber)
+  setIf('raw_status', detail?.estadoText ?? list?.rawColor)
+  setIf('service_type', detail?.serviceType ?? list?.serviceType)
+  setIf('weight_lb', list?.weightLb)
+  setIf('volume_cf', list?.volumeCf)
+  setIf('pieces', list?.pieces)
+  setIf('origin_office', detail?.origin)
+  setIf('dest_office', detail?.destination ?? list?.dest)
+  setIf('description', detail?.description)
+  // Uploaded photo, when present — not always. Resolved to an absolute URL here since the
+  // parser only sees the relative href and doesn't know which provider host it belongs to.
+  if (detail?.photoUrl) setIf('photo_ref', new URL(detail.photoUrl, baseUrl).toString())
+  setIf('remitente', detail?.shipper ?? list?.remitente)
+  setIf('referencia_name', detail?.reference)
+  setIf('casillero', detail?.consigneeId)
+  setIf('declared_value', detail?.declaredValue ?? list?.declaredValue)
+  setIf('received_at', toIso(detail?.events[0]?.date, detail?.events[0]?.time) ?? toIso(list?.fecha))
+  setIf('last_event_at', toIso(lastEvent?.date, lastEvent?.time))
 
   // Providers that don't flip to "delivered" by color (Global Connection) record it as a
   // "RETIRADO" note. Mirror it into the manual status override. Everest already shows it by
@@ -215,9 +226,9 @@ function toPackageRow(providerId: string, baseUrl: string, almacenId: string, li
   // existing override (when no RETIRADO note, manual_status is omitted and stays untouched).
   const retirado = detail?.notes.find((n) => /retirad/i.test(n.body))
   if (retirado && status !== 'entregado') {
-    row.manual_status = 'entregado'
-    row.manual_status_by = 'cargotrack-note'
-    row.manual_status_at = toIso(retirado.notedAt) ?? new Date().toISOString()
+    setIf('manual_status', 'entregado')
+    setIf('manual_status_by', 'cargotrack-note')
+    setIf('manual_status_at', toIso(retirado.notedAt) ?? new Date().toISOString())
   }
   return row
 }
