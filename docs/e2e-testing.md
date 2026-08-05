@@ -630,6 +630,7 @@ curl -s \
     "raw_status": "In Transit",
     "service_type": "aereo",
     "weight_lb": 2.75,
+    "volume_cf": 0.481,
     "pieces": 1,
     "origin_office": "MIA",
     "dest_office": "MGA",

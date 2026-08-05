@@ -62,6 +62,33 @@ describe('parseDetail', () => {
     expect(d.statusFromDetail).toBe('en_transito')
   })
 
+  it('extracts gross weight (Peso Bruto) in pounds', () => {
+    expect(d.weightLb).toBe(2.8)
+  })
+
+  it('extracts weight from GC detail (Peso Bruto)', () => {
+    const gc = parseDetail(fixture('detalle_gc.html'))
+    expect(gc.weightLb).toBe(0.1)
+  })
+
+  it('extracts volume (Volúmen) in cubic feet', () => {
+    expect(d.volumeCf).toBe(0.481)
+  })
+
+  it('extracts volume from GC detail (Volúmen)', () => {
+    const gc = parseDetail(fixture('detalle_gc.html'))
+    expect(gc.volumeCf).toBe(0.001)
+  })
+
+  it('extracts pieces (Bultos)', () => {
+    expect(d.pieces).toBe(1)
+  })
+
+  it('extracts pieces from GC detail (Bultos)', () => {
+    const gc = parseDetail(fixture('detalle_gc.html'))
+    expect(gc.pieces).toBe(1)
+  })
+
   it('maps Global Connection "On Hand" (green) to en_almacen, never excepcion', () => {
     const gc = parseDetail(fixture('detalle_gc.html'))
     expect(gc.estadoText).toBe('On Hand')
