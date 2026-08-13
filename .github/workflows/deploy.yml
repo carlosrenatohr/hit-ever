@@ -35,7 +35,7 @@ jobs:
           command: deploy --minify
       - name: Health check
         run: |
-          BASE="${{ vars.WORKER_URL || 'https://hit-ever-scraper.honchkrow1995.workers.dev' }}"
+          BASE="${{ vars.WORKER_URL || 'https://hit-ever-scraper.nativerse.workers.dev' }}"
           # Retry: a fresh deploy can take a few seconds to propagate to the edge, so poll
           # instead of checking once. Root must be 200; /api/billing/health must be 401
           # (mounted + gated, i.e. alive).

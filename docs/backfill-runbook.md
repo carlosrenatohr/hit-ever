@@ -57,7 +57,7 @@ Un provider por invocación (`?provider=<code>`), un offset por llamada, **secue
 paralelo — ver §4.1):
 
 ```bash
-URL=https://hit-ever-scraper.honchkrow1995.workers.dev
+URL=https://hit-ever-scraper.nativerse.workers.dev
 A="Authorization: Bearer ${ADMIN_SECRET}"
 for o in $(seq 0 15 <OFFSET_FINAL>); do
   curl -s -X POST -H "$A" "$URL/admin/ingest?provider=everest&offset=$o&days=<DIAS_SUFICIENTES>"
