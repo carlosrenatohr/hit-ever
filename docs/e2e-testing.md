@@ -13,7 +13,7 @@ repos ni los compartas en capturas.
 
 | Sistema | Base URL | Autenticación |
 |---|---|---|
-| Worker (Cloudflare) | `https://hit-ever-scraper.honchkrow1995.workers.dev` | público (lectura) / `Authorization: Bearer <ADMIN_SECRET>` (escritura) / `X-Hook-Secret: <ADMIN_SECRET>` (hook) |
+| Worker (Cloudflare) | `https://hit-ever-scraper.nativerse.workers.dev` | público (lectura) / `Authorization: Bearer <ADMIN_SECRET>` (escritura) / `X-Hook-Secret: <ADMIN_SECRET>` (hook) |
 | InsForge (Postgres + REST) | `https://a4qvtp8s.us-east.insforge.app` | `Authorization: Bearer <INSFORGE_API_KEY>` |
 | Cargotrack (referencia) | `https://everest.cargotrack.net` | sesión por cookie (login con formulario) |
 
@@ -31,14 +31,14 @@ Truco: añade `?pretty=1` a cualquier URL del Worker para recibir el JSON indent
 
 # 1. WORKER
 
-Base: `https://hit-ever-scraper.honchkrow1995.workers.dev`
+Base: `https://hit-ever-scraper.nativerse.workers.dev`
 
 ## 1.1 `GET /` — raíz / sanity check
 
 **Método + URL**
 
 ```
-GET https://hit-ever-scraper.honchkrow1995.workers.dev/
+GET https://hit-ever-scraper.nativerse.workers.dev/
 ```
 
 **Headers:** ninguno.
@@ -46,7 +46,7 @@ GET https://hit-ever-scraper.honchkrow1995.workers.dev/
 **curl**
 
 ```bash
-curl -s "https://hit-ever-scraper.honchkrow1995.workers.dev/?pretty=1"
+curl -s "https://hit-ever-scraper.nativerse.workers.dev/?pretty=1"
 ```
 
 **Respuesta esperada (200)**
@@ -75,7 +75,7 @@ envoltorio (`ok: true` + `data`) y enumera los endpoints públicos.
 **Método + URL**
 
 ```
-GET https://hit-ever-scraper.honchkrow1995.workers.dev/admin/health
+GET https://hit-ever-scraper.nativerse.workers.dev/admin/health
 ```
 
 **Headers:** ninguno (este endpoint **no** requiere Bearer; sólo `/ingest` y
@@ -84,7 +84,7 @@ GET https://hit-ever-scraper.honchkrow1995.workers.dev/admin/health
 **curl**
 
 ```bash
-curl -s "https://hit-ever-scraper.honchkrow1995.workers.dev/admin/health?pretty=1"
+curl -s "https://hit-ever-scraper.nativerse.workers.dev/admin/health?pretty=1"
 ```
 
 **Respuesta esperada (200)**
@@ -116,7 +116,7 @@ Lee de **nuestra** base (InsForge), no scrapea en vivo. Devuelve un subconjunto
 **Método + URL**
 
 ```
-GET https://hit-ever-scraper.honchkrow1995.workers.dev/track/910500
+GET https://hit-ever-scraper.nativerse.workers.dev/track/910500
 ```
 
 **Headers:** ninguno.
@@ -124,7 +124,7 @@ GET https://hit-ever-scraper.honchkrow1995.workers.dev/track/910500
 **curl**
 
 ```bash
-curl -s "https://hit-ever-scraper.honchkrow1995.workers.dev/track/910500?pretty=1"
+curl -s "https://hit-ever-scraper.nativerse.workers.dev/track/910500?pretty=1"
 ```
 
 **Respuesta esperada (200)** — el `data` es un `PublicShipment`:
@@ -207,14 +207,14 @@ mínimo), el mapeo de estado/etiqueta/paso y que **no** se filtra PII.
 **Método + URL**
 
 ```
-GET https://hit-ever-scraper.honchkrow1995.workers.dev/track/000000
+GET https://hit-ever-scraper.nativerse.workers.dev/track/000000
 ```
 
 **curl**
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" \
-  "https://hit-ever-scraper.honchkrow1995.workers.dev/track/000000"
+  "https://hit-ever-scraper.nativerse.workers.dev/track/000000"
 ```
 
 **Respuesta esperada (404)**
@@ -242,13 +242,13 @@ del esquema **antes** de tocar la base.
 **Método + URL** (el espacio se codifica como `%20`)
 
 ```
-GET https://hit-ever-scraper.honchkrow1995.workers.dev/track/abc%20123
+GET https://hit-ever-scraper.nativerse.workers.dev/track/abc%20123
 ```
 
 **curl**
 
 ```bash
-curl -s "https://hit-ever-scraper.honchkrow1995.workers.dev/track/abc%20123?pretty=1"
+curl -s "https://hit-ever-scraper.nativerse.workers.dev/track/abc%20123?pretty=1"
 ```
 
 **Respuesta esperada (422)**
@@ -289,7 +289,7 @@ Parámetros de query:
 **Método + URL**
 
 ```
-POST https://hit-ever-scraper.honchkrow1995.workers.dev/admin/ingest?pages=2&days=7
+POST https://hit-ever-scraper.nativerse.workers.dev/admin/ingest?pages=2&days=7
 ```
 
 **Headers**
@@ -303,7 +303,7 @@ Authorization: Bearer <ADMIN_SECRET>
 ```bash
 curl -s -X POST \
   -H "Authorization: Bearer <ADMIN_SECRET>" \
-  "https://hit-ever-scraper.honchkrow1995.workers.dev/admin/ingest?pages=2&days=7&pretty=1"
+  "https://hit-ever-scraper.nativerse.workers.dev/admin/ingest?pages=2&days=7&pretty=1"
 ```
 
 **Respuesta esperada (200)**
@@ -327,7 +327,7 @@ curl -s -X POST \
 **Método + URL**
 
 ```
-POST https://hit-ever-scraper.honchkrow1995.workers.dev/admin/ingest?offset=15&days=30
+POST https://hit-ever-scraper.nativerse.workers.dev/admin/ingest?offset=15&days=30
 ```
 
 **Headers**
@@ -341,7 +341,7 @@ Authorization: Bearer <ADMIN_SECRET>
 ```bash
 curl -s -X POST \
   -H "Authorization: Bearer <ADMIN_SECRET>" \
-  "https://hit-ever-scraper.honchkrow1995.workers.dev/admin/ingest?offset=15&days=30&pretty=1"
+  "https://hit-ever-scraper.nativerse.workers.dev/admin/ingest?offset=15&days=30&pretty=1"
 ```
 
 **Respuesta esperada (200)**
@@ -369,7 +369,7 @@ el resto del lote sigue adelante.
 
 ```bash
 curl -s -X POST \
-  "https://hit-ever-scraper.honchkrow1995.workers.dev/admin/ingest?pages=1&pretty=1"
+  "https://hit-ever-scraper.nativerse.workers.dev/admin/ingest?pages=1&pretty=1"
 ```
 
 ```json
@@ -406,7 +406,7 @@ Parámetros de query:
 **Método + URL**
 
 ```
-POST https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/961438/refresh
+POST https://hit-ever-scraper.nativerse.workers.dev/admin/packages/961438/refresh
 ```
 
 **Headers**
@@ -420,7 +420,7 @@ Authorization: Bearer <ADMIN_SECRET>
 ```bash
 curl -s -X POST \
   -H "Authorization: Bearer <ADMIN_SECRET>" \
-  "https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/961438/refresh?pretty=1"
+  "https://hit-ever-scraper.nativerse.workers.dev/admin/packages/961438/refresh?pretty=1"
 ```
 
 **curl (proveedor explícito)**
@@ -428,7 +428,7 @@ curl -s -X POST \
 ```bash
 curl -s -X POST \
   -H "Authorization: Bearer <ADMIN_SECRET>" \
-  "https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/961438/refresh?provider=everest&pretty=1"
+  "https://hit-ever-scraper.nativerse.workers.dev/admin/packages/961438/refresh?provider=everest&pretty=1"
 ```
 
 **Respuesta esperada (200)**
@@ -469,7 +469,7 @@ usuario (`Authorization: Bearer <access_token>`), nunca con el secret del Worker
 - **No requiere CORS nuevo:** el Worker ya permite `hit-panel.pages.dev` + previews.
 
 ```
-POST https://hit-ever-scraper.honchkrow1995.workers.dev/staff/packages/961438/refresh
+POST https://hit-ever-scraper.nativerse.workers.dev/staff/packages/961438/refresh
 Authorization: Bearer <panel-access-token>
 ```
 
@@ -511,7 +511,7 @@ existe en la base → `404 NOT_FOUND`.
 **Método + URL**
 
 ```
-POST https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/910500/status
+POST https://hit-ever-scraper.nativerse.workers.dev/admin/packages/910500/status
 ```
 
 **Headers**
@@ -534,7 +534,7 @@ curl -s -X POST \
   -H "Authorization: Bearer <ADMIN_SECRET>" \
   -H "Content-Type: application/json" \
   -d '{"status":"entregado","note":"Entregado en mano al cliente el 15/06"}' \
-  "https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/910500/status?pretty=1"
+  "https://hit-ever-scraper.nativerse.workers.dev/admin/packages/910500/status?pretty=1"
 ```
 
 **Respuesta esperada (200)**
@@ -551,7 +551,7 @@ al reconsultar `GET /track/910500`, el `status` pasa a `entregado` / `step: 4`.
 **Método + URL**
 
 ```
-POST https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/910500/tags
+POST https://hit-ever-scraper.nativerse.workers.dev/admin/packages/910500/tags
 ```
 
 **Headers**
@@ -574,7 +574,7 @@ curl -s -X POST \
   -H "Authorization: Bearer <ADMIN_SECRET>" \
   -H "Content-Type: application/json" \
   -d '{"label":"fragil","value":"si"}' \
-  "https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/910500/tags?pretty=1"
+  "https://hit-ever-scraper.nativerse.workers.dev/admin/packages/910500/tags?pretty=1"
 ```
 
 **Respuesta esperada (200)**
@@ -590,7 +590,7 @@ curl -s -X POST \
 **Método + URL**
 
 ```
-POST https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/910500/notes
+POST https://hit-ever-scraper.nativerse.workers.dev/admin/packages/910500/notes
 ```
 
 **Headers**
@@ -613,7 +613,7 @@ curl -s -X POST \
   -H "Authorization: Bearer <ADMIN_SECRET>" \
   -H "Content-Type: application/json" \
   -d '{"body":"Cliente pidió aviso por WhatsApp antes de entregar."}' \
-  "https://hit-ever-scraper.honchkrow1995.workers.dev/admin/packages/910500/notes?pretty=1"
+  "https://hit-ever-scraper.nativerse.workers.dev/admin/packages/910500/notes?pretty=1"
 ```
 
 **Respuesta esperada (200)**
@@ -639,7 +639,7 @@ ese paquete. (El handler nativo de Cloudflare Email Routing está en `index.ts` 
 **Método + URL**
 
 ```
-POST https://hit-ever-scraper.honchkrow1995.workers.dev/hooks/provider-email
+POST https://hit-ever-scraper.nativerse.workers.dev/hooks/provider-email
 ```
 
 **Headers**
@@ -663,7 +663,7 @@ curl -s -X POST \
   -H "X-Hook-Secret: <ADMIN_SECRET>" \
   -H "Content-Type: text/plain" \
   --data-binary $'Estimado cliente, su almacén # 926791 ha sido actualizado en el sistema.\nIngrese para ver el detalle de su envío.' \
-  "https://hit-ever-scraper.honchkrow1995.workers.dev/hooks/provider-email?pretty=1"
+  "https://hit-ever-scraper.nativerse.workers.dev/hooks/provider-email?pretty=1"
 ```
 
 **Respuesta esperada (200)**
