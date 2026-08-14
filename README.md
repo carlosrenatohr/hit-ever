@@ -2,7 +2,7 @@
 
 > **Cloudflare Worker • Hono API** — tracking API for [Hit Cargo](https://hit-cargo.com).
 
-**Workspace:** product context (priorities, other repos, part-time team) lives in [`../CLAUDE.md`](../CLAUDE.md) at the root of the `hit` workspace (one level up from this folder).
+**Workspace:** product context (priorities, other repos, part-time team) lives in the workspace root — router [`../AGENTS.md`](../AGENTS.md) + deep docs in [`../docs/`](../docs/) (architecture, coding standards, ADRs, agent workflow).
 
 The Worker exposes a clean public tracking API that the Hit Cargo Astro site consumes. It **reads from our own database (InsForge)** — it does **not** scrape live on request. A background pipeline scrapes Cargotrack (Everest + Global Connection), filters to HIT's mailbox, and writes InsForge; the public `/track` endpoint then serves a minimal, PII-free payload from that database.
 

@@ -1,5 +1,11 @@
 # AGENTS.md
 
+<!-- WORKSPACE:START -->
+## Workspace context
+
+This sub-repo (`hit-ever2`) is one of five in the workspace. The **canonical** AGENTS.md lives at the workspace root (`../AGENTS.md`) and is the **router**: workflow contract, gate (`pnpm check`), Do Not, delegation map. Deep content lives in `../docs/`: `architecture.md` (data flow, legacy repos), `coding-standards.md` (Worker checklist, migrations, env/secrets), `project-knowledge.md`, `adr/` (001-011), `agent-workflow.md`. This file only adds repo-specific context (InsForge patterns below).
+<!-- WORKSPACE:END -->
+
 <!-- INSFORGE:START -->
 ## InsForge backend
 
