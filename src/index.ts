@@ -6,6 +6,7 @@ import { secureHeaders } from 'hono/secure-headers'
 import { timing } from 'hono/timing'
 import { almacenIdFromEmail } from './lib/cargotrack.js'
 import { billingRouter } from './modules/billing/routes/index.js'
+import { configRouter } from './modules/config/routes/index.js'
 import { publicReceiptRouter } from './modules/billing/routes/public.js'
 import { customerRouter } from './modules/customer/routes/index.js'
 import { Res } from './lib/response.js'
@@ -87,6 +88,7 @@ app.route('/admin', adminRouter)
 app.route('/staff', staffRouter)
 app.route('/hooks', hooksRouter)
 app.route('/api/billing', billingRouter)
+app.route('/api/config', configRouter)
 app.route('/api/customer', customerRouter)
 // Public, unauthenticated printable receipt (tokenized) — separate from the gated router.
 app.route('/billing/r', publicReceiptRouter)
