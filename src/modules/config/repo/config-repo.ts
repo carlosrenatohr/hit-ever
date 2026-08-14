@@ -54,6 +54,7 @@ export type Row = Record<string, unknown>
 // ─── Port ───────────────────────────────────────────────────────────────────
 export interface ConfigRepository {
   listAgencies(): Promise<Agency[]>
+  updateAgency(slug: string, patch: Row): Promise<void>
   listRateTables(organizationId: string): Promise<RateTable[]>
   getRateTable(id: string): Promise<RateTable | null>
   createRateTable(organizationId: string, name: string, freightType: FreightType, by: string | null): Promise<RateTable>
@@ -131,6 +132,10 @@ export class InsforgeConfigRepo implements ConfigRepository {
   async listAgencies(): Promise<Agency[]> {
     const rows = await this.get<AgencyRow>('agencies', 'select=slug,name,logo_url,logo_key&order=slug')
     return rows.map((r) => ({ slug: r.slug, name: r.name, logoUrl: r.logo_url, logoKey: r.logo_key }))
+  }
+
+  async updateAgency(slug: string, patch: Row): Promise<void> {
+    await this.patch('agencies', `slug=eq.${encodeURIComponent(slug)}`, { ...patch, updated_at: new Date().toISOString() })
   }
 
   async listRateTables(organizationId: string): Promise<RateTable[]> {

@@ -56,6 +56,36 @@ config.get('/branding', configAuth('config:read'), async (c) => {
 })
 
 /**
+ * PATCH /api/config/branding/:slug — update an agency's logo (url + storage key).
+ * config:write. Tenant check in the service: admin/billing may touch any
+ * agency, staff is pinned to their own.
+ */
+config.patch(
+  '/branding/:slug',
+  configAuth('config:write'),
+  zValidator(
+    'json',
+    z.object({
+      logoUrl: z.string().url().nullable().optional(),
+      logoKey: z.string().nullable().optional(),
+    }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'logoUrl must be a valid URL.', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      const session = c.get('configSession')
+      const patch = await svc.updateBranding(session, c.req.param('slug'), c.req.valid('json'), c.get('requestId'))
+      return Res.ok(c, patch)
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/**
  * GET /api/config/rates
  * Rate tables (with their tier rows) for one organization. Non-admin callers
  * are pinned to their session agency; ?organizationId= is honored for

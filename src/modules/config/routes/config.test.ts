@@ -145,6 +145,35 @@ describe('GET /api/config/rates — tenant scoping', () => {
   })
 })
 
+describe('PATCH /api/config/branding/:slug — branding write', () => {
+  it('staff cannot brand (config:write is admin/billing only)', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: staff }, tables: {} })
+    const res = await call(
+      '/api/config/branding/suite',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'PATCH', body: { logoUrl: 'https://cdn.test/suite.png', logoKey: 'suite/logo.png' } },
+    )
+    expect(res.status).toBe(403)
+  })
+
+  it('admin brands another agency and audits it', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: {} })
+    const res = await call(
+      '/api/config/branding/suite',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'PATCH', body: { logoUrl: 'https://cdn.test/suite.png', logoKey: 'suite/logo.png' } },
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; data: { slug: string } }
+    expect(body.ok).toBe(true)
+    expect(body.data.slug).toBe('suite')
+    expect(postedAudits).toHaveLength(1)
+    const audit = JSON.parse(postedAudits[0])[0] as { action: string; organization_id: string }
+    expect(audit.action).toBe('branding.update')
+    expect(audit.organization_id).toBe('suite')
+  })
+})
+
 describe('POST /api/config/rates — write gate', () => {
   it('staff cannot create a rate table (403)', async () => {
     stubBackend({ validToken: 'goodToken', users: { u1: staff }, tables: {} })

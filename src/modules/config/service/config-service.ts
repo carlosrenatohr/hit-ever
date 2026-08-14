@@ -166,6 +166,37 @@ export class ConfigService {
     return this.repo.listAudit(org, filter)
   }
 
+  /**
+   * Update an agency's branding (logo url + storage key). Tenant-scoped: only
+   * admin/billing may touch another agency; anyone else is pinned to their own.
+   */
+  async updateBranding(
+    session: ConfigSession,
+    slug: string,
+    patch: { logoUrl?: string | null; logoKey?: string | null },
+    requestId: string,
+  ) {
+    if (session.role !== 'admin' && session.role !== 'billing' && slug !== session.agency) {
+      throw new Error('not authorized for this organization')
+    }
+    const row: { logo_url?: string | null; logo_key?: string | null } = {}
+    if ('logoUrl' in patch) row.logo_url = patch.logoUrl ?? null
+    if ('logoKey' in patch) row.logo_key = patch.logoKey ?? null
+    await this.repo.updateAgency(slug, row)
+    await this.audit({
+      organizationId: slug,
+      actorId: session.userId,
+      actorEmail: session.email,
+      actorType: 'user',
+      action: 'branding.update',
+      entityType: 'agency',
+      entityId: slug,
+      requestId,
+      metadata: { logo_key: row.logo_key ?? null },
+    })
+    return { slug, logoUrl: row.logo_url ?? null }
+  }
+
   /** Tenant check: the table must exist AND belong to the caller's org. */
   private async requireRateInOrg(org: string, id: string): Promise<RateTable> {
     const table = await this.repo.getRateTable(id)
