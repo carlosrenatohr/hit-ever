@@ -14,8 +14,30 @@ import type { ConfigRepository } from '../repo/config-repo.js'
 export class ConfigService {
   constructor(private repo: ConfigRepository) {}
 
-  async getBranding() {
-    return this.repo.listAgencies()
+  /**
+   * Branding is scoped server-side: admins see every agency; billing/staff are
+   * pinned to their own. Never returns storage keys (logo_key) — the panel
+   * only needs the public URL.
+   */
+  async getBranding(session: ConfigSession) {
+    const agencies = await this.repo.listAgencies()
+    if (session.role === 'admin') return agencies.map(stripStorageKey)
+    return agencies.filter((a) => a.slug === session.agency).map(stripStorageKey)
+  }
+
+  /**
+   * Auditable writes are two round-trips (mutation, then audit insert). If the
+   * audit insert fails, the mutation is already committed — we log and still
+   * succeed, so the client never retries an already-applied mutation (which
+   * would trip unique constraints or double-apply). The loss is a missing
+   * audit row, not a corrupt write.
+   */
+  private async audit(entry: Parameters<ConfigRepository['insertAudit']>[0]): Promise<void> {
+    try {
+      await this.repo.insertAudit(entry)
+    } catch (e) {
+      console.error('audit insert failed:', e instanceof Error ? e.message : e, 'requestId:', entry.requestId)
+    }
   }
 
   /**
@@ -37,7 +59,7 @@ export class ConfigService {
 
   async createRate(org: string, name: string, freightType: FreightType, session: ConfigSession, requestId: string): Promise<RateTable> {
     const table = await this.repo.createRateTable(org, name, freightType, session.userId)
-    await this.repo.insertAudit({
+    await this.audit({
       organizationId: org,
       actorId: session.userId,
       actorEmail: session.email,
@@ -54,7 +76,7 @@ export class ConfigService {
   async renameRate(org: string, id: string, name: string, session: ConfigSession, requestId: string): Promise<RateTable> {
     const table = await this.requireRateInOrg(org, id)
     await this.repo.updateRateTable(id, { name })
-    await this.repo.insertAudit({
+    await this.audit({
       organizationId: org,
       actorId: session.userId,
       actorEmail: session.email,
@@ -71,7 +93,7 @@ export class ConfigService {
   async deleteRate(org: string, id: string, session: ConfigSession, requestId: string): Promise<void> {
     await this.requireRateInOrg(org, id)
     await this.repo.deleteRateTable(id)
-    await this.repo.insertAudit({
+    await this.audit({
       organizationId: org,
       actorId: session.userId,
       actorEmail: session.email,
@@ -87,7 +109,7 @@ export class ConfigService {
   async replaceRows(org: string, id: string, rows: RateRow[], session: ConfigSession, requestId: string): Promise<RateTable> {
     await this.requireRateInOrg(org, id)
     await this.repo.replaceRateRows(id, rows)
-    await this.repo.insertAudit({
+    await this.audit({
       organizationId: org,
       actorId: session.userId,
       actorEmail: session.email,
@@ -106,7 +128,7 @@ export class ConfigService {
       await this.requireRateInOrg(org, rateTableId)
     }
     await this.repo.setClientDefaultRate(clientId, rateTableId)
-    await this.repo.insertAudit({
+    await this.audit({
       organizationId: org,
       actorId: session.userId,
       actorEmail: session.email,
@@ -126,7 +148,7 @@ export class ConfigService {
       await this.requireRateInOrg(org, rateTableId)
     }
     await this.repo.setPackageRateOverride(packageId, rateTableId, session.email)
-    await this.repo.insertAudit({
+    await this.audit({
       organizationId: org,
       actorId: session.userId,
       actorEmail: session.email,
@@ -153,4 +175,9 @@ export class ConfigService {
     }
     return table
   }
+}
+
+
+function stripStorageKey(a: { slug: string; name: string; logoUrl: string | null; logoKey: string | null }) {
+  return { slug: a.slug, name: a.name, logoUrl: a.logoUrl }
 }

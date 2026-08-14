@@ -39,7 +39,7 @@ export function roleHasPermission(role: ConfigRole, permission: ConfigPermission
 /** Hono `Variables` contract so handlers can read the authenticated session. */
 export type ConfigEnv = {
   Bindings: CloudflareBindings
-  Variables: { configSession: ConfigSession }
+  Variables: { configSession: ConfigSession; requestId: string }
 }
 
 type SessionResult =

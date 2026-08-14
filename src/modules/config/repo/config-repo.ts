@@ -197,7 +197,7 @@ export class InsforgeConfigRepo implements ConfigRepository {
     if (filter.from) q.push(`created_at=gte.${encodeURIComponent(filter.from)}`)
     if (filter.to) q.push(`created_at=lte.${encodeURIComponent(filter.to)}`)
     const pageSize = Math.min(filter.pageSize ?? 50, 200)
-    const offset = ((filter.page ?? 1) - 1) * pageSize
+    const offset = Math.min(((filter.page ?? 1) - 1) * pageSize, 10_000)
     q.push(`select=id,organization_id,actor_id,actor_email,actor_type,action,entity_type,entity_id,request_id,metadata,created_at`)
     q.push(`order=created_at.desc&limit=${pageSize}&offset=${offset}`)
     const { rows, count } = await this.getWithCount<AuditRow>('audit_logs', q.join('&'))

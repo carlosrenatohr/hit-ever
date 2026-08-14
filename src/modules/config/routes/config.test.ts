@@ -37,13 +37,21 @@ function stubBackend(opts: { validToken?: string; users?: Record<string, unknown
     }
     if (url.includes('/api/database/records/')) {
       const table = url.split('/api/database/records/')[1].split('?')[0]
+      if (init?.method === 'POST' && table === 'audit_logs') {
+        postedAudits.push((init.body as string | null) ?? '')
+      }
       return new Response(JSON.stringify(opts.tables?.[table] ?? []), { status: 200 })
     }
     return new Response('not found', { status: 404 })
   })
 }
 
-afterEach(() => vi.unstubAllGlobals())
+let postedAudits: string[] = []
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  postedAudits = []
+})
 
 const admin = { role: 'admin', active: true, agency: 'hit', name: 'Boss' }
 const staff = { role: 'staff', active: true, agency: 'suite', name: 'Ana' }
@@ -68,16 +76,40 @@ describe('GET /api/config/branding — auth gate', () => {
     expect(body.error.code).toBe('UNAUTHORIZED')
   })
 
-  it('200 for staff, returning the agencies', async () => {
+  it('200 for staff, scoped to their agency, no storage keys', async () => {
     stubBackend({
       validToken: 'goodToken',
       users: { u1: staff },
-      tables: { agencies: [{ slug: 'hit', name: 'HIT Cargo', logo_url: null, logo_key: null }] },
+      tables: {
+        agencies: [
+          { slug: 'hit', name: 'HIT Cargo', logo_url: null, logo_key: 'hit/logo.png' },
+          { slug: 'suite', name: 'Suite', logo_url: null, logo_key: 'suite/logo.png' },
+        ],
+      },
     })
     const res = await call('/api/config/branding', { Authorization: 'Bearer goodToken' })
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { ok: boolean; data: { agencies: Array<{ slug: string }> } }
-    expect(body.data.agencies[0].slug).toBe('hit')
+    const body = (await res.json()) as { ok: boolean; data: { agencies: Array<Record<string, unknown>> } }
+    expect(body.data.agencies).toHaveLength(1)
+    expect(body.data.agencies[0].slug).toBe('suite')
+    expect(body.data.agencies[0]).not.toHaveProperty('logoKey')
+  })
+
+  it('admin sees every agency', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: {
+        agencies: [
+          { slug: 'hit', name: 'HIT Cargo', logo_url: null, logo_key: null },
+          { slug: 'suite', name: 'Suite', logo_url: null, logo_key: null },
+        ],
+      },
+    })
+    const res = await call('/api/config/branding', { Authorization: 'Bearer goodToken' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { data: { agencies: unknown[] } }
+    expect(body.data.agencies).toHaveLength(2)
   })
 
   it('403 when the user has no app_users row', async () => {
@@ -150,5 +182,10 @@ describe('POST /api/config/rates — write gate', () => {
     expect(body.ok).toBe(true)
     expect(body.data.organizationId).toBe('hit')
     expect(body.data.id).toBe('rt1')
+    expect(postedAudits).toHaveLength(1)
+    const audit = JSON.parse(postedAudits[0])[0] as { action: string; organization_id: string; actor_id: string }
+    expect(audit.action).toBe('rate_table.create')
+    expect(audit.organization_id).toBe('hit')
+    expect(audit.actor_id).toBe('u1')
   })
 })

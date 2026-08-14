@@ -21,7 +21,9 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   const msg = e instanceof Error ? e.message : 'Unexpected error.'
   if (/not found/i.test(msg)) return Res.err(c, 'NOT_FOUND', msg, 404)
   if (/not authorized|forbidden/i.test(msg)) return Res.err(c, 'FORBIDDEN', msg, 403)
-  return Res.err(c, 'CONFIG_ERROR', msg, 500)
+  if (/duplicate|unique/i.test(msg)) return Res.err(c, 'CONFLICT', 'A resource with those values already exists.', 409)
+  console.error('config error:', msg, 'requestId:', c.get('requestId') ?? null)
+  return Res.err(c, 'CONFIG_ERROR', 'Unexpected error.', 500)
 }
 
 const RATE_ROW_SCHEMA = z.object({
@@ -35,6 +37,13 @@ const config = new Hono<ConfigEnv>()
 // Reads gate the whole surface; writes additionally re-check at the route level.
 config.use('*', configAuth('rates:read'))
 
+// One request_id per request, propagated into audit_logs for observability
+// correlation (coding-standards: Worker endpoint checklist).
+config.use('*', async (c, next) => {
+  c.set('requestId', crypto.randomUUID())
+  await next()
+})
+
 /**
  * GET /api/config/branding
  * The agencies with their brand data (name + logo). Feeds the panel shell so
@@ -43,7 +52,7 @@ config.use('*', configAuth('rates:read'))
  */
 config.get('/branding', configAuth('config:read'), async (c) => {
   const svc = new ConfigService(getConfigRepo(c.env))
-  return Res.ok(c, { agencies: await svc.getBranding() })
+  return Res.ok(c, { agencies: await svc.getBranding(c.get('configSession')) })
 })
 
 /**
@@ -89,7 +98,7 @@ config.post(
       const session = c.get('configSession')
       const org = svc.resolveOrg(session, c.req.valid('json').organizationId)
       const { name, freightType } = c.req.valid('json')
-      const table = await svc.createRate(org, name, freightType, session, crypto.randomUUID())
+      const table = await svc.createRate(org, name, freightType, session, c.get('requestId'))
       return Res.ok(c, table, undefined, 201)
     } catch (e) {
       return fail(c, e)
@@ -108,7 +117,7 @@ config.patch(
     const svc = new ConfigService(getConfigRepo(c.env))
     try {
       const session = c.get('configSession')
-      return Res.ok(c, await svc.renameRate(session.agency, c.req.param('id'), c.req.valid('json').name, session, crypto.randomUUID()))
+      return Res.ok(c, await svc.renameRate(session.agency, c.req.param('id'), c.req.valid('json').name, session, c.get('requestId')))
     } catch (e) {
       return fail(c, e)
     }
@@ -120,7 +129,7 @@ config.delete('/rates/:id', configAuth('rates:write'), async (c) => {
   const svc = new ConfigService(getConfigRepo(c.env))
   try {
     const session = c.get('configSession')
-    await svc.deleteRate(session.agency, c.req.param('id'), session, crypto.randomUUID())
+    await svc.deleteRate(session.agency, c.req.param('id'), session, c.get('requestId'))
     return Res.ok(c, { deleted: true, id: c.req.param('id') })
   } catch (e) {
     return fail(c, e)
@@ -131,14 +140,23 @@ config.delete('/rates/:id', configAuth('rates:write'), async (c) => {
 config.put(
   '/rates/:id/rows',
   configAuth('rates:write'),
-  zValidator('json', z.object({ rows: z.array(RATE_ROW_SCHEMA).max(10) }), (r, c) => {
-    if (!r.success) return Res.err(c, 'INVALID_BODY', 'rows must be an array of { tier, price, cost }.', 422)
-  }),
+  zValidator(
+    'json',
+    z.object({
+      rows: z
+        .array(RATE_ROW_SCHEMA)
+        .max(10)
+        .refine((rows) => new Set(rows.map((r) => r.tier)).size === rows.length, 'Duplicate tiers are not allowed.'),
+    }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'rows must be an array of { tier, price, cost } with no duplicate tiers.', 422)
+    },
+  ),
   async (c) => {
     const svc = new ConfigService(getConfigRepo(c.env))
     try {
       const session = c.get('configSession')
-      const table = await svc.replaceRows(session.agency, c.req.param('id'), c.req.valid('json').rows, session, crypto.randomUUID())
+      const table = await svc.replaceRows(session.agency, c.req.param('id'), c.req.valid('json').rows, session, c.get('requestId'))
       return Res.ok(c, table)
     } catch (e) {
       return fail(c, e)
@@ -158,7 +176,7 @@ config.post(
     try {
       const session = c.get('configSession')
       const { clientId, rateTableId } = c.req.valid('json')
-      await svc.assignClientDefault(session.agency, clientId, rateTableId ?? null, session, crypto.randomUUID())
+      await svc.assignClientDefault(session.agency, clientId, rateTableId ?? null, session, c.get('requestId'))
       return Res.ok(c, { clientId, defaultRateId: rateTableId ?? null })
     } catch (e) {
       return fail(c, e)
@@ -178,7 +196,7 @@ config.post(
     try {
       const session = c.get('configSession')
       const { guia, rateTableId } = c.req.valid('json')
-      const packageId = await svc.overridePackageRate(session.agency, guia, rateTableId ?? null, session, crypto.randomUUID())
+      const packageId = await svc.overridePackageRate(session.agency, guia, rateTableId ?? null, session, c.get('requestId'))
       return Res.ok(c, { packageId, guia, rateTableId: rateTableId ?? null })
     } catch (e) {
       return fail(c, e)
@@ -206,6 +224,9 @@ config.get(
       page: z.coerce.number().int().positive().optional(),
       pageSize: z.coerce.number().int().positive().max(200).optional(),
     }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_QUERY', 'Invalid query parameters.', 422)
+    },
   ),
   async (c) => {
     const svc = new ConfigService(getConfigRepo(c.env))
