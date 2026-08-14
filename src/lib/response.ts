@@ -16,7 +16,7 @@ export function err(
     c: Context,
     code: string,
     message: string,
-    status: 400 | 401 | 403 | 404 | 422 | 429 | 500 | 503 = 400,
+    status: 400 | 401 | 403 | 404 | 409 | 422 | 429 | 500 | 503 = 400,
     details?: unknown,
 ) {
     return c.json<ApiError>(

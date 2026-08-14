@@ -178,7 +178,7 @@ export class InsforgeConfigRepo implements ConfigRepository {
     await this.post('rate_rows', rows.map((r) => ({ rate_table_id: rateTableId, tier: r.tier, price: r.price, cost: r.cost })), {
       onConflict: 'rate_table_id,tier',
     })
-    const keep = rows.map((r) => `"${r.tier}"`).join(',')
+    const keep = rows.map((r) => r.tier).join(',')
     await this.del('rate_rows', `rate_table_id=eq.${encodeURIComponent(rateTableId)}&tier=not.in.(${keep})`)
   }
 

@@ -147,7 +147,9 @@ export class ConfigService {
     if (rateTableId) {
       await this.requireRateInOrg(org, rateTableId)
     }
-    await this.repo.setPackageRateOverride(packageId, rateTableId, session.email)
+    // `by` stores the actor id, never the email — the column is readable by
+    // viewer through the panel's own select on packages (PII).
+    await this.repo.setPackageRateOverride(packageId, rateTableId, session.userId)
     await this.audit({
       organizationId: org,
       actorId: session.userId,
@@ -167,22 +169,28 @@ export class ConfigService {
   }
 
   /**
-   * Update an agency's branding (logo url + storage key). Tenant-scoped: only
-   * admin/billing may touch another agency; anyone else is pinned to their own.
+   * Update an agency's logo. The client sends only the storage object key; the
+   * public URL is derived server-side from the InsForge base URL so branding
+   * can never point at an arbitrary host. Tenant-scoped: only admin may touch
+   * another agency; billing/staff are pinned to their own. 404 if the agency
+   * (or the key's bucket prefix) does not exist.
    */
   async updateBranding(
     session: ConfigSession,
     slug: string,
-    patch: { logoUrl?: string | null; logoKey?: string | null },
+    logoKey: string | null,
     requestId: string,
+    insforgeBaseUrl: string,
   ) {
-    if (session.role !== 'admin' && session.role !== 'billing' && slug !== session.agency) {
+    if (session.role !== 'admin' && slug !== session.agency) {
       throw new Error('not authorized for this organization')
     }
-    const row: { logo_url?: string | null; logo_key?: string | null } = {}
-    if ('logoUrl' in patch) row.logo_url = patch.logoUrl ?? null
-    if ('logoKey' in patch) row.logo_key = patch.logoKey ?? null
-    await this.repo.updateAgency(slug, row)
+    const agencies = await this.repo.listAgencies()
+    if (!agencies.some((a) => a.slug === slug)) {
+      throw new Error('agency not found')
+    }
+    const logoUrl = logoKey === null ? null : `${insforgeBaseUrl}/api/storage/buckets/branding/objects/${logoKey}`
+    await this.repo.updateAgency(slug, { logo_url: logoUrl, logo_key: logoKey })
     await this.audit({
       organizationId: slug,
       actorId: session.userId,
@@ -192,9 +200,9 @@ export class ConfigService {
       entityType: 'agency',
       entityId: slug,
       requestId,
-      metadata: { logo_key: row.logo_key ?? null },
+      metadata: { logo_key: logoKey },
     })
-    return { slug, logoUrl: row.logo_url ?? null }
+    return { slug, logoUrl }
   }
 
   /** Tenant check: the table must exist AND belong to the caller's org. */
