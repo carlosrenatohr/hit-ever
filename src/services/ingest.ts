@@ -29,7 +29,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 // Mirrors the backfill in migrations/20260814233000_packages-tenant-scope.sql.
 const PROVIDER_TENANT: Record<string, string> = {
   everest: 'hit',
-  global_connection: 'suite',
+  global_connection: 'hit',
   suite_demo: 'suite',
 }
 

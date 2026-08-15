@@ -92,9 +92,9 @@ describe('toPackageRow fallback chain', () => {
     expect(row.organization_id).toBe('hit')
   })
 
-  it('maps global_connection to suite tenant', () => {
+  it('maps global_connection to hit tenant (GC is HITs account)', () => {
     const row = toPackageRow(PROVIDER_ID, 'global_connection', BASE_URL, '123456')
-    expect(row.organization_id).toBe('suite')
+    expect(row.organization_id).toBe('hit')
   })
 
   it('maps suite_demo to suite tenant', () => {
