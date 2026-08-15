@@ -1,9 +1,7 @@
 name: Deploy Worker to Cloudflare
 
-# The hit-ever-scraper Worker deploys manually (`wrangler deploy --minify`); there's no native
-# git-integrated build like the marketing site's Pages project. This runs the same gate as CI and
-# then deploys on every push to feat/tracker-api (the worker's active/production line) and on manual
-# dispatch.
+# The hit-ever-scraper Worker deploys on every push to main (production line) and on manual
+# dispatch. Runs the same gate as CI before deploying.
 #
 # Requires one repo secret: CLOUDFLARE_API_TOKEN — a token with "Workers Scripts: Edit" on the
 # Honchkrow1995 account (b91df20a84a77a2eda9dcc47a7bead73). Runtime secrets (ADMIN_SECRET, InsForge
@@ -12,7 +10,7 @@ name: Deploy Worker to Cloudflare
 
 on:
   push:
-    branches: [feat/tracker-api]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
