@@ -14,6 +14,7 @@ import type { TrackingRepository } from './repository.js'
 interface DbPackageRow {
   id: string
   provider_id: string
+  organization_id: string | null
   almacen_id: string
   tracking_number: string | null
   status: ShipmentStatus
@@ -63,6 +64,7 @@ function rowToPackage(r: DbPackageRow): PackageRecord {
   return {
     id: r.id,
     providerId: r.provider_id,
+    organizationId: r.organization_id ?? 'hit',
     almacenId: r.almacen_id,
     trackingNumber: r.tracking_number,
     status: r.status,
