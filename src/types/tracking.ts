@@ -28,6 +28,7 @@ export interface Provider {
 export interface PackageRecord {
   id?: string
   providerId: string
+  organizationId?: string       // tenant (agency) this package belongs to
   almacenId: string                 // waybill number (guía) 926791 / 160914 — primary public key
   trackingNumber?: string | null    // carrier, normalized
   status: ShipmentStatus            // scraped status

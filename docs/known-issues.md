@@ -1,0 +1,100 @@
+# Known issues / incidentes — hit-ever2
+
+Registro de problemas conocidos del worker y su causa raíz, para no re-investigar. Formato: síntoma
+→ diagnóstico → causa → fix. Añadir arriba los más recientes.
+
+---
+
+## 2026-08-05 · Paquete sin libraje y "el re-scrape no lo llenó" (endpoint equivocado)
+
+**Síntoma.** Dos guías en tránsito (955165, 961438) muestran "peso sin dato" en el panel.
+Se intentó rellenarlas con `POST /admin/ingest?almacen_id=955165` → devolvía `ok:true` pero
+el peso seguía null. En Cargotrack el detalle SÍ mostraba el peso ("3.6 pound(s)").
+
+**Causa.** `/admin/ingest` **no acepta `almacen_id`**: solo `pages` / `days` / `offset` /
+`provider`. La llamada con `almacen_id` hacía un ingest normal de la ventana reciente (que
+no incluía esas guías por estar fuera del window de 7 días), así que nunca tocaba el paquete.
+
+**Fix.** Usar el endpoint de re-scrape puntual:
+`POST /admin/packages/<GUIA>/refresh` (con `?provider=everest|global_connection` opcional;
+si se omite, `ingestOneAnyProvider` auto-detecta el proveedor). Ese re-scrapea el detalle
+de esa guía y upserta el paquete + eventos + notas. Verificado: 955165 → `weightLb 0.3`,
+961438 → `weightLb 3.6` (matchea la captura de Cargotrack).
+
+**Regla para no re-investigar.** Para refrescar UNA guía puntual, siempre
+`/admin/packages/:guia/refresh`. `/admin/ingest` es solo para recorrer el Almacén por
+ventana/páginas/offset. Documentado en `docs/e2e-testing.md` §1.4.3.
+
+---
+
+## 2026-07-18 · Paquetes abiertos que nunca se refrescan (*starvation* del cron)
+
+**Síntoma.** Un paquete queda con estado viejo (ej. `en_transito`) aunque en Cargotrack ya está
+`entregado`; el re-scrape manual lo corrige al instante, pero el cron nunca lo alcanza (guia 945354).
+
+**Causa.** `refreshOpenPackages` tomaba los abiertos ordenados por **`last_event_at ASC`** con un lote
+capado. Con ese orden, el cron refresca **siempre el mismo subconjunto del frente** y los paquetes con
+`last_event` más nuevo quedan pasados el corte del lote → **nunca se revisitan** (starvation). 945354
+tenía el `last_event` más nuevo del set abierto, así que se congeló indefinidamente.
+
+**Fix (aplicado).** `getOpenAlmacenIds` ahora ordena por **`scraped_at ASC`** (el menos-recientemente
+scrapeado primero): tras refrescar, su `scraped_at` salta a ahora y rota al fondo → **round-robin** por
+todos los abiertos. Se subió el lote del cron a **6** (verificado que cabe bajo 50 subrequests). Ver
+`src/lib/insforge.ts` (`getOpenAlmacenIds`) y `src/index.ts` (handler `scheduled`).
+
+**Verificar.** `select almacen_id, scraped_at from packages where effective_status<>'entregado' order
+by scraped_at asc` — con el fix, ningún abierto debería quedar con `scraped_at` mucho más viejo que el
+resto por varias vueltas del cron.
+
+## 2026-07-18 · El cron "no deja registros nuevos" por días (límite de subrequests)
+
+**Síntoma.** En InsForge, `scraped_at` de `packages` deja huecos de 1+ día; parece que el cron no
+corre y que no se guarda nada nuevo.
+
+**Diagnóstico (verificado, no asumido).**
+- El cron **sí dispara** confiable. Cloudflare Observability (vista *calculations*, agrupado por
+  `$metadata.trigger`, 48h) muestra los 4 crons corriendo cada 2h/6h sin faltar.
+- El scraper **funciona** al dispararlo a mano: `POST /admin/refresh-open?provider=everest&limit=3`
+  → `count:3` (login + scrape + write OK).
+- Lo que falla es cada **invocación del cron**, con el error dominante en TODOS los ticks:
+  ```
+  [refresh-open] <provider>/<guia> failed: Too many subrequests by single Worker invocation.
+  ```
+  (más algún login fail intermitente de Everest: *"did not reach the agent area"* / *"backing off"*).
+
+**Causa raíz.** El plan **Workers Free** limita a **50 subrequests EXTERNOS por invocación**
+(verificado en docs de Cloudflare, 2026; Cargotrack, InsForge y Upstash cuentan todos como
+externos). El plan **Paid** sube ese límite a **10,000** por defecto, configurable hasta 10M vía
+`limits.subrequests`. El camino
+per-paquete `persist()` cuesta ~**4 subrequests/paquete** (fetch del detalle + upsert de
+`packages` + upsert de `events` + upsert de `package_provider_notes`), más el login/sesión
+(~3-5) y las lecturas de Upstash. Con `refreshOpenPackages(provider, 8)` en el cron, la invocación
+supera 50 y **falla casi todos los paquetes** → pocos/ningún write → la DB parece congelada. Por eso
+el test manual con `limit=3` (≈13 subrequests) sí pasa.
+
+**Dónde.** `src/index.ts` (handler `scheduled`): `refreshOpenPackages('everest'|'global_connection', 8)`
+y `ingestProvider('everest', 2)`. Ver también el comentario de `wrangler.jsonc` sobre por qué
+list-walk y open-refresh no comparten invocación.
+
+**Fixes (de menor a mayor esfuerzo):**
+1. **Rápido (mitiga ya):** bajar el batch del cron para quedar bajo 50 — `refreshOpenPackages` 8→**4**
+   e `ingestProvider('everest', 2)`→**1**. Trade-off: cicla más lento los paquetes abiertos (con 4/tick
+   cada 6h y ~20 abiertos en GC, cada uno se refresca ~cada 30h). El orden es *oldest-last-event-first*,
+   así que los más atrasados entran primero.
+2. **Estructural:** agrupar los 3 writes de `persist()` en menos llamadas a InsForge (como ya hace el
+   camino bulk `ingestRows`), bajando el costo por paquete de ~4 a ~2 subrequests → se puede subir el
+   batch sin reventar.
+3. **Definitivo:** subir a **Workers Paid ($5/mes)** → el límite pasa a **10,000 subrequests/invocación**
+   (configurable hasta 10M vía `limits.subrequests` en `wrangler.jsonc`); el problema desaparece y se
+   pueden subir los batches y la frecuencia. Recomendado si el volumen crece.
+
+**Cómo re-verificar a futuro.**
+- Actividad de escritura: `select date_trunc('day',scraped_at)::date d, count(*) from packages
+  where scraped_at > now() - interval '7 days' group by 1 order by 1 desc;`
+- Errores del cron: Observability → *calculations*, filtro `$metadata.origin=cron` +
+  `$metadata.level=error`, group by `$metadata.message`.
+- Prueba en vivo: `POST /admin/refresh-open?provider=everest&limit=3` con `Authorization: Bearer <ADMIN_SECRET>`.
+
+**Secundario a vigilar.** El login de Everest falla de forma intermitente (*"did not reach the agent
+area"* + backoff de 15 min). Puede ser sesión corta de Cargotrack o rate-limit de IP; si se vuelve
+frecuente, revisar credenciales y el throttle de salida.

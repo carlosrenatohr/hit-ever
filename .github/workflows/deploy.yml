@@ -1,0 +1,47 @@
+name: Deploy Worker to Cloudflare
+
+# The hit-ever-scraper Worker deploys on every push to main (production line) and on manual
+# dispatch. Runs the same gate as CI before deploying.
+#
+# Requires one repo secret: CLOUDFLARE_API_TOKEN — a token with "Workers Scripts: Edit" on the
+# Honchkrow1995 account (b91df20a84a77a2eda9dcc47a7bead73). Runtime secrets (ADMIN_SECRET, InsForge
+# key, Upstash, etc.) are NOT needed here — they're already set on the Worker via `wrangler secret
+# put`; a deploy only uploads code + wrangler.jsonc vars.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: b91df20a84a77a2eda9dcc47a7bead73
+          command: deploy --minify
+      - name: Health check
+        run: |
+          BASE="${{ vars.WORKER_URL || 'https://hit-ever-scraper.nativerse.workers.dev' }}"
+          # Retry: a fresh deploy can take a few seconds to propagate to the edge, so poll
+          # instead of checking once. Root must be 200; /api/billing/health must be 401
+          # (mounted + gated, i.e. alive).
+          for i in $(seq 1 12); do
+            root=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/")
+            billing=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/billing/health")
+            echo "attempt $i: root=$root billing-health=$billing"
+            if [ "$root" = "200" ] && [ "$billing" = "401" ]; then echo "Deploy healthy."; exit 0; fi
+            sleep 5
+          done
+          echo "Health check failed after retries."; exit 1

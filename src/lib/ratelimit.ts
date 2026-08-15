@@ -62,3 +62,62 @@ export class RateLimiter {
     })
   }
 }
+
+export interface CooldownResult {
+  allowed: boolean
+  retryAfterSeconds: number
+}
+
+/**
+ * Per-resource cooldown (e.g. one re-scrape per guia every N minutes).
+ * Same Upstash REST mechanics as RateLimiter (incr + expire), keyed per
+ * identifier so the first call of the window resets the TTL. Fails open (allows)
+ * if the backend errors, so a Redis hiccup never blocks a manual refresh.
+ */
+export class Cooldown {
+  constructor(
+    private readonly url: string,
+    private readonly token: string,
+    private readonly windowSec = 300, // 5 minutes
+  ) {}
+
+  async check(identifier: string): Promise<CooldownResult> {
+    const key = `cd:${identifier}`
+    try {
+      const count = await this.incr(key)
+      if (count === 1) await this.expire(key, this.windowSec)
+      if (count <= 1) return { allowed: true, retryAfterSeconds: 0 }
+      return { allowed: false, retryAfterSeconds: await this.remaining(key) }
+    } catch (e) {
+      console.error('[cooldown] backend error, fail-open:', (e as Error).message)
+      return { allowed: true, retryAfterSeconds: 0 }
+    }
+  }
+
+  private async incr(key: string): Promise<number> {
+    const res = await fetch(`${this.url}/incr/${encodeURIComponent(key)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.token}` },
+    })
+    if (!res.ok) throw new Error(`incr → ${res.status}`)
+    const { result } = (await res.json()) as { result: number }
+    return result
+  }
+
+  private async expire(key: string, seconds: number): Promise<void> {
+    await fetch(`${this.url}/expire/${encodeURIComponent(key)}/${seconds}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.token}` },
+    })
+  }
+
+  private async remaining(key: string): Promise<number> {
+    const res = await fetch(`${this.url}/ttl/${encodeURIComponent(key)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.token}` },
+    })
+    if (!res.ok) return this.windowSec
+    const { result } = (await res.json()) as { result: number }
+    return Math.max(0, result)
+  }
+}

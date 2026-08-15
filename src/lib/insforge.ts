@@ -14,6 +14,7 @@ import type { TrackingRepository } from './repository.js'
 interface DbPackageRow {
   id: string
   provider_id: string
+  organization_id: string | null
   almacen_id: string
   tracking_number: string | null
   status: ShipmentStatus
@@ -63,6 +64,7 @@ function rowToPackage(r: DbPackageRow): PackageRecord {
   return {
     id: r.id,
     providerId: r.provider_id,
+    organizationId: r.organization_id ?? 'hit',
     almacenId: r.almacen_id,
     trackingNumber: r.tracking_number,
     status: r.status,
@@ -142,7 +144,10 @@ export class InsforgeClient implements TrackingRepository {
 
   // ─── Public read ───────────────────────────────────────────────────────────────
   async getPackageByGuia(guia: string): Promise<PackageRecord | null> {
-    const rows = await this.get<DbPackageRow>('packages', `almacen_id=eq.${encodeURIComponent(guia)}&limit=1`)
+    // almacen_id is NOT unique on its own (uniqueness is provider_id+almacen_id, and Everest/GC
+    // warehouse numbers can collide). Order by most-recently-scraped so the lookup is deterministic
+    // instead of returning an arbitrary provider's row.
+    const rows = await this.get<DbPackageRow>('packages', `almacen_id=eq.${encodeURIComponent(guia)}&order=scraped_at.desc&limit=1`)
     return rows[0] ? rowToPackage(rows[0]) : null
   }
 
@@ -159,7 +164,12 @@ export class InsforgeClient implements TrackingRepository {
   async getOpenAlmacenIds(providerId: string, limit: number): Promise<string[]> {
     const rows = await this.get<{ almacen_id: string }>(
       'packages',
-      `provider_id=eq.${encodeURIComponent(providerId)}&effective_status=neq.entregado&select=almacen_id&order=last_event_at.asc&limit=${limit}`,
+      // Order by scraped_at ASC (least-recently-scraped first), NOT last_event_at: with a capped
+      // batch, last_event ordering refreshes the same front subset every tick and STARVES packages
+      // with a newer last_event — they never get revisited (observed 2026-07-18: guia 945354 stayed
+      // frozen while others refreshed). scraped_at rotates round-robin so every open package is
+      // reached within a few ticks.
+      `provider_id=eq.${encodeURIComponent(providerId)}&effective_status=neq.entregado&select=almacen_id&order=scraped_at.asc&limit=${limit}`,
     )
     return rows.map((r) => r.almacen_id)
   }

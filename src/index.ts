@@ -5,9 +5,14 @@ import { prettyJSON } from 'hono/pretty-json'
 import { secureHeaders } from 'hono/secure-headers'
 import { timing } from 'hono/timing'
 import { almacenIdFromEmail } from './lib/cargotrack.js'
+import { billingRouter } from './modules/billing/routes/index.js'
+import { configRouter } from './modules/config/routes/index.js'
+import { publicReceiptRouter } from './modules/billing/routes/public.js'
+import { customerRouter } from './modules/customer/routes/index.js'
 import { Res } from './lib/response.js'
 import { adminRouter } from './routes/admin.js'
 import { hooksRouter } from './routes/hooks.js'
+import { staffRouter } from './routes/staff.js'
 import { trackRouter } from './routes/track.js'
 import { IngestService } from './services/ingest.js'
 import type { CloudflareBindings } from './types/index.js'
@@ -37,15 +42,18 @@ const STATIC_ALLOWED_ORIGINS = new Set([
 ])
 // Landing Pages project: hit-landing-34b.pages.dev and every <hash>.hit-landing-34b.pages.dev preview.
 const PAGES_ORIGIN_RE = /^https:\/\/([a-z0-9-]+\.)?hit-landing-34b\.pages\.dev$/
+// Internal panel (hit-panel): its Cloudflare Pages production alias + preview hashes.
+// The panel calls the authenticated /api/billing/* endpoints from the browser.
+const PANEL_ORIGIN_RE = /^https:\/\/([a-z0-9-]+\.)?hit-panel\.pages\.dev$/
 app.use(
   '*',
   cors({
     origin: (origin) => {
       if (!origin) return undefined
-      if (STATIC_ALLOWED_ORIGINS.has(origin) || PAGES_ORIGIN_RE.test(origin)) return origin
+      if (STATIC_ALLOWED_ORIGINS.has(origin) || PAGES_ORIGIN_RE.test(origin) || PANEL_ORIGIN_RE.test(origin)) return origin
       return null // not allowed → no ACAO header → browser blocks the response
     },
-    allowMethods: ['GET', 'POST', 'OPTIONS'],
+    allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
     maxAge: 86400,
   }),
@@ -69,6 +77,7 @@ app.get('/', (c) =>
       track: 'GET /track/:id',
       health: 'GET /admin/health',
       refreshSession: 'POST /admin/session/refresh',
+      billing: 'GET /api/billing/health (auth)',
     },
   }),
 )
@@ -76,7 +85,13 @@ app.get('/', (c) =>
 // Mount sub-routers
 app.route('/track', trackRouter)
 app.route('/admin', adminRouter)
+app.route('/staff', staffRouter)
 app.route('/hooks', hooksRouter)
+app.route('/api/billing', billingRouter)
+app.route('/api/config', configRouter)
+app.route('/api/customer', customerRouter)
+// Public, unauthenticated printable receipt (tokenized) — separate from the gated router.
+app.route('/billing/r', publicReceiptRouter)
 
 // ─── 404 Catch-all ────────────────────────────────────────────────────────────
 app.notFound((c) =>
@@ -107,14 +122,19 @@ export default {
   async scheduled(event: { cron: string }, env: CloudflareBindings, ctx: { waitUntil(p: Promise<unknown>): void }) {
     const svc = new IngestService(env)
     const jobs: Record<string, Promise<unknown>> = {
-      '0 */2 * * *': svc.ingestProvider('everest', 2),
+      '0 */2 * * *': svc.ingestProvider('everest', 1),
       '30 */2 * * *': svc.ingestProvider('global_connection', 1),
-      // 8, not 12: persist() costs ~4 subrequests/package (fetch + package + events + notes) —
-      // measured hitting the 50-subrequest ceiling around package #7 at limit=20/21 in testing.
-      '15 */6 * * *': svc.refreshOpenPackages('everest', 8),
-      '45 */6 * * *': svc.refreshOpenPackages('global_connection', 8),
+      // Batch of 6, NOT 8: the Workers Free plan caps external subrequests at 50/invocation, and
+      // persist() costs ~4 per package (fetch detail + upsert package + events + notes) plus login/
+      // session (~5) and Upstash reads. At 8, every tick blew past 50 and failed almost every package
+      // with "Too many subrequests" (DB looked frozen for days — see docs/known-issues.md 2026-07-18).
+      // 6 is verified to stay under the ceiling (refresh-open?limit=6 → count 6, no error). Combined
+      // with the scraped_at-ASC ordering in getOpenAlmacenIds, this now rotates through every open
+      // package. Higher throughput → Workers Paid (limit → 10,000) or batch persist()'s writes.
+      '15 */6 * * *': svc.refreshOpenPackages('everest', 6),
+      '45 */6 * * *': svc.refreshOpenPackages('global_connection', 6),
     }
-    const job = jobs[event.cron] ?? svc.ingestProvider('everest', 2)
+    const job = jobs[event.cron] ?? svc.ingestProvider('everest', 1)
     ctx.waitUntil(job.catch((e) => console.error('[cron]', event.cron, (e as Error).message)))
   },
 

@@ -131,6 +131,7 @@ export class MemoryRepository implements TrackingRepository {
     this.packages.set(almacenId, {
       id,
       providerId: String(pkg.provider_id ?? ''),
+      organizationId: String(pkg.organization_id ?? ''),
       almacenId,
       trackingNumber: (pkg.tracking_number as string) ?? null,
       status: (pkg.status as ShipmentStatus) ?? 'desconocido',

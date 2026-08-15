@@ -5,7 +5,7 @@ import worker from '../index.js'
 // so the repository / rate limiter (and thus env) are never touched.
 const ctx = { waitUntil() {}, passThroughOnException() {} }
 function get(path: string): Promise<Response> {
-    return worker.fetch(new Request(`https://t.test${path}`), {} as never, ctx as never)
+    return Promise.resolve(worker.fetch(new Request(`https://t.test${path}`), {} as never, ctx as never))
 }
 
 describe('GET /track/:id — param validation', () => {
