@@ -12,6 +12,7 @@ import { customerRouter } from './modules/customer/routes/index.js'
 import { Res } from './lib/response.js'
 import { adminRouter } from './routes/admin.js'
 import { hooksRouter } from './routes/hooks.js'
+import { photoRouter } from './routes/photo.js'
 import { staffRouter } from './routes/staff.js'
 import { trackRouter } from './routes/track.js'
 import { IngestService } from './services/ingest.js'
@@ -90,6 +91,7 @@ app.route('/hooks', hooksRouter)
 app.route('/api/billing', billingRouter)
 app.route('/api/config', configRouter)
 app.route('/api/customer', customerRouter)
+app.route('/api/photo', photoRouter)
 // Public, unauthenticated printable receipt (tokenized) — separate from the gated router.
 app.route('/billing/r', publicReceiptRouter)
 
