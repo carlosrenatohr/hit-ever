@@ -15,14 +15,16 @@ export class ConfigService {
   constructor(private repo: ConfigRepository) {}
 
   /**
-   * Branding is scoped server-side: admins see every agency; billing/staff are
-   * pinned to their own. Never returns storage keys (logo_key) — the panel
-   * only needs the public URL.
+   * Branding is scoped server-side: every caller sees ONLY their own agency.
+   * Even admins never see another agency's brand data — the panel shell needs
+   * only the logged-in user's brand, and exposing other agencies' logo presence
+   * leaks tenant info. Never returns storage keys (logo_key) — the panel only
+   * needs the public URL.
    */
   async getBranding(session: ConfigSession) {
-    const agencies = await this.repo.listAgencies()
-    if (session.role === 'admin') return agencies.map(stripStorageKey)
-    return agencies.filter((a) => a.slug === session.agency).map(stripStorageKey)
+    return (await this.repo.listAgencies())
+      .filter((a) => a.slug === session.agency)
+      .map(stripStorageKey)
   }
 
   /**

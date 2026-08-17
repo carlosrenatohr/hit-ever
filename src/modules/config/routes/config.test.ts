@@ -95,7 +95,7 @@ describe('GET /api/config/branding — auth gate', () => {
     expect(body.data.agencies[0]).not.toHaveProperty('logoKey')
   })
 
-  it('admin sees every agency', async () => {
+  it('admin sees only their own agency (branding is always self-scoped)', async () => {
     stubBackend({
       validToken: 'goodToken',
       users: { u1: admin },
@@ -108,8 +108,10 @@ describe('GET /api/config/branding — auth gate', () => {
     })
     const res = await call('/api/config/branding', { Authorization: 'Bearer goodToken' })
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { data: { agencies: unknown[] } }
-    expect(body.data.agencies).toHaveLength(2)
+    const body = (await res.json()) as { ok: boolean; data: { agencies: Array<{ slug: string }> } }
+    expect(body.ok).toBe(true)
+    expect(body.data.agencies).toHaveLength(1)
+    expect(body.data.agencies[0].slug).toBe('hit')
   })
 
   it('403 when the user has no app_users row', async () => {
