@@ -115,6 +115,16 @@ export interface YearReport {
   byFreight: Record<FreightType, { revenue: number; profit: number; lbs: number }>
 }
 
+export interface DateRangeSummary {
+  from: string
+  to: string
+  invoices: number
+  revenue: number
+  profit: number
+  receivables: number
+  byFreight: Record<FreightType, { revenue: number; profit: number; lbs: number }>
+}
+
 /** Outstanding = billed but not fully paid, else 0. VOID never counts. */
 function outstandingOf(status: InvoiceStatus, total: number, paidUsd: number): number {
   if (status === 'VOID' || status === 'PAID') return 0
@@ -263,6 +273,41 @@ export function aggregateYear(year: number, bundles: InvoiceBundle[]): YearRepor
   return { year, invoices, revenue: round2(revenue), profit: round2(profit), receivables: round2(receivables), byMonth, byFreight }
 }
 
+/** Aggregate bundles for an arbitrary date range (excludes VOID). */
+export function aggregateRange(from: string, to: string, bundles: InvoiceBundle[]): DateRangeSummary {
+  const byFreight: DateRangeSummary['byFreight'] = {
+    AIR: { revenue: 0, profit: 0, lbs: 0 },
+    MAR: { revenue: 0, profit: 0, lbs: 0 },
+  }
+  let revenue = 0
+  let profit = 0
+  let receivables = 0
+  let invoices = 0
+  for (const b of bundles) {
+    if (b.header.status === 'VOID') continue
+    invoices++
+    for (const l of b.lines) {
+      revenue += l.total || 0
+      profit += l.profit || 0
+      const f = byFreight[l.freight_type]
+      if (f) {
+        f.revenue += l.total || 0
+        f.profit += l.profit || 0
+        f.lbs += l.quantity_lbs || 0
+      }
+    }
+    if (b.header.status === 'ISSUED' || b.header.status === 'PARTIAL') {
+      receivables += Math.max(0, (b.header.total || 0) - (b.header.paid_usd || 0))
+    }
+  }
+  for (const f of Object.values(byFreight)) {
+    f.revenue = round2(f.revenue)
+    f.profit = round2(f.profit)
+    f.lbs = round2(f.lbs)
+  }
+  return { from, to, invoices, revenue: round2(revenue), profit: round2(profit), receivables: round2(receivables), byFreight }
+}
+
 export class BillingService {
   private catalog: CatalogService
   constructor(private readonly repo: BillingRepository) {
@@ -407,6 +452,11 @@ export class BillingService {
   async yearReport(year: number): Promise<YearReport> {
     const bundles = await this.repo.getBundlesByDateRange(`${year}-01-01`, `${year}-12-31`)
     return aggregateYear(year, bundles)
+  }
+
+  async summary(from: string, to: string): Promise<DateRangeSummary> {
+    const bundles = await this.repo.getBundlesByDateRange(from, to)
+    return aggregateRange(from, to, bundles)
   }
 
   async exceptions(): Promise<ExceptionsPayload> {

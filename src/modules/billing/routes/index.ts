@@ -255,6 +255,23 @@ billing.get(
   },
 )
 
+/** GET /api/billing/summary?from=&to= — aggregated totals for an arbitrary date range. */
+billing.get(
+  '/summary',
+  zValidator(
+    'query',
+    z.object({ from: z.string(), to: z.string() }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_QUERY', 'from and to (YYYY-MM-DD) are required.', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new BillingService(getBillingRepo(c.env))
+    const { from, to } = c.req.valid('query')
+    return Res.ok(c, await svc.summary(from, to))
+  },
+)
+
 /** GET /api/billing/exceptions — data-quality queue (off-catalog, quarantined pay, orphans). */
 billing.get('/exceptions', async (c) => {
   const svc = new BillingService(getBillingRepo(c.env))
