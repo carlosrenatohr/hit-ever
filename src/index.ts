@@ -123,9 +123,17 @@ export default {
   // open-refresh can't share an invocation.
   async scheduled(event: { cron: string }, env: CloudflareBindings, ctx: { waitUntil(p: Promise<unknown>): void }) {
     const svc = new IngestService(env)
-    const jobs: Record<string, Promise<unknown>> = {
-      '0 */2 * * *': svc.ingestProvider('everest', 1),
-      '30 */2 * * *': svc.ingestProvider('global_connection', 1),
+    // IMPORTANT: lazy dispatch — the previous Record<key, Promise> pattern eagerly started ALL
+    // four jobs when building the object literal, so every cron invocation ran all 4 concurrently
+    // and blew past the 50-subrequest limit. Only start the matching job.
+    let job: Promise<unknown>
+    switch (event.cron) {
+      case '0 */2 * * *':
+        job = svc.ingestProvider('everest', 1)
+        break
+      case '30 */2 * * *':
+        job = svc.ingestProvider('global_connection', 1)
+        break
       // Batch of 6, NOT 8: the Workers Free plan caps external subrequests at 50/invocation, and
       // persist() costs ~4 per package (fetch detail + upsert package + events + notes) plus login/
       // session (~5) and Upstash reads. At 8, every tick blew past 50 and failed almost every package
@@ -133,10 +141,15 @@ export default {
       // 6 is verified to stay under the ceiling (refresh-open?limit=6 → count 6, no error). Combined
       // with the scraped_at-ASC ordering in getOpenAlmacenIds, this now rotates through every open
       // package. Higher throughput → Workers Paid (limit → 10,000) or batch persist()'s writes.
-      '15 */6 * * *': svc.refreshOpenPackages('everest', 6),
-      '45 */6 * * *': svc.refreshOpenPackages('global_connection', 6),
+      case '15 */6 * * *':
+        job = svc.refreshOpenPackages('everest', 6)
+        break
+      case '45 */6 * * *':
+        job = svc.refreshOpenPackages('global_connection', 6)
+        break
+      default:
+        job = svc.ingestProvider('everest', 1)
     }
-    const job = jobs[event.cron] ?? svc.ingestProvider('everest', 1)
     ctx.waitUntil(job.catch((e) => console.error('[cron]', event.cron, (e as Error).message)))
   },
 

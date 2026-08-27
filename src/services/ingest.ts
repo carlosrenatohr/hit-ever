@@ -361,7 +361,7 @@ export class IngestService {
     for (const id of ids) {
       if (count > 0) await sleep(THROTTLE_MS + Math.floor(Math.random() * 600))
       try {
-        if (await this.ingestOne(providerCode, id)) count++
+        if (await this.ingestOne(providerCode, id, p)) count++
       } catch (e) {
         console.error(`[refresh-open] ${providerCode}/${id} failed:`, (e as Error).message)
       }
@@ -370,9 +370,8 @@ export class IngestService {
   }
 
   /** Ingests ONE package by warehouse number (used by the email trigger). */
-  async ingestOne(providerCode: string, almacenId: string): Promise<boolean> {
-    const providers = await this.db.getActiveProviders()
-    const p = providers.find((x) => x.code === providerCode)
+  async ingestOne(providerCode: string, almacenId: string, preloadedProvider?: Provider): Promise<boolean> {
+    const p = preloadedProvider ?? (await this.db.getActiveProviders()).find((x) => x.code === providerCode)
     if (!p) return false
     const client = this.clientFor(p)
     if (!client) return false
