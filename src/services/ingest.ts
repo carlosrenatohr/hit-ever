@@ -366,6 +366,7 @@ export class IngestService {
         console.error(`[refresh-open] ${providerCode}/${id} failed:`, (e as Error).message)
       }
     }
+    console.log(`[cron] ${providerCode} refresh: updated ${count}/${ids.length} open packages`)
     return count
   }
 
@@ -408,6 +409,7 @@ export class IngestService {
       // List is most-recent-first: if this page already fell out of the window, stop paging.
       if (recent.length < mine.length) break
     }
+    console.log(`[cron] ${providerCode} list-walk: ingested ${count} packages`)
     return count
   }
 
