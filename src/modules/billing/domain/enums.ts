@@ -7,8 +7,11 @@
 export const FREIGHT_TYPES = ['AIR', 'MAR'] as const
 export type FreightType = (typeof FREIGHT_TYPES)[number]
 
+// Tiers are dynamic: each agency creates its own (rate_rows.tier is text in the
+// DB). PRICE_TIERS is the LEGACY global-catalog tier list — used only by the
+// pricing_catalog fallback and the historical import's tier inference.
 export const PRICE_TIERS = ['REGULAR', 'ESPECIAL', 'VIP', 'MADRES', 'DARIO'] as const
-export type PriceTier = (typeof PRICE_TIERS)[number]
+export type PriceTier = string
 
 export const INVOICE_STATUSES = ['DRAFT', 'ISSUED', 'PARTIAL', 'PAID', 'VOID'] as const
 export type InvoiceStatus = (typeof INVOICE_STATUSES)[number]

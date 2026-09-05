@@ -344,11 +344,17 @@ export class BillingService {
     const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10)
     const fiscalYear = new Date(issueDate).getUTCFullYear()
 
-    // Price every line from the catalog (rejects an unoffered tier).
+    // Resolve the client first: its default rate table drives per-tenant pricing.
+    const { display, key } = normalizeClientName(input.clientName)
+    const clientId = await this.repo.upsertClient(display, key, organizationId)
+    const defaultRateTableId = await this.repo.getClientDefaultRateTable(clientId)
+
+    // Price every line from the org's rate tables (client default first, legacy
+    // catalog fallback); rejects a tier the org does not offer.
     const lineRows = []
     for (let i = 0; i < input.lines.length; i++) {
       const l = input.lines[i]
-      const q = await this.catalog.quote(l.freightType, l.tier, l.quantityLbs)
+      const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, defaultRateTableId)
       if (!q) throw new Error(`Tier ${l.tier} is not offered for ${l.freightType}.`)
       lineRows.push({
         line_no: i + 1,
@@ -369,8 +375,6 @@ export class BillingService {
     const total = round2(lineRows.reduce((s, r) => s + r.total, 0))
     const profit = round2(lineRows.reduce((s, r) => s + r.profit, 0))
 
-    const { display, key } = normalizeClientName(input.clientName)
-    const clientId = await this.repo.upsertClient(display, key, organizationId)
     const invoiceNumber = await this.repo.nextInvoiceNumber(fiscalYear, organizationId)
 
     const invoiceId = await this.repo.createInvoiceHeader({

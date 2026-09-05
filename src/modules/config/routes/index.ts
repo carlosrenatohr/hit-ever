@@ -12,7 +12,7 @@ import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { Res } from '../../../lib/response.js'
-import { FREIGHT_TYPES, PRICE_TIERS } from '../../billing/domain/enums.js'
+import { FREIGHT_TYPES } from '../../billing/domain/enums.js'
 import { configAuth, type ConfigEnv } from '../middleware/auth.js'
 import { getConfigRepo } from '../repo/config-repo.js'
 import { ConfigService } from '../service/config-service.js'
@@ -28,7 +28,7 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
 }
 
 const RATE_ROW_SCHEMA = z.object({
-  tier: z.enum(PRICE_TIERS),
+  tier: z.string().min(1).max(40),
   price: z.number().nonnegative(),
   cost: z.number().nonnegative().nullable(),
 })

@@ -109,6 +109,14 @@ function rowToCatalog(r: PricingCatalogRow): CatalogEntry {
 
 export type Row = Record<string, unknown>
 
+/** One org rate table with its rows (config module's rate_tables/rate_rows). */
+export interface OrgRateTable {
+  id: string
+  name: string
+  freightType: FreightType
+  rows: { tier: string; price: number; cost: number | null }[]
+}
+
 export interface ExceptionRow {
   invoiceId: string
   invoiceNumber: number
@@ -126,6 +134,10 @@ export interface ExceptionsPayload {
 // ─── Port ───────────────────────────────────────────────────────────────────
 export interface BillingRepository {
   getCatalog(): Promise<CatalogEntry[]>
+  /** Org rate tables + rows — the per-tenant pricing source (legacy catalog is the fallback). */
+  getOrgRates(organizationId: string): Promise<OrgRateTable[]>
+  /** The client's default rate table (billing_clients.default_rate_id), or null. */
+  getClientDefaultRateTable(clientId: string): Promise<string | null>
   upsertClient(display: string, key: string, organizationId?: string): Promise<string>
   // Import (idempotent upsert path):
   upsertInvoiceHeader(row: Row): Promise<string>
@@ -203,6 +215,25 @@ export class InsforgeBillingRepo implements BillingRepository {
   async getCatalog(): Promise<CatalogEntry[]> {
     const rows = await this.get<PricingCatalogRow>('pricing_catalog', 'order=freight_type.asc')
     return rows.map(rowToCatalog)
+  }
+
+  async getOrgRates(organizationId: string): Promise<OrgRateTable[]> {
+    type RateTableRowDb = { id: string; name: string; freight_type: string; rate_rows: { tier: string; price: number; cost: number | null }[] }
+    const rows = await this.get<RateTableRowDb>(
+      'rate_tables',
+      `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,freight_type,rate_rows(tier,price,cost)&order=name`,
+    )
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      freightType: r.freight_type as FreightType,
+      rows: r.rate_rows ?? [],
+    }))
+  }
+
+  async getClientDefaultRateTable(clientId: string): Promise<string | null> {
+    const rows = await this.get<{ default_rate_id: string | null }>('billing_clients', `id=eq.${encodeURIComponent(clientId)}&select=default_rate_id&limit=1`)
+    return rows[0]?.default_rate_id ?? null
   }
 
   async upsertClient(display: string, key: string, organizationId?: string): Promise<string> {
