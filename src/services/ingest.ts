@@ -225,26 +225,57 @@ export function toPackageRow(providerId: string, organizationId: string, baseUrl
   return row
 }
 
+export interface ProviderAgencyLink {
+  agencySlug: string
+  casilleroFilter: string | null // NULL = default owner (catch-all)
+}
+
+/**
+ * Resolves which agency a package belongs to. A shared provider (e.g. GC serving
+ * hit + suite + solo-guegue) routes by casillero prefix; the link with a NULL
+ * filter is the default owner for anything that matches no filter (and for
+ * packages whose casillero is unknown). Single-link providers short-circuit.
+ * Returns null when the routing is ambiguous — callers must skip, never guess.
+ */
+export function resolveProviderOrg(links: ProviderAgencyLink[], casillero: string | null): string | null {
+  if (links.length === 0) return null
+  if (links.length === 1) return links[0].agencySlug
+  if (casillero) {
+    const matches = links.filter((l) => l.casilleroFilter && casillero.startsWith(l.casilleroFilter))
+    if (matches.length > 0) {
+      matches.sort((a, b) => (b.casilleroFilter?.length ?? 0) - (a.casilleroFilter?.length ?? 0))
+      return matches[0].agencySlug
+    }
+  }
+  const defaults = links.filter((l) => !l.casilleroFilter)
+  return defaults.length === 1 ? defaults[0].agencySlug : null
+}
+
 export class IngestService {
   private db: TrackingRepository
-  /** provider_id → primary agency slug, loaded once per invocation from the junction. */
-  private orgByProvider: Map<string, string> | null = null
+  /** provider_id → junction links, loaded once per invocation. */
+  private linksByProvider: Map<string, ProviderAgencyLink[]> | null = null
 
   constructor(private env: CloudflareBindings) {
     this.db = getRepository(env)
   }
 
   /**
-   * Resolves the tenant for a provider from the provider_agencies junction (loaded
-   * lazily, once per invocation). Returns null when a provider has no agency — the
-   * caller must skip it rather than mis-attribute packages to a default tenant.
+   * Resolves the tenant for one package from the provider_agencies junction (loaded
+   * lazily, once per invocation). Returns null when the provider has no agency or the
+   * routing is ambiguous — the caller must skip rather than mis-attribute the package.
    */
-  private async orgFor(providerId: string): Promise<string | null> {
-    if (!this.orgByProvider) {
+  private async orgForPackage(providerId: string, casillero: string | null): Promise<string | null> {
+    if (!this.linksByProvider) {
       const rows = await this.db.getProviderAgencies()
-      this.orgByProvider = new Map(rows.map((r) => [r.providerId, r.agencySlug]))
+      this.linksByProvider = new Map()
+      for (const r of rows) {
+        const links = this.linksByProvider.get(r.providerId) ?? []
+        links.push({ agencySlug: r.agencySlug, casilleroFilter: r.casilleroFilter })
+        this.linksByProvider.set(r.providerId, links)
+      }
     }
-    return this.orgByProvider.get(providerId) ?? null
+    return resolveProviderOrg(this.linksByProvider.get(providerId) ?? [], casillero)
   }
 
   private clientFor(p: Provider): CargotrackClient | null {
@@ -291,11 +322,6 @@ export class IngestService {
    * subrequest limit. Everest: only the configured mailbox; other providers: keep all.
    */
   private async ingestRows(p: Provider, client: CargotrackClient, rows: ListRow[], windowDays: number): Promise<number> {
-    const organizationId = await this.orgFor(p.id)
-    if (!organizationId) {
-      console.error(`[ingest] ${p.code} has no agency mapping (provider_agencies) — skipping to avoid mis-attributed packages`)
-      return 0
-    }
     const candidates = (p.casilleroFilter ? rows.filter(isHitPackage) : rows).filter((r) => withinDays(r.fecha, windowDays))
 
     const pkgRows: Record<string, unknown>[] = []
@@ -311,6 +337,12 @@ export class IngestService {
       }
       // Strict ownership: when the provider filters by mailbox, require the detail's casillero to match.
       if (p.casilleroFilter && detail?.consigneeId && detail.consigneeId !== p.casilleroFilter) continue
+      // Tenant routing (per package: a shared provider serves several agencies).
+      const organizationId = await this.orgForPackage(p.id, detail?.consigneeId ?? null)
+      if (!organizationId) {
+        console.error(`[ingest] ${p.code}/${row.almacenId}: no agency routing (provider_agencies) — skipping to avoid mis-attribution`)
+        continue
+      }
       pkgRows.push(toPackageRow(p.id, organizationId, p.baseUrl, row.almacenId, row, detail))
       if (detail?.events.length) eventsByAlmacen.set(row.almacenId, detail.events)
       if (detail?.notes.length) notesByAlmacen.set(row.almacenId, detail.notes)
@@ -385,15 +417,15 @@ export class IngestService {
     const client = this.clientFor(p)
     if (!client) return false
 
-    const organizationId = await this.orgFor(p.id)
-    if (!organizationId) {
-      console.error(`[ingest] ${p.code} has no agency mapping (provider_agencies) — skipping`)
-      return false
-    }
-
     const detail = parseDetail(await client.fetchDetail(almacenId))
     // Ownership filter: if the provider filters by mailbox (casillero), require a match.
     if (p.casilleroFilter && detail.consigneeId !== p.casilleroFilter) return false
+
+    const organizationId = await this.orgForPackage(p.id, detail.consigneeId ?? null)
+    if (!organizationId) {
+      console.error(`[ingest] ${p.code}/${almacenId}: no agency routing (provider_agencies) — skipping`)
+      return false
+    }
 
     await this.persist(p.id, organizationId, p.baseUrl, almacenId, undefined, detail)
     return true

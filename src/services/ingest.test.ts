@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { toPackageRow } from './ingest.js'
+import { resolveProviderOrg, toPackageRow } from './ingest.js'
 import type { ListRow, DetailData } from '../lib/cargotrack.js'
 
 const BASE_URL = 'https://everest.cargotrack.net'
@@ -85,5 +85,47 @@ describe('toPackageRow fallback chain', () => {
   it('stamps the organization_id resolved by the caller (no hardcoded fallback)', () => {
     const row = toPackageRow(PROVIDER_ID, 'solo-guegue', BASE_URL, '123456')
     expect(row.organization_id).toBe('solo-guegue')
+  })
+})
+
+describe('resolveProviderOrg (junction routing)', () => {
+  // Mirrors the live junction: everest→hit(37458); GC→hit(default), GC→suite(8899), GC→solo-guegue(50).
+  const GC_LINKS = [
+    { agencySlug: 'hit', casilleroFilter: null },
+    { agencySlug: 'suite', casilleroFilter: '8899' },
+    { agencySlug: 'solo-guegue', casilleroFilter: '50' },
+  ]
+
+  it('single-link provider always resolves to its agency', () => {
+    expect(resolveProviderOrg([{ agencySlug: 'hit', casilleroFilter: '37458' }], null)).toBe('hit')
+  })
+
+  it('routes shared-provider packages by casillero prefix', () => {
+    expect(resolveProviderOrg(GC_LINKS, '88991234')).toBe('suite')
+    expect(resolveProviderOrg(GC_LINKS, '5012')).toBe('solo-guegue')
+    expect(resolveProviderOrg(GC_LINKS, '5056')).toBe('solo-guegue')
+  })
+
+  it('defaults unmatched or unknown casilleros to the NULL-filter owner', () => {
+    expect(resolveProviderOrg(GC_LINKS, '153899')).toBe('hit')
+    expect(resolveProviderOrg(GC_LINKS, null)).toBe('hit')
+  })
+
+  it('prefers the most specific filter when prefixes overlap', () => {
+    const links = [
+      { agencySlug: 'a', casilleroFilter: '50' },
+      { agencySlug: 'b', casilleroFilter: '5012' },
+    ]
+    expect(resolveProviderOrg(links, '5012x')).toBe('b')
+    expect(resolveProviderOrg(links, '5099')).toBe('a')
+  })
+
+  it('returns null instead of guessing when routing is ambiguous', () => {
+    expect(resolveProviderOrg([], '5012')).toBeNull()
+    expect(resolveProviderOrg([
+      { agencySlug: 'a', casilleroFilter: '1' },
+      { agencySlug: 'b', casilleroFilter: null },
+      { agencySlug: 'c', casilleroFilter: null },
+    ], '999')).toBeNull()
   })
 })
