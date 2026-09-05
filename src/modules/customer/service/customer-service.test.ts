@@ -23,6 +23,7 @@ describe('CustomerService', () => {
       email: 'ana@test.com',
       phone: '8888',
       address: 'Dirección',
+      defaultRateId: null,
     })
   })
 

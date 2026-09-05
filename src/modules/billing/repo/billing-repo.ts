@@ -166,6 +166,9 @@ export interface BillingRepository {
   /** Whether the charge concept exists within the agency (validates client input). */
   conceptBelongsToOrg(conceptId: string, organizationId: string): Promise<boolean>
   getChargeConcept(conceptId: string, organizationId: string): Promise<{ id: string; name: string } | null>
+  /** Append an entry to the invoice's linear history (created/paid/voided/linked…). */
+  insertInvoiceEvent(invoiceId: string, organizationId: string, action: string, detail: string | null, actor: string | null): Promise<void>
+  listInvoiceEvents(invoiceId: string, organizationId: string): Promise<{ action: string; detail: string | null; actor: string | null; createdAt: string }[]>
   /** Append a panel-sourced entry to the package's event history (e.g. invoice generated). */
   insertPackageEvent(packageId: string, description: string, occurredAt: string): Promise<void>
   findPackageIdByToken(token: string, organizationId?: string): Promise<string | null>
@@ -416,6 +419,18 @@ export class InsforgeBillingRepo implements BillingRepository {
   async getChargeConcept(conceptId: string, organizationId: string): Promise<{ id: string; name: string } | null> {
     const rows = await this.get<{ id: string; name: string }>('charge_concepts', `id=eq.${encodeURIComponent(conceptId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name&limit=1`)
     return rows[0] ?? null
+  }
+
+  async insertInvoiceEvent(invoiceId: string, organizationId: string, action: string, detail: string | null, actor: string | null): Promise<void> {
+    await this.post('invoice_events', [{ invoice_id: invoiceId, organization_id: organizationId, action, detail, actor }])
+  }
+
+  async listInvoiceEvents(invoiceId: string, organizationId: string): Promise<{ action: string; detail: string | null; actor: string | null; createdAt: string }[]> {
+    const rows = await this.get<{ action: string; detail: string | null; actor: string | null; created_at: string }>(
+      'invoice_events',
+      `invoice_id=eq.${encodeURIComponent(invoiceId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=action,detail,actor,created_at&order=created_at.asc&limit=200`,
+    )
+    return rows.map((r) => ({ action: r.action, detail: r.detail, actor: r.actor, createdAt: r.created_at }))
   }
 
   async insertPackageEvent(packageId: string, description: string, occurredAt: string): Promise<void> {

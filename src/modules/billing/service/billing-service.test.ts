@@ -124,7 +124,9 @@ describe('createInvoice — package links', () => {
       createInvoiceHeader: async () => 'i1',
       insertLineItems: async () => {},
       linkPackage: async () => {},
+      insertInvoiceEvent: vi.fn(async () => {}),
       insertPackageEvent,
+      insertInvoiceEvent: vi.fn(async () => {}),
       getInvoiceBundle: async () => bundle,
     } as unknown as BillingRepository
     return { repo, insertPackageEvent }
@@ -170,6 +172,7 @@ describe('createInvoice — other charges', () => {
       createInvoiceHeader: async () => 'i1',
       insertLineItems,
       linkPackage: async () => {},
+      insertInvoiceEvent: vi.fn(async () => {}),
       getInvoiceBundle: async () => bundle,
     } as unknown as BillingRepository
     return { repo, insertLineItems }

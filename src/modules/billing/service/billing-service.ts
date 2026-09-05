@@ -464,10 +464,11 @@ export class BillingService {
       // Package history entry: the invoice trace must live with the package too.
       await this.repo.insertPackageEvent(pkgId, `Factura #${invoiceNumber} generada`, new Date().toISOString())
     }
+    await this.repo.insertInvoiceEvent(invoiceId, organizationId, 'Factura generada', `Total ${total.toFixed(2)} USD`, actor)
     return (await this.get(invoiceId, organizationId))!
   }
 
-  async applyPayment(id: string, input: ApplyPaymentInput, organizationId: string): Promise<InvoiceView> {
+  async applyPayment(id: string, input: ApplyPaymentInput, organizationId: string, actor?: string | null): Promise<InvoiceView> {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
     if (!b) throw new Error('Invoice not found.')
     if (b.header.status === 'VOID') throw new Error('Cannot pay a voided invoice.')
@@ -493,6 +494,8 @@ export class BillingService {
     // Stamp paid_at when the invoice reaches PAID (for the issued->paid days badge).
     await this.repo.setInvoiceStatus(id, status, status === 'PAID' ? { paid_at: input.paidAt ?? new Date().toISOString() } : {})
     await this.repo.setInvoiceTotals(id, { total, profit: round2(b.lines.reduce((s, l) => s + (l.profit || 0), 0)), paidUsd })
+    const ref = input.reference?.trim() ? ` · Ref ${input.reference.trim()}` : ''
+    await this.repo.insertInvoiceEvent(id, organizationId, `Pago registrado (${input.method})`, `${input.amount.toFixed(2)} ${input.currency}${ref}`, actor ?? null)
     return (await this.get(id, organizationId))!
   }
 
@@ -500,6 +503,9 @@ export class BillingService {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
     if (!b) throw new Error('Invoice not found.')
     await this.repo.setInvoiceStatus(id, 'VOID', reason ? { observations: reason } : {})
+    if (organizationId) {
+      await this.repo.insertInvoiceEvent(id, organizationId, 'Factura anulada', reason ?? null, null)
+    }
     return (await this.get(id, organizationId))!
   }
 
@@ -508,6 +514,7 @@ export class BillingService {
     const v = await this.get(id, organizationId)
     if (!v) throw new Error('Invoice not found.')
     await this.repo.insertPackageEvent(packageId, `Factura #${v.invoiceNumber} enlazada`, new Date().toISOString())
+    await this.repo.insertInvoiceEvent(id, organizationId, 'Paquete enlazado', packageId, actor)
     return v
   }
 
@@ -515,7 +522,15 @@ export class BillingService {
     await this.repo.unlinkPackage(id, packageId)
     const v = await this.get(id, organizationId)
     if (!v) throw new Error('Invoice not found.')
+    if (organizationId) {
+      await this.repo.insertInvoiceEvent(id, organizationId, 'Paquete desenlazado', packageId, null)
+    }
     return v
+  }
+
+  /** Linear history for the invoice detail timeline (org-scoped). */
+  async events(id: string, organizationId: string) {
+    return this.repo.listInvoiceEvents(id, organizationId)
   }
 
   async closeMonth(year: number, month: number, organizationId?: string): Promise<MonthlyClose> {
