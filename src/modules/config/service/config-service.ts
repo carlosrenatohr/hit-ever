@@ -8,7 +8,7 @@
 
 import type { FreightType } from '../../billing/domain/enums.js'
 import type { ConfigSession } from '../middleware/auth.js'
-import type { AgencyInfo, AgencyInfoPatch, AuditFilter, PaymentCatalogItem, RateTable, RateRow } from '../domain/types.js'
+import type { AgencyInfo, AgencyInfoPatch, AuditFilter, ChargeConcept, PaymentCatalogItem, RateTable, RateRow } from '../domain/types.js'
 import type { ConfigRepository } from '../repo/config-repo.js'
 import type { Row } from '../repo/config-repo.js'
 
@@ -233,6 +233,23 @@ export class ConfigService {
   async updatePaymentBank(org: string, id: string, patch: { name?: string; active?: boolean }, session: ConfigSession, requestId: string): Promise<void> {
     await this.repo.updatePaymentBank(org, id, patch)
     await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'payment_bank.update', entityType: 'payment_bank', entityId: id, requestId, metadata: patch })
+  }
+
+  // ─── Charge concepts (Config > Conceptos) ────────────────────────────────────
+
+  async listChargeConcepts(org: string): Promise<ChargeConcept[]> {
+    return this.repo.listChargeConcepts(org)
+  }
+
+  async createChargeConcept(org: string, name: string, suggestedPrice: number | null, session: ConfigSession, requestId: string): Promise<ChargeConcept> {
+    const created = await this.repo.createChargeConcept(org, name, suggestedPrice)
+    await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'charge_concept.create', entityType: 'charge_concept', entityId: created.id, requestId, metadata: { name, suggestedPrice } })
+    return created
+  }
+
+  async updateChargeConcept(org: string, id: string, patch: { name?: string; active?: boolean; suggestedPrice?: number | null }, session: ConfigSession, requestId: string): Promise<void> {
+    await this.repo.updateChargeConcept(org, id, patch)
+    await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'charge_concept.update', entityType: 'charge_concept', entityId: id, requestId, metadata: patch })
   }
 
   /**

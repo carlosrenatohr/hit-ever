@@ -83,3 +83,12 @@ export interface PaymentCatalogItem {
   name: string
   active: boolean
 }
+
+/** Template for custom extra invoice charges ("otros"). suggestedPrice only
+ * prefills the invoice form — the real amount is set per invoice by the admin. */
+export interface ChargeConcept {
+  id: string
+  name: string
+  suggestedPrice: number | null
+  active: boolean
+}

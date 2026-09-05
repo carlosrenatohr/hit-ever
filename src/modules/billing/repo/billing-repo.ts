@@ -45,8 +45,10 @@ export interface LineItemDbRow {
   invoice_id: string
   line_no: number
   description: string | null
-  freight_type: FreightType
-  quantity_lbs: number
+  freight_type: FreightType | null
+  line_type: 'freight' | 'other'
+  concept_id: string | null
+  quantity_lbs: number | null
   unit: string
   unit_price: number
   total: number
@@ -161,6 +163,9 @@ export interface BillingRepository {
   getExceptions(organizationId?: string): Promise<ExceptionsPayload>
   // Package linking:
   packageBelongsToOrg(packageId: string, organizationId: string): Promise<boolean>
+  /** Whether the charge concept exists within the agency (validates client input). */
+  conceptBelongsToOrg(conceptId: string, organizationId: string): Promise<boolean>
+  getChargeConcept(conceptId: string, organizationId: string): Promise<{ id: string; name: string } | null>
   /** Append a panel-sourced entry to the package's event history (e.g. invoice generated). */
   insertPackageEvent(packageId: string, description: string, occurredAt: string): Promise<void>
   findPackageIdByToken(token: string, organizationId?: string): Promise<string | null>
@@ -401,6 +406,16 @@ export class InsforgeBillingRepo implements BillingRepository {
   async packageBelongsToOrg(packageId: string, organizationId: string): Promise<boolean> {
     const rows = await this.get<{ id: string }>('packages', `id=eq.${encodeURIComponent(packageId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=id&limit=1`)
     return rows.length > 0
+  }
+
+  async conceptBelongsToOrg(conceptId: string, organizationId: string): Promise<boolean> {
+    const rows = await this.get<{ id: string }>('charge_concepts', `id=eq.${encodeURIComponent(conceptId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=id&limit=1`)
+    return rows.length > 0
+  }
+
+  async getChargeConcept(conceptId: string, organizationId: string): Promise<{ id: string; name: string } | null> {
+    const rows = await this.get<{ id: string; name: string }>('charge_concepts', `id=eq.${encodeURIComponent(conceptId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name&limit=1`)
+    return rows[0] ?? null
   }
 
   async insertPackageEvent(packageId: string, description: string, occurredAt: string): Promise<void> {

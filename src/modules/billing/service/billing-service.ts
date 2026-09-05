@@ -19,6 +19,17 @@ export interface CreateLineInput {
   tier: PriceTier
   quantityLbs: number
   description?: string | null
+  /** Explicit rate table for this line (overrides the client's default). Must
+   * belong to the caller's agency — the server validates. */
+  rateTableId?: string | null
+}
+export interface CreateOtherLineInput {
+  /** Charge concept template used (traceability + prefill source). */
+  conceptId?: string | null
+  /** Extra free text appended to the concept name in the description. */
+  description?: string | null
+  /** Final amount for the line — always admin-set, never quoted. */
+  amount: number
 }
 export interface CreateInvoiceInput {
   clientName: string
@@ -28,6 +39,7 @@ export interface CreateInvoiceInput {
   observations?: string | null
   status?: InvoiceStatus
   lines: CreateLineInput[]
+  otherLines?: CreateOtherLineInput[]
   packageIds?: string[]
 }
 export interface ApplyPaymentInput {
@@ -64,8 +76,9 @@ export interface InvoiceView {
   lines: Array<{
     lineNo: number
     description: string | null
-    freightType: FreightType
-    quantityLbs: number
+    freightType: FreightType | null
+    lineType: 'freight' | 'other'
+    quantityLbs: number | null
     unitPrice: number
     total: number
     freightCost: number
@@ -176,6 +189,7 @@ export function toView(b: InvoiceBundle): InvoiceView {
       lineNo: l.line_no,
       description: l.description,
       freightType: l.freight_type,
+      lineType: (l.line_type as 'freight' | 'other') ?? 'freight',
       quantityLbs: l.quantity_lbs,
       unitPrice: l.unit_price,
       total: l.total,
@@ -363,17 +377,19 @@ export class BillingService {
       }
     }
 
-    // Price every line from the org's rate tables (client default first, legacy
-    // catalog fallback); rejects a tier the org does not offer.
+    // Price every line from the org's rate tables (per-line table overrides the
+    // client's default; legacy catalog fallback); rejects a tier the org does not offer.
     const lineRows = []
     for (let i = 0; i < input.lines.length; i++) {
       const l = input.lines[i]
-      const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, defaultRateTableId)
+      const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, l.rateTableId ?? defaultRateTableId)
       if (!q) throw new Error(`Tier ${l.tier} is not offered for ${l.freightType}.`)
       lineRows.push({
         line_no: i + 1,
         description: l.description ?? null,
         freight_type: l.freightType,
+        line_type: 'freight',
+        concept_id: null,
         quantity_lbs: l.quantityLbs,
         unit: 'lbs',
         unit_price: q.unitPrice,
@@ -382,6 +398,41 @@ export class BillingService {
         freight_cost: q.freightCost,
         profit: q.profit,
         price_tier: l.tier,
+        price_off_catalog: false,
+        organization_id: organizationId,
+      })
+    }
+    // "Other" charges: admin-set amounts (never quoted). Each may reference a
+    // concept template (validated against the agency) with extra free text.
+    const otherLines = input.otherLines ?? []
+    for (const o of otherLines) {
+      if (!(o.amount > 0)) throw new Error('Other charges need a positive amount.')
+      if (o.conceptId && !(await this.repo.conceptBelongsToOrg(o.conceptId, organizationId))) {
+        throw new Error(`Charge concept ${o.conceptId} not found in your agency.`)
+      }
+    }
+    let lineNo = lineRows.length
+    for (const o of otherLines) {
+      lineNo++
+      let name = (o.description ?? '').trim()
+      if (o.conceptId) {
+        const concept = await this.repo.getChargeConcept(o.conceptId, organizationId)
+        if (concept) name = name ? `${concept.name} — ${name}` : concept.name
+      }
+      lineRows.push({
+        line_no: lineNo,
+        description: name || 'Otro cargo',
+        freight_type: null,
+        line_type: 'other',
+        concept_id: o.conceptId ?? null,
+        quantity_lbs: null,
+        unit: 'item',
+        unit_price: round2(o.amount),
+        total: round2(o.amount),
+        list_price: null,
+        freight_cost: 0,
+        profit: round2(o.amount),
+        price_tier: null,
         price_off_catalog: false,
         organization_id: organizationId,
       })
