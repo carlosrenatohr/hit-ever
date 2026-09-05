@@ -14,6 +14,9 @@ export interface TrackingRepository {
   getPackageByTracking(tracking: string): Promise<PackageRecord | null>
   getEvents(packageId: string): Promise<EventRecord[]>
   getActiveProviders(): Promise<Provider[]>
+  /** provider_id → agency slugs (provider_agencies junction). Source of truth for
+   * which tenant a provider's ingested packages belong to. */
+  getProviderAgencies(): Promise<{ providerId: string; agencySlug: string }[]>
   /** Warehouse numbers for a provider's still-open packages (effective status != entregado) —
    * lets ingestion revisit them by id, independent of where they've scrolled to in the list. */
   getOpenAlmacenIds(providerId: string, limit: number): Promise<string[]>
@@ -115,6 +118,13 @@ export class MemoryRepository implements TrackingRepository {
 
   async getActiveProviders(): Promise<Provider[]> {
     return SEED_PROVIDERS
+  }
+
+  async getProviderAgencies(): Promise<{ providerId: string; agencySlug: string }[]> {
+    return [
+      { providerId: 'everest', agencySlug: 'hit' },
+      { providerId: 'global_connection', agencySlug: 'hit' },
+    ]
   }
 
   async getOpenAlmacenIds(providerId: string, limit: number): Promise<string[]> {

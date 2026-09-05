@@ -24,19 +24,6 @@ const UA =
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
-// Provider code → tenant (agency) mapping. Each provider belongs to exactly one
-// tenant. This is the single source of truth for scraper → tenant assignment.
-// Mirrors the backfill in migrations/20260814233000_packages-tenant-scope.sql.
-const PROVIDER_TENANT: Record<string, string> = {
-  everest: 'hit',
-  global_connection: 'hit',
-  suite_demo: 'suite',
-}
-
-function tenantForProvider(code: string): string {
-  return PROVIDER_TENANT[code] ?? 'hit'
-}
-
 // Per-provider credentials (in Cloudflare Secrets, never in the DB).
 function credsFor(code: string, env: CloudflareBindings): { user: string; pass: string } | null {
   switch (code) {
@@ -193,13 +180,14 @@ export class CargotrackClient {
 }
 
 // Builds the DB row by combining list + detail.
-// providerCode is used to resolve the tenant (organization_id) → agencies(slug).
-export function toPackageRow(providerId: string, providerCode: string, baseUrl: string, almacenId: string, list?: ListRow, detail?: DetailData): Record<string, unknown> {
+// organizationId is resolved by the caller from the provider_agencies junction —
+// the row never guesses a tenant (no hardcoded fallback).
+export function toPackageRow(providerId: string, organizationId: string, baseUrl: string, almacenId: string, list?: ListRow, detail?: DetailData): Record<string, unknown> {
   const status: ShipmentStatus = list?.status ?? detail?.statusFromDetail ?? 'desconocido'
   const lastEvent = detail?.events.at(-1)
   const row: Record<string, unknown> = {
     provider_id: providerId,
-    organization_id: tenantForProvider(providerCode),
+    organization_id: organizationId,
     almacen_id: almacenId,
     tracking_number: detail?.trackingNumber ?? null,
     status,
@@ -239,9 +227,24 @@ export function toPackageRow(providerId: string, providerCode: string, baseUrl: 
 
 export class IngestService {
   private db: TrackingRepository
+  /** provider_id → primary agency slug, loaded once per invocation from the junction. */
+  private orgByProvider: Map<string, string> | null = null
 
   constructor(private env: CloudflareBindings) {
     this.db = getRepository(env)
+  }
+
+  /**
+   * Resolves the tenant for a provider from the provider_agencies junction (loaded
+   * lazily, once per invocation). Returns null when a provider has no agency — the
+   * caller must skip it rather than mis-attribute packages to a default tenant.
+   */
+  private async orgFor(providerId: string): Promise<string | null> {
+    if (!this.orgByProvider) {
+      const rows = await this.db.getProviderAgencies()
+      this.orgByProvider = new Map(rows.map((r) => [r.providerId, r.agencySlug]))
+    }
+    return this.orgByProvider.get(providerId) ?? null
   }
 
   private clientFor(p: Provider): CargotrackClient | null {
@@ -250,8 +253,8 @@ export class IngestService {
     return new CargotrackClient(p.baseUrl, creds.user, creds.pass, this.env, p.code)
   }
 
-  private async persist(providerId: string, providerCode: string, baseUrl: string, almacenId: string, list: ListRow | undefined, detail: DetailData | undefined): Promise<void> {
-    const pkgId = await this.db.upsertPackage(toPackageRow(providerId, providerCode, baseUrl, almacenId, list, detail))
+  private async persist(providerId: string, organizationId: string, baseUrl: string, almacenId: string, list: ListRow | undefined, detail: DetailData | undefined): Promise<void> {
+    const pkgId = await this.db.upsertPackage(toPackageRow(providerId, organizationId, baseUrl, almacenId, list, detail))
     if (pkgId && detail?.events.length) {
       await this.db.upsertEvents(
         detail.events.map((e) => ({
@@ -288,6 +291,11 @@ export class IngestService {
    * subrequest limit. Everest: only the configured mailbox; other providers: keep all.
    */
   private async ingestRows(p: Provider, client: CargotrackClient, rows: ListRow[], windowDays: number): Promise<number> {
+    const organizationId = await this.orgFor(p.id)
+    if (!organizationId) {
+      console.error(`[ingest] ${p.code} has no agency mapping (provider_agencies) — skipping to avoid mis-attributed packages`)
+      return 0
+    }
     const candidates = (p.casilleroFilter ? rows.filter(isHitPackage) : rows).filter((r) => withinDays(r.fecha, windowDays))
 
     const pkgRows: Record<string, unknown>[] = []
@@ -303,7 +311,7 @@ export class IngestService {
       }
       // Strict ownership: when the provider filters by mailbox, require the detail's casillero to match.
       if (p.casilleroFilter && detail?.consigneeId && detail.consigneeId !== p.casilleroFilter) continue
-      pkgRows.push(toPackageRow(p.id, p.code, p.baseUrl, row.almacenId, row, detail))
+      pkgRows.push(toPackageRow(p.id, organizationId, p.baseUrl, row.almacenId, row, detail))
       if (detail?.events.length) eventsByAlmacen.set(row.almacenId, detail.events)
       if (detail?.notes.length) notesByAlmacen.set(row.almacenId, detail.notes)
     }
@@ -377,11 +385,17 @@ export class IngestService {
     const client = this.clientFor(p)
     if (!client) return false
 
+    const organizationId = await this.orgFor(p.id)
+    if (!organizationId) {
+      console.error(`[ingest] ${p.code} has no agency mapping (provider_agencies) — skipping`)
+      return false
+    }
+
     const detail = parseDetail(await client.fetchDetail(almacenId))
     // Ownership filter: if the provider filters by mailbox (casillero), require a match.
     if (p.casilleroFilter && detail.consigneeId !== p.casilleroFilter) return false
 
-    await this.persist(p.id, p.code, p.baseUrl, almacenId, undefined, detail)
+    await this.persist(p.id, organizationId, p.baseUrl, almacenId, undefined, detail)
     return true
   }
 
