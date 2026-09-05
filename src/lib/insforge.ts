@@ -14,7 +14,7 @@ import type { TrackingRepository } from './repository.js'
 interface DbPackageRow {
   id: string
   provider_id: string
-  organization_id: string | null
+  organization_id: string
   almacen_id: string
   tracking_number: string | null
   status: ShipmentStatus
@@ -64,7 +64,9 @@ function rowToPackage(r: DbPackageRow): PackageRecord {
   return {
     id: r.id,
     providerId: r.provider_id,
-    organizationId: r.organization_id ?? 'hit',
+    // packages.organization_id is NOT NULL FK → agencies.slug (no fallback: a
+    // missing value would mis-attribute the package to another tenant).
+    organizationId: r.organization_id,
     almacenId: r.almacen_id,
     trackingNumber: r.tracking_number,
     status: r.status,

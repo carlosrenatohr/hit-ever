@@ -138,7 +138,7 @@ export interface BillingRepository {
   getOrgRates(organizationId: string): Promise<OrgRateTable[]>
   /** The client's default rate table (billing_clients.default_rate_id), or null. */
   getClientDefaultRateTable(clientId: string): Promise<string | null>
-  upsertClient(display: string, key: string, organizationId?: string): Promise<string>
+  upsertClient(display: string, key: string, organizationId: string): Promise<string>
   // Import (idempotent upsert path):
   upsertInvoiceHeader(row: Row): Promise<string>
   replaceLineItems(invoiceId: string, rows: Row[]): Promise<void>
@@ -159,7 +159,7 @@ export interface BillingRepository {
   getExceptions(organizationId?: string): Promise<ExceptionsPayload>
   // Package linking:
   findPackageIdByToken(token: string, organizationId?: string): Promise<string | null>
-  linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId?: string): Promise<void>
+  linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId: string): Promise<void>
   unlinkPackage(invoiceId: string, packageId: string): Promise<void>
 }
 
@@ -236,10 +236,10 @@ export class InsforgeBillingRepo implements BillingRepository {
     return rows[0]?.default_rate_id ?? null
   }
 
-  async upsertClient(display: string, key: string, organizationId?: string): Promise<string> {
+  async upsertClient(display: string, key: string, organizationId: string): Promise<string> {
     const rows = await this.post<{ id: string }>(
       'billing_clients',
-      [{ name: display, name_normalized: key, organization_id: organizationId ?? 'hit' }],
+      [{ name: display, name_normalized: key, organization_id: organizationId }],
       // Composite unique (organization_id, name_normalized) — same client name in a
       // different agency must create its own row, never merge across tenants.
       { onConflict: 'organization_id,name_normalized', representation: true },
@@ -402,10 +402,10 @@ export class InsforgeBillingRepo implements BillingRepository {
     return byTracking[0]?.id ?? null
   }
 
-  async linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId?: string): Promise<void> {
+  async linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId: string): Promise<void> {
     await this.post(
       'invoice_packages',
-      [{ invoice_id: invoiceId, package_id: packageId, source, matched_oc: matchedOc, created_by: by, organization_id: organizationId ?? 'hit' }],
+      [{ invoice_id: invoiceId, package_id: packageId, source, matched_oc: matchedOc, created_by: by, organization_id: organizationId }],
       { onConflict: 'invoice_id,package_id' },
     )
   }

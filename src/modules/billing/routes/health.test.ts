@@ -58,7 +58,7 @@ describe('GET /api/billing/health — auth gate', () => {
   })
 
   it('401 when the token is invalid (InsForge rejects it)', async () => {
-    stubBackend({ validToken: 'goodToken', users: { u1: { role: 'admin', active: true } } })
+    stubBackend({ validToken: 'goodToken', users: { u1: { role: 'admin', active: true, agency: 'hit' } } })
     const res = await health({ Authorization: 'Bearer badToken' })
     expect(res.status).toBe(401)
   })
@@ -70,13 +70,13 @@ describe('GET /api/billing/health — auth gate', () => {
   })
 
   it('403 when the account is inactive', async () => {
-    stubBackend({ validToken: 'goodToken', users: { u1: { role: 'admin', active: false } } })
+    stubBackend({ validToken: 'goodToken', users: { u1: { role: 'admin', active: false, agency: 'hit' } } })
     const res = await health({ Authorization: 'Bearer goodToken' })
     expect(res.status).toBe(403)
   })
 
   it('200 for an active staff member, echoing the role', async () => {
-    stubBackend({ validToken: 'goodToken', users: { u1: { role: 'staff', active: true, name: 'Ana' } } })
+    stubBackend({ validToken: 'goodToken', users: { u1: { role: 'staff', active: true, name: 'Ana', agency: 'hit' } } })
     const res = await health({ Authorization: 'Bearer goodToken' })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; data: { user: { role: string } } }
