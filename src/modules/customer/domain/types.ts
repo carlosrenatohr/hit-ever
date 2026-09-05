@@ -3,6 +3,7 @@ import type { BillingClient } from '../../billing/domain/types.js'
 export type Customer = BillingClient
 
 export interface CustomerListFilter {
+  organizationId: string
   search?: string
   toReview?: boolean
   page?: number

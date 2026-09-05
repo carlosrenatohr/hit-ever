@@ -87,6 +87,7 @@ export interface InvoiceBundle {
 }
 
 export interface ListFilter {
+  organizationId: string
   status?: InvoiceStatus
   fiscalYear?: number
   freightType?: FreightType
@@ -125,7 +126,7 @@ export interface ExceptionsPayload {
 // ─── Port ───────────────────────────────────────────────────────────────────
 export interface BillingRepository {
   getCatalog(): Promise<CatalogEntry[]>
-  upsertClient(display: string, key: string): Promise<string>
+  upsertClient(display: string, key: string, organizationId?: string): Promise<string>
   // Import (idempotent upsert path):
   upsertInvoiceHeader(row: Row): Promise<string>
   replaceLineItems(invoiceId: string, rows: Row[]): Promise<void>
@@ -138,15 +139,15 @@ export interface BillingRepository {
   setInvoiceStatus(invoiceId: string, status: InvoiceStatus, patch?: Row): Promise<void>
   setInvoiceTotals(invoiceId: string, totals: { total: number; profit: number; paidUsd: number }): Promise<void>
   listInvoices(filter: ListFilter): Promise<{ rows: InvoiceHeaderDbRow[]; count: number }>
-  getInvoiceBundle(invoiceId: string): Promise<InvoiceBundle | null>
-  getBundlesByDateRange(from: string, to: string): Promise<InvoiceBundle[]>
+  getInvoiceBundle(invoiceId: string, organizationId?: string): Promise<InvoiceBundle | null>
+  getBundlesByDateRange(from: string, to: string, organizationId?: string): Promise<InvoiceBundle[]>
   setPublicToken(invoiceId: string, token: string): Promise<void>
   getPublicBundle(token: string): Promise<InvoiceBundle | null>
   // Exception queue (import + ongoing data-quality flags):
-  getExceptions(): Promise<ExceptionsPayload>
+  getExceptions(organizationId?: string): Promise<ExceptionsPayload>
   // Package linking:
-  findPackageIdByToken(token: string): Promise<string | null>
-  linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string): Promise<void>
+  findPackageIdByToken(token: string, organizationId?: string): Promise<string | null>
+  linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId?: string): Promise<void>
   unlinkPackage(invoiceId: string, packageId: string): Promise<void>
 }
 
@@ -204,13 +205,19 @@ export class InsforgeBillingRepo implements BillingRepository {
     return rows.map(rowToCatalog)
   }
 
-  async upsertClient(display: string, key: string): Promise<string> {
-    const rows = await this.post<{ id: string }>('billing_clients', [{ name: display, name_normalized: key }], { onConflict: 'name_normalized', representation: true })
+  async upsertClient(display: string, key: string, organizationId?: string): Promise<string> {
+    const rows = await this.post<{ id: string }>(
+      'billing_clients',
+      [{ name: display, name_normalized: key, organization_id: organizationId ?? 'hit' }],
+      // Composite unique (organization_id, name_normalized) — same client name in a
+      // different agency must create its own row, never merge across tenants.
+      { onConflict: 'organization_id,name_normalized', representation: true },
+    )
     return rows[0].id
   }
 
   async upsertInvoiceHeader(row: Row): Promise<string> {
-    const rows = await this.post<{ id: string }>('invoices', [row], { onConflict: 'fiscal_year,invoice_number', representation: true })
+    const rows = await this.post<{ id: string }>('invoices', [row], { onConflict: 'organization_id,fiscal_year,invoice_number', representation: true })
     return rows[0].id
   }
 
@@ -250,8 +257,10 @@ export class InsforgeBillingRepo implements BillingRepository {
     })
   }
 
-  async nextInvoiceNumber(fiscalYear: number): Promise<number> {
-    const rows = await this.get<{ invoice_number: number }>('invoices', `fiscal_year=eq.${fiscalYear}&select=invoice_number&order=invoice_number.desc&limit=1`)
+  async nextInvoiceNumber(fiscalYear: number, organizationId?: string): Promise<number> {
+    // Per-agency sequence: two agencies can each have their own #1 for a year.
+    const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
+    const rows = await this.get<{ invoice_number: number }>('invoices', `fiscal_year=eq.${fiscalYear}${orgFilter}&select=invoice_number&order=invoice_number.desc&limit=1`)
     return (rows[0]?.invoice_number ?? 0) + 1
   }
 
@@ -259,6 +268,7 @@ export class InsforgeBillingRepo implements BillingRepository {
     const page = Math.max(1, filter.page ?? 1)
     const pageSize = Math.min(1000, Math.max(1, filter.pageSize ?? 25))
     const parts: string[] = ['select=*', 'order=fiscal_year.desc,invoice_number.desc']
+    parts.push(`organization_id=eq.${encodeURIComponent(filter.organizationId)}`)
     if (filter.status) parts.push(`status=eq.${filter.status}`)
     if (filter.fiscalYear) parts.push(`fiscal_year=eq.${filter.fiscalYear}`)
     if (filter.clientId) parts.push(`client_id=eq.${filter.clientId}`)
@@ -280,8 +290,9 @@ export class InsforgeBillingRepo implements BillingRepository {
     return this.getWithCount<InvoiceHeaderDbRow>('invoices', parts.join('&'))
   }
 
-  async getInvoiceBundle(invoiceId: string): Promise<InvoiceBundle | null> {
-    const headers = await this.get<InvoiceHeaderDbRow>('invoices', `id=eq.${encodeURIComponent(invoiceId)}&limit=1`)
+  async getInvoiceBundle(invoiceId: string, organizationId?: string): Promise<InvoiceBundle | null> {
+    const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
+    const headers = await this.get<InvoiceHeaderDbRow>('invoices', `id=eq.${encodeURIComponent(invoiceId)}&limit=1${orgFilter}`)
     const header = headers[0]
     if (!header) return null
     const [lines, payments, packages] = await Promise.all([
@@ -304,12 +315,13 @@ export class InsforgeBillingRepo implements BillingRepository {
     return { header, lines, payments: [], packages: [] }
   }
 
-  async getBundlesByDateRange(from: string, to: string): Promise<InvoiceBundle[]> {
+  async getBundlesByDateRange(from: string, to: string, organizationId?: string): Promise<InvoiceBundle[]> {
     // Embed line-items in ONE request (PostgREST child embed) instead of N+1 per-invoice
     // queries — a full year is ~150 invoices and the Worker caps at 50 subrequests, so the
     // old fan-out blew the limit and 500'd. `limit=5000` covers any realistic range.
     type Row = InvoiceHeaderDbRow & { invoice_line_items: LineItemDbRow[] }
-    const rows = await this.get<Row>('invoices', `issue_date=gte.${from}&issue_date=lte.${to}&select=*,invoice_line_items(*)&limit=5000`)
+    const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
+    const rows = await this.get<Row>('invoices', `issue_date=gte.${from}&issue_date=lte.${to}${orgFilter}&select=*,invoice_line_items(*)&limit=5000`)
     return rows.map(({ invoice_line_items, ...header }) => ({
       header: header as InvoiceHeaderDbRow,
       lines: invoice_line_items ?? [],
@@ -318,26 +330,27 @@ export class InsforgeBillingRepo implements BillingRepository {
     }))
   }
 
-  async getExceptions(): Promise<ExceptionsPayload> {
+  async getExceptions(organizationId?: string): Promise<ExceptionsPayload> {
     type Emb = { invoice_number: number; fiscal_year: number; client_name_raw: string | null }
+    const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
     // Off-catalog line prices.
     const offRows = await this.get<{ invoice_id: string; unit_price: number; freight_type: string; invoices: Emb }>(
       'invoice_line_items',
-      'price_off_catalog=eq.true&select=invoice_id,unit_price,freight_type,invoices(invoice_number,fiscal_year,client_name_raw)',
+      `price_off_catalog=eq.true&select=invoice_id,unit_price,freight_type,invoices(invoice_number,fiscal_year,client_name_raw)${orgFilter}`,
     )
     // Quarantined payment cells.
     const qRows = await this.get<{ invoice_id: string; raw: string | null; invoices: Emb }>(
       'invoice_payments',
-      'quarantined=eq.true&select=invoice_id,raw,invoices(invoice_number,fiscal_year,client_name_raw)',
+      `quarantined=eq.true&select=invoice_id,raw,invoices(invoice_number,fiscal_year,client_name_raw)${orgFilter}`,
     )
     // Invoices carrying OC tokens but with no linked package (orphans).
     const withOc = await this.get<{ id: string; invoice_number: number; fiscal_year: number; client_name_raw: string | null; tracking_orders: string[] }>(
       'invoices',
-      'status=neq.VOID&select=id,invoice_number,fiscal_year,client_name_raw,tracking_orders&limit=2000',
+      `status=neq.VOID&select=id,invoice_number,fiscal_year,client_name_raw,tracking_orders&limit=2000${orgFilter}`,
     )
-    const linkedRows = await this.get<{ invoice_id: string }>('invoice_packages', 'select=invoice_id&limit=5000')
+    const linkedRows = await this.get<{ invoice_id: string }>('invoice_packages', `select=invoice_id&limit=5000${orgFilter}`)
     const linked = new Set(linkedRows.map((r) => r.invoice_id))
-    const clients = await this.get<{ id: string; name: string }>('billing_clients', 'to_review=eq.true&select=id,name')
+    const clients = await this.get<{ id: string; name: string }>('billing_clients', `to_review=eq.true&select=id,name${orgFilter}`)
 
     return {
       offCatalog: offRows.map((r) => ({ invoiceId: r.invoice_id, invoiceNumber: r.invoices?.invoice_number, fiscalYear: r.invoices?.fiscal_year, client: r.invoices?.client_name_raw ?? null, detail: `${r.freight_type} @ ${r.unit_price}/lb` })),
@@ -349,15 +362,21 @@ export class InsforgeBillingRepo implements BillingRepository {
     }
   }
 
-  async findPackageIdByToken(token: string): Promise<string | null> {
-    const byAlmacen = await this.get<{ id: string }>('packages', `almacen_id=eq.${encodeURIComponent(token)}&select=id&limit=1`)
+  async findPackageIdByToken(token: string, organizationId?: string): Promise<string | null> {
+    // Tenant scope: a package from another agency must never match.
+    const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
+    const byAlmacen = await this.get<{ id: string }>('packages', `almacen_id=eq.${encodeURIComponent(token)}${orgFilter}&select=id&limit=1`)
     if (byAlmacen[0]) return byAlmacen[0].id
-    const byTracking = await this.get<{ id: string }>('packages', `tracking_number=eq.${encodeURIComponent(token)}&select=id&limit=1`)
+    const byTracking = await this.get<{ id: string }>('packages', `tracking_number=eq.${encodeURIComponent(token)}${orgFilter}&select=id&limit=1`)
     return byTracking[0]?.id ?? null
   }
 
-  async linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string): Promise<void> {
-    await this.post('invoice_packages', [{ invoice_id: invoiceId, package_id: packageId, source, matched_oc: matchedOc, created_by: by }], { onConflict: 'invoice_id,package_id' })
+  async linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId?: string): Promise<void> {
+    await this.post(
+      'invoice_packages',
+      [{ invoice_id: invoiceId, package_id: packageId, source, matched_oc: matchedOc, created_by: by, organization_id: organizationId ?? 'hit' }],
+      { onConflict: 'invoice_id,package_id' },
+    )
   }
 
   async unlinkPackage(invoiceId: string, packageId: string): Promise<void> {

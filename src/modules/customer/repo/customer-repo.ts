@@ -12,9 +12,9 @@ interface BillingClientDbRow {
 
 export interface CustomerRepository {
   list(filter: CustomerListFilter): Promise<CustomerPage>
-  get(id: string): Promise<BillingClient | null>
-  create(input: { name: string; nameNormalized: string; casillero: string | null; toReview: boolean }): Promise<BillingClient>
-  update(id: string, input: { name?: string; nameNormalized?: string; casillero?: string | null; toReview?: boolean }): Promise<BillingClient | null>
+  get(id: string, organizationId?: string): Promise<BillingClient | null>
+  create(input: { organizationId: string; name: string; nameNormalized: string; casillero: string | null; toReview: boolean }): Promise<BillingClient>
+  update(id: string, input: { name?: string; nameNormalized?: string; casillero?: string | null; toReview?: boolean }, organizationId?: string): Promise<BillingClient | null>
 }
 
 function toDomain(row: BillingClientDbRow): BillingClient {
@@ -63,8 +63,10 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     return rows[0]
   }
 
-  private async patch(id: string, row: Record<string, unknown>): Promise<BillingClientDbRow | null> {
-    const res = await fetch(`${this.base}/billing_clients?id=eq.${encodeURIComponent(id)}`, {
+  private async patch(id: string, row: Record<string, unknown>, organizationId?: string): Promise<BillingClientDbRow | null> {
+    // Tenant scope on writes: the org filter makes a cross-tenant PATCH a no-op.
+    const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
+    const res = await fetch(`${this.base}/billing_clients?id=eq.${encodeURIComponent(id)}${orgFilter}`, {
       method: 'PATCH',
       headers: { ...this.headers, Prefer: 'return=representation' },
       body: JSON.stringify(row),
@@ -78,6 +80,7 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     const page = Math.max(1, filter.page ?? 1)
     const pageSize = Math.min(100, Math.max(1, filter.pageSize ?? 25))
     const parts = ['select=id,name,name_normalized,casillero,to_review', 'order=name.asc']
+    parts.push(`organization_id=eq.${encodeURIComponent(filter.organizationId)}`)
     if (filter.search) {
       const search = filter.search.replace(/[(),*]/g, '')
       parts.push(`name=ilike.*${encodeURIComponent(search)}*`)
@@ -88,13 +91,15 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     return { rows: rows.map(toDomain), count }
   }
 
-  async get(id: string): Promise<BillingClient | null> {
-    const rows = await this.fetchRows<BillingClientDbRow>(`id=eq.${encodeURIComponent(id)}&select=id,name,name_normalized,casillero,to_review&limit=1`)
+  async get(id: string, organizationId?: string): Promise<BillingClient | null> {
+    const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
+    const rows = await this.fetchRows<BillingClientDbRow>(`id=eq.${encodeURIComponent(id)}${orgFilter}&select=id,name,name_normalized,casillero,to_review&limit=1`)
     return rows[0] ? toDomain(rows[0]) : null
   }
 
-  async create(input: { name: string; nameNormalized: string; casillero: string | null; toReview: boolean }): Promise<BillingClient> {
+  async create(input: { organizationId: string; name: string; nameNormalized: string; casillero: string | null; toReview: boolean }): Promise<BillingClient> {
     const row = await this.post<BillingClientDbRow>({
+      organization_id: input.organizationId,
       name: input.name,
       name_normalized: input.nameNormalized,
       casillero: input.casillero,
@@ -103,14 +108,14 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     return toDomain(row)
   }
 
-  async update(id: string, input: { name?: string; nameNormalized?: string; casillero?: string | null; toReview?: boolean }): Promise<BillingClient | null> {
+  async update(id: string, input: { name?: string; nameNormalized?: string; casillero?: string | null; toReview?: boolean }, organizationId?: string): Promise<BillingClient | null> {
     const row: Record<string, unknown> = {}
     if (input.name !== undefined) row.name = input.name
     if (input.nameNormalized !== undefined) row.name_normalized = input.nameNormalized
     if (input.casillero !== undefined) row.casillero = input.casillero
     if (input.toReview !== undefined) row.to_review = input.toReview
     row.updated_at = new Date().toISOString()
-    const updated = await this.patch(id, row)
+    const updated = await this.patch(id, row, organizationId)
     return updated ? toDomain(updated) : null
   }
 }
