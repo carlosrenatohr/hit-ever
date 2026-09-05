@@ -349,6 +349,14 @@ export class BillingService {
     const clientId = await this.repo.upsertClient(display, key, organizationId)
     const defaultRateTableId = await this.repo.getClientDefaultRateTable(clientId)
 
+    // Validate client-supplied package links BEFORE writing anything: a package
+    // from another agency must never be attached to an invoice.
+    for (const pkgId of input.packageIds ?? []) {
+      if (!(await this.repo.packageBelongsToOrg(pkgId, organizationId))) {
+        throw new Error(`Package ${pkgId} not found in your agency.`)
+      }
+    }
+
     // Price every line from the org's rate tables (client default first, legacy
     // catalog fallback); rejects a tier the org does not offer.
     const lineRows = []
@@ -396,6 +404,8 @@ export class BillingService {
     await this.repo.insertLineItems(invoiceId, lineRows)
     for (const pkgId of input.packageIds ?? []) {
       await this.repo.linkPackage(invoiceId, pkgId, 'manual', null, actor, organizationId)
+      // Package history entry: the invoice trace must live with the package too.
+      await this.repo.insertPackageEvent(pkgId, `Factura #${invoiceNumber} generada`, new Date().toISOString())
     }
     return (await this.get(invoiceId, organizationId))!
   }
@@ -438,6 +448,7 @@ export class BillingService {
     await this.repo.linkPackage(id, packageId, 'manual', null, actor, organizationId)
     const v = await this.get(id, organizationId)
     if (!v) throw new Error('Invoice not found.')
+    await this.repo.insertPackageEvent(packageId, `Factura #${v.invoiceNumber} enlazada`, new Date().toISOString())
     return v
   }
 

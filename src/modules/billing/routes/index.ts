@@ -276,7 +276,8 @@ billing.get(
 /** GET /api/billing/exceptions — data-quality queue (off-catalog, quarantined pay, orphans). */
 billing.get('/exceptions', async (c) => {
   const svc = new BillingService(getBillingRepo(c.env))
-  return Res.ok(c, await svc.exceptions())
+  // Tenant scope: without this, every agency sees every other agency's queue.
+  return Res.ok(c, await svc.exceptions(c.get('billingSession').agency))
 })
 
 /** GET /api/billing/close-month?year=2026&month=6 — monthly aggregation (replaces TOTAL JUNIO). */
