@@ -8,8 +8,9 @@
 
 import type { FreightType } from '../../billing/domain/enums.js'
 import type { ConfigSession } from '../middleware/auth.js'
-import type { AuditFilter, RateTable, RateRow } from '../domain/types.js'
+import type { AgencyInfo, AgencyInfoPatch, AuditFilter, PaymentCatalogItem, RateTable, RateRow } from '../domain/types.js'
 import type { ConfigRepository } from '../repo/config-repo.js'
+import type { Row } from '../repo/config-repo.js'
 
 export class ConfigService {
   constructor(private repo: ConfigRepository) {}
@@ -168,6 +169,70 @@ export class ConfigService {
 
   async listAudit(org: string, filter: AuditFilter) {
     return this.repo.listAudit(org, filter)
+  }
+
+  // ─── Agency info (Config > Información) ──────────────────────────────────────
+
+  /** Like branding, the profile is self-scoped: even admins only read their own. */
+  async getInfo(session: ConfigSession): Promise<AgencyInfo> {
+    const info = await this.repo.getAgencyInfo(session.agency)
+    if (!info) throw new Error('agency not found')
+    return info
+  }
+
+  async updateInfo(session: ConfigSession, patch: AgencyInfoPatch, requestId: string): Promise<AgencyInfo> {
+    const before = await this.repo.getAgencyInfo(session.agency)
+    if (!before) throw new Error('agency not found')
+    const row: Row = {}
+    if (patch.ruc !== undefined) row.ruc = patch.ruc?.trim() || null
+    if (patch.address !== undefined) row.address = patch.address?.trim() || null
+    if (patch.phone !== undefined) row.phone = patch.phone?.trim() || null
+    if (patch.currency !== undefined) row.currency = patch.currency
+    await this.repo.updateAgency(session.agency, row)
+    await this.audit({
+      organizationId: session.agency,
+      actorId: session.userId,
+      actorEmail: session.email,
+      actorType: 'user',
+      action: 'agency.info.update',
+      entityType: 'agency',
+      entityId: session.agency,
+      requestId,
+      metadata: {
+        before: { ruc: before.ruc, address: before.address, phone: before.phone, currency: before.currency },
+        after: { ruc: row.ruc ?? before.ruc, address: row.address ?? before.address, phone: row.phone ?? before.phone, currency: row.currency ?? before.currency },
+      },
+    })
+    return this.repo.getAgencyInfo(session.agency) as Promise<AgencyInfo>
+  }
+
+  // ─── Payment catalogs (Config > Pagos) ───────────────────────────────────────
+
+  async listPaymentCatalogs(org: string): Promise<{ methods: PaymentCatalogItem[]; banks: PaymentCatalogItem[] }> {
+    const [methods, banks] = await Promise.all([this.repo.listPaymentMethods(org), this.repo.listPaymentBanks(org)])
+    return { methods, banks }
+  }
+
+  async createPaymentMethod(org: string, name: string, session: ConfigSession, requestId: string): Promise<PaymentCatalogItem> {
+    const created = await this.repo.createPaymentMethod(org, name)
+    await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'payment_method.create', entityType: 'payment_method', entityId: created.id, requestId, metadata: { name } })
+    return created
+  }
+
+  async updatePaymentMethod(org: string, id: string, patch: { name?: string; active?: boolean }, session: ConfigSession, requestId: string): Promise<void> {
+    await this.repo.updatePaymentMethod(org, id, patch)
+    await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'payment_method.update', entityType: 'payment_method', entityId: id, requestId, metadata: patch })
+  }
+
+  async createPaymentBank(org: string, name: string, session: ConfigSession, requestId: string): Promise<PaymentCatalogItem> {
+    const created = await this.repo.createPaymentBank(org, name)
+    await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'payment_bank.create', entityType: 'payment_bank', entityId: created.id, requestId, metadata: { name } })
+    return created
+  }
+
+  async updatePaymentBank(org: string, id: string, patch: { name?: string; active?: boolean }, session: ConfigSession, requestId: string): Promise<void> {
+    await this.repo.updatePaymentBank(org, id, patch)
+    await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'payment_bank.update', entityType: 'payment_bank', entityId: id, requestId, metadata: patch })
   }
 
   /**

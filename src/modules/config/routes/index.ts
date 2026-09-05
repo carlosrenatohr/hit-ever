@@ -66,6 +66,145 @@ config.get('/branding', configAuth('config:read'), async (c) => {
 })
 
 /**
+ * GET /api/config/info — the caller's own agency profile (RUC, address, phone,
+ * currency, is_scrapable). Self-scoped like branding: even admins only read
+ * their own agency's info.
+ */
+config.get('/info', configAuth('config:read'), async (c) => {
+  const svc = new ConfigService(getConfigRepo(c.env))
+  try {
+    return Res.ok(c, await svc.getInfo(c.get('configSession')))
+  } catch (e) {
+    return fail(c, e)
+  }
+})
+
+/**
+ * PATCH /api/config/info — update the caller's own agency profile. config:write.
+ * Currency governs money symbols across the panel; is_scrapable is read-only here
+ * (it changes via data/ops, not from the UI).
+ */
+config.patch(
+  '/info',
+  configAuth('config:write'),
+  zValidator(
+    'json',
+    z.object({
+      ruc: z.string().max(50).nullish(),
+      address: z.string().max(300).nullish(),
+      phone: z.string().max(40).nullish(),
+      currency: z.enum(['USD', 'NIO']).optional(),
+    }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'Invalid agency info payload.', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      return Res.ok(c, await svc.updateInfo(c.get('configSession'), c.req.valid('json'), c.get('requestId')))
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/**
+ * GET /api/config/payments — the agency's dynamic payment catalogs (methods and
+ * banks). Self-scoped to the session agency.
+ */
+config.get('/payments', configAuth('config:read'), async (c) => {
+  const svc = new ConfigService(getConfigRepo(c.env))
+  return Res.ok(c, await svc.listPaymentCatalogs(c.get('configSession').agency))
+})
+
+/**
+ * POST /api/config/payments/methods — add a payment method. config:write.
+ */
+config.post(
+  '/payments/methods',
+  configAuth('config:write'),
+  zValidator('json', z.object({ name: z.string().min(1).max(40) }), (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_BODY', 'name is required.', 422)
+  }),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      return Res.ok(c, await svc.createPaymentMethod(c.get('configSession').agency, c.req.valid('json').name, c.get('configSession'), c.get('requestId')), undefined, 201)
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/**
+ * PATCH /api/config/payments/methods/:id — rename or toggle a method. config:write.
+ */
+config.patch(
+  '/payments/methods/:id',
+  configAuth('config:write'),
+  zValidator(
+    'json',
+    z.object({ name: z.string().min(1).max(40).optional(), active: z.boolean().optional() }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'Nothing to update.', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      await svc.updatePaymentMethod(c.get('configSession').agency, c.req.param('id'), c.req.valid('json'), c.get('configSession'), c.get('requestId'))
+      return Res.ok(c, { ok: true })
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/**
+ * POST /api/config/payments/banks — add a bank. config:write.
+ */
+config.post(
+  '/payments/banks',
+  configAuth('config:write'),
+  zValidator('json', z.object({ name: z.string().min(1).max(40) }), (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_BODY', 'name is required.', 422)
+  }),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      return Res.ok(c, await svc.createPaymentBank(c.get('configSession').agency, c.req.valid('json').name, c.get('configSession'), c.get('requestId')), undefined, 201)
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/**
+ * PATCH /api/config/payments/banks/:id — rename or toggle a bank. config:write.
+ */
+config.patch(
+  '/payments/banks/:id',
+  configAuth('config:write'),
+  zValidator(
+    'json',
+    z.object({ name: z.string().min(1).max(40).optional(), active: z.boolean().optional() }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'Nothing to update.', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      await svc.updatePaymentBank(c.get('configSession').agency, c.req.param('id'), c.req.valid('json'), c.get('configSession'), c.get('requestId'))
+      return Res.ok(c, { ok: true })
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/**
  * PATCH /api/config/branding/:slug — update an agency's logo.
  * config:write. The client only sends the storage object key; the public URL is
  * derived server-side from INSFORGE_API_URL so branding can never point at an

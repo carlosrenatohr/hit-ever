@@ -194,6 +194,11 @@ export class InsforgeClient implements TrackingRepository {
     return rows.map((r) => ({ providerId: r.provider_id, agencySlug: r.agency_slug, casilleroFilter: r.casillero_filter }))
   }
 
+  async isAgencyScrapable(agencySlug: string): Promise<boolean> {
+    const rows = await this.get<{ is_scrapable: boolean }>('agencies', `slug=eq.${encodeURIComponent(agencySlug)}&select=is_scrapable&limit=1`)
+    return rows[0]?.is_scrapable ?? true
+  }
+
   /** Upsert a package (conflict on provider_id, almacen_id). Returns its id. */
   async upsertPackage(pkg: Record<string, unknown>): Promise<string | null> {
     const rows = await this.upsertPackages([pkg])
