@@ -69,6 +69,8 @@ export interface PaymentDbRow {
   paid_at: string | null
   raw: string | null
   quarantined: boolean
+  reference: string | null
+  comments: string | null
 }
 
 export interface PackageLinkDbRow {

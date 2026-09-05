@@ -55,3 +55,31 @@ export interface AuditFilter {
   page?: number
   pageSize?: number
 }
+
+/** Working currency for an agency's money displays (invoices, rates). */
+export type CurrencyCode = 'USD' | 'NIO'
+
+/** Agency profile editable from Config > Información (all optional except currency). */
+export interface AgencyInfo {
+  slug: string
+  name: string
+  ruc: string | null
+  address: string | null
+  phone: string | null
+  currency: CurrencyCode
+  /** When false, sync/scrape actions are refused server-side (manual-only agency). */
+  isScrapable: boolean
+}
+
+export interface AgencyInfoPatch {
+  ruc?: string | null
+  address?: string | null
+  phone?: string | null
+  currency?: CurrencyCode
+}
+
+export interface PaymentCatalogItem {
+  id: string
+  name: string
+  active: boolean
+}

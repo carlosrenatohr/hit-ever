@@ -17,6 +17,8 @@ export interface TrackingRepository {
   /** provider_id → agency links (provider_agencies junction). A NULL casillero_filter
    * marks the default owner: casilleros matching no filter land there. */
   getProviderAgencies(): Promise<{ providerId: string; agencySlug: string; casilleroFilter: string | null }[]>
+  /** When false, the agency works manual-only: every sync/scrape path must refuse it. */
+  isAgencyScrapable(agencySlug: string): Promise<boolean>
   /** Warehouse numbers for a provider's still-open packages (effective status != entregado) —
    * lets ingestion revisit them by id, independent of where they've scrolled to in the list. */
   getOpenAlmacenIds(providerId: string, limit: number): Promise<string[]>
@@ -125,6 +127,10 @@ export class MemoryRepository implements TrackingRepository {
       { providerId: 'everest', agencySlug: 'hit', casilleroFilter: '37458' },
       { providerId: 'global_connection', agencySlug: 'hit', casilleroFilter: null },
     ]
+  }
+
+  async isAgencyScrapable(agencySlug: string): Promise<boolean> {
+    return agencySlug !== 'solo-guegue'
   }
 
   async getOpenAlmacenIds(providerId: string, limit: number): Promise<string[]> {

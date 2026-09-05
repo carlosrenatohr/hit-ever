@@ -278,6 +278,16 @@ export class IngestService {
     return resolveProviderOrg(this.linksByProvider.get(providerId) ?? [], casillero)
   }
 
+  /** is_scrapable cache — manual-only agencies (flag false) refuse every scrape path. */
+  private scrapableCache = new Map<string, boolean>()
+
+  private async canScrape(organizationId: string): Promise<boolean> {
+    if (!this.scrapableCache.has(organizationId)) {
+      this.scrapableCache.set(organizationId, await this.db.isAgencyScrapable(organizationId))
+    }
+    return this.scrapableCache.get(organizationId)!
+  }
+
   private clientFor(p: Provider): CargotrackClient | null {
     const creds = credsFor(p.code, this.env)
     if (!creds) return null
@@ -341,6 +351,10 @@ export class IngestService {
       const organizationId = await this.orgForPackage(p.id, detail?.consigneeId ?? null)
       if (!organizationId) {
         console.error(`[ingest] ${p.code}/${row.almacenId}: no agency routing (provider_agencies) — skipping to avoid mis-attribution`)
+        continue
+      }
+      // Manual-only agency (is_scrapable = false): no sync for it, ever.
+      if (!(await this.canScrape(organizationId))) {
         continue
       }
       pkgRows.push(toPackageRow(p.id, organizationId, p.baseUrl, row.almacenId, row, detail))
@@ -424,6 +438,11 @@ export class IngestService {
     const organizationId = await this.orgForPackage(p.id, detail.consigneeId ?? null)
     if (!organizationId) {
       console.error(`[ingest] ${p.code}/${almacenId}: no agency routing (provider_agencies) — skipping`)
+      return false
+    }
+    // Manual-only agency (is_scrapable = false): no sync for it, ever.
+    if (!(await this.canScrape(organizationId))) {
+      console.error(`[ingest] ${p.code}/${almacenId}: agency ${organizationId} is not scrapable — skipping`)
       return false
     }
 

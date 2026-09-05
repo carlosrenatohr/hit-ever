@@ -9,7 +9,7 @@
 
 import type { CloudflareBindings } from '../../../types/index.js'
 import type { FreightType } from '../../billing/domain/enums.js'
-import type { ActorType, Agency, AuditFilter, AuditLogEntry, RateTable, RateRow } from '../domain/types.js'
+import type { ActorType, Agency, AgencyInfo, AuditFilter, AuditLogEntry, CurrencyCode, PaymentCatalogItem, RateTable, RateRow } from '../domain/types.js'
 
 // ─── DB row shapes (snake_case, as returned by PostgREST) ─────────────────────
 interface AgencyRow {
@@ -64,6 +64,13 @@ export interface ConfigRepository {
   setClientDefaultRate(clientId: string, rateTableId: string | null): Promise<void>
   setPackageRateOverride(packageId: string, rateTableId: string | null, by: string | null): Promise<void>
   findPackageIdByToken(token: string): Promise<string | null>
+  getAgencyInfo(slug: string): Promise<AgencyInfo | null>
+  listPaymentMethods(organizationId: string): Promise<PaymentCatalogItem[]>
+  createPaymentMethod(organizationId: string, name: string): Promise<PaymentCatalogItem>
+  updatePaymentMethod(organizationId: string, id: string, patch: { name?: string; active?: boolean }): Promise<void>
+  listPaymentBanks(organizationId: string): Promise<PaymentCatalogItem[]>
+  createPaymentBank(organizationId: string, name: string): Promise<PaymentCatalogItem>
+  updatePaymentBank(organizationId: string, id: string, patch: { name?: string; active?: boolean }): Promise<void>
   listAudit(organizationId: string, filter: AuditFilter): Promise<{ rows: AuditLogEntry[]; count: number }>
   insertAudit(entry: {
     organizationId: string
@@ -246,6 +253,42 @@ export class InsforgeConfigRepo implements ConfigRepository {
       },
     ])
   }
+
+  async getAgencyInfo(slug: string): Promise<AgencyInfo | null> {
+    const rows = await this.get<AgencyInfoRow>('agencies', `slug=eq.${encodeURIComponent(slug)}&select=slug,name,ruc,address,phone,currency,is_scrapable&limit=1`)
+    return rows[0] ? toAgencyInfo(rows[0]) : null
+  }
+
+  async listPaymentMethods(organizationId: string): Promise<PaymentCatalogItem[]> {
+    const rows = await this.get<PaymentCatalogRow>('payment_methods', `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,active&order=name`)
+    return rows
+  }
+
+  async createPaymentMethod(organizationId: string, name: string): Promise<PaymentCatalogItem> {
+    const created = await this.post<PaymentCatalogRow>('payment_methods', [{ organization_id: organizationId, name }], { representation: true })
+    if (!created[0]) throw new Error('payment method was not created')
+    return created[0]
+  }
+
+  async updatePaymentMethod(organizationId: string, id: string, patch: { name?: string; active?: boolean }): Promise<void> {
+    // Tenant scope on the filter: a foreign id matches nothing (no-op).
+    await this.patch('payment_methods', `id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}`, { ...patch, updated_at: new Date().toISOString() })
+  }
+
+  async listPaymentBanks(organizationId: string): Promise<PaymentCatalogItem[]> {
+    const rows = await this.get<PaymentCatalogRow>('payment_banks', `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,active&order=name`)
+    return rows
+  }
+
+  async createPaymentBank(organizationId: string, name: string): Promise<PaymentCatalogItem> {
+    const created = await this.post<PaymentCatalogRow>('payment_banks', [{ organization_id: organizationId, name }], { representation: true })
+    if (!created[0]) throw new Error('payment bank was not created')
+    return created[0]
+  }
+
+  async updatePaymentBank(organizationId: string, id: string, patch: { name?: string; active?: boolean }): Promise<void> {
+    await this.patch('payment_banks', `id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}`, { ...patch, updated_at: new Date().toISOString() })
+  }
 }
 
 function toRateTable(r: RateTableRow): RateTable {
@@ -258,6 +301,27 @@ function toRateTable(r: RateTableRow): RateTable {
     updatedAt: r.updated_at,
     rows: (r.rate_rows ?? []).map((row) => ({ tier: row.tier as RateRow['tier'], price: row.price, cost: row.cost })),
   }
+}
+
+// ─── Agency info + payment catalogs (InsForge adapter) ───────────────────────
+interface AgencyInfoRow {
+  slug: string
+  name: string
+  ruc: string | null
+  address: string | null
+  phone: string | null
+  currency: CurrencyCode
+  is_scrapable: boolean
+}
+
+interface PaymentCatalogRow {
+  id: string
+  name: string
+  active: boolean
+}
+
+function toAgencyInfo(r: AgencyInfoRow): AgencyInfo {
+  return { slug: r.slug, name: r.name, ruc: r.ruc ?? null, address: r.address ?? null, phone: r.phone ?? null, currency: r.currency, isScrapable: r.is_scrapable }
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────

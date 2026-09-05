@@ -31,12 +31,16 @@ export interface CreateInvoiceInput {
   packageIds?: string[]
 }
 export interface ApplyPaymentInput {
-  method: PaymentMethod
-  bank?: PaymentBank | null
+  method: string
+  bank?: string | null
   currency: Currency
   amount: number
   fxRate?: number | null
   paidAt?: string | null
+  /** Optional free-text reference (transfer/transaction number). */
+  reference?: string | null
+  /** Optional free-text comment about the payment. */
+  comments?: string | null
 }
 
 export interface InvoiceView {
@@ -190,6 +194,8 @@ export function toView(b: InvoiceBundle): InvoiceView {
       paidAt: p.paid_at,
       raw: p.raw,
       quarantined: p.quarantined,
+      reference: p.reference,
+      comments: p.comments,
     })),
     packages: b.packages.map((p) => ({ packageId: p.package_id, source: p.source, matchedOc: p.matched_oc })),
   }
@@ -426,6 +432,8 @@ export class BillingService {
       paid_at: input.paidAt ?? new Date().toISOString(),
       raw: null,
       quarantined: false,
+      reference: input.reference?.trim() || null,
+      comments: input.comments?.trim() || null,
       organization_id: organizationId,
     })
     const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))

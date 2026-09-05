@@ -11,9 +11,10 @@ import { z } from 'zod'
 import { Res } from '../../../lib/response.js'
 import { CatalogService } from '../catalog/catalog.js'
 import { margin } from '../domain/calc.js'
-import { CURRENCIES, FREIGHT_TYPES, INVOICE_STATUSES, PAYMENT_BANKS, PAYMENT_METHODS } from '../domain/enums.js'
+import { CURRENCIES, FREIGHT_TYPES, INVOICE_STATUSES } from '../domain/enums.js'
 import { billingAuth, type BillingEnv } from '../middleware/auth.js'
 import { getBillingRepo } from '../repo/billing-repo.js'
+import { getConfigRepo } from '../../config/repo/config-repo.js'
 import { BillingService } from '../service/billing-service.js'
 
 /** Map a service error to an HTTP status by its message. */
@@ -163,12 +164,14 @@ billing.post(
   zValidator(
     'json',
     z.object({
-      method: z.enum(PAYMENT_METHODS),
-      bank: z.enum(PAYMENT_BANKS).nullish(),
+      method: z.string().min(1).max(40),
+      bank: z.string().max(40).nullish(),
       currency: z.enum(CURRENCIES),
       amount: z.number().positive(),
       fxRate: z.number().positive().nullish(),
       paidAt: z.string().optional(),
+      reference: z.string().max(120).nullish(),
+      comments: z.string().max(500).nullish(),
     }),
     (r, c) => {
       if (!r.success) return Res.err(c, 'INVALID_BODY', 'method, currency and a positive amount are required.', 422)
@@ -176,8 +179,21 @@ billing.post(
   ),
   async (c) => {
     const svc = new BillingService(getBillingRepo(c.env))
+    const agency = c.get('billingSession').agency
+    const input = c.req.valid('json')
+    // Dynamic catalogs: the method (and bank, when given) must be active for the
+    // caller's agency. Skipped when the agency removed its whole catalog — an
+    // empty catalog never bricks payments.
     try {
-      return Res.ok(c, await svc.applyPayment(c.req.param('id'), c.req.valid('json'), c.get('billingSession').agency))
+      const cfgRepo = getConfigRepo(c.env)
+      const [methods, banks] = await Promise.all([cfgRepo.listPaymentMethods(agency), cfgRepo.listPaymentBanks(agency)])
+      if (methods.length > 0 && !methods.some((m) => m.active && m.name === input.method)) {
+        return Res.err(c, 'INVALID_REQUEST', `El método de pago "${input.method}" no está disponible para esta agencia.`, 422)
+      }
+      if (input.bank && banks.length > 0 && !banks.some((b) => b.active && b.name === input.bank)) {
+        return Res.err(c, 'INVALID_REQUEST', `El banco "${input.bank}" no está disponible para esta agencia.`, 422)
+      }
+      return Res.ok(c, await svc.applyPayment(c.req.param('id'), input, agency))
     } catch (e) {
       return fail(c, e)
     }
