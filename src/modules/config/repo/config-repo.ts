@@ -9,7 +9,7 @@
 
 import type { CloudflareBindings } from '../../../types/index.js'
 import type { FreightType } from '../../billing/domain/enums.js'
-import type { ActorType, Agency, AgencyInfo, AuditFilter, AuditLogEntry, CurrencyCode, PaymentCatalogItem, RateTable, RateRow } from '../domain/types.js'
+import type { ActorType, Agency, AgencyInfo, AuditFilter, AuditLogEntry, ChargeConcept, CurrencyCode, PaymentCatalogItem, RateTable, RateRow } from '../domain/types.js'
 
 // ─── DB row shapes (snake_case, as returned by PostgREST) ─────────────────────
 interface AgencyRow {
@@ -65,6 +65,9 @@ export interface ConfigRepository {
   setPackageRateOverride(packageId: string, rateTableId: string | null, by: string | null): Promise<void>
   findPackageIdByToken(token: string): Promise<string | null>
   getAgencyInfo(slug: string): Promise<AgencyInfo | null>
+  listChargeConcepts(organizationId: string): Promise<ChargeConcept[]>
+  createChargeConcept(organizationId: string, name: string, suggestedPrice: number | null): Promise<ChargeConcept>
+  updateChargeConcept(organizationId: string, id: string, patch: { name?: string; active?: boolean; suggestedPrice?: number | null }): Promise<void>
   listPaymentMethods(organizationId: string): Promise<PaymentCatalogItem[]>
   createPaymentMethod(organizationId: string, name: string): Promise<PaymentCatalogItem>
   updatePaymentMethod(organizationId: string, id: string, patch: { name?: string; active?: boolean }): Promise<void>
@@ -289,6 +292,25 @@ export class InsforgeConfigRepo implements ConfigRepository {
   async updatePaymentBank(organizationId: string, id: string, patch: { name?: string; active?: boolean }): Promise<void> {
     await this.patch('payment_banks', `id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}`, { ...patch, updated_at: new Date().toISOString() })
   }
+
+  async listChargeConcepts(organizationId: string): Promise<ChargeConcept[]> {
+    const rows = await this.get<ChargeConceptRow>('charge_concepts', `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,suggested_price,active&order=name`)
+    return rows.map((r) => ({ id: r.id, name: r.name, suggestedPrice: r.suggested_price, active: r.active }))
+  }
+
+  async createChargeConcept(organizationId: string, name: string, suggestedPrice: number | null): Promise<ChargeConcept> {
+    const created = await this.post<ChargeConceptRow>('charge_concepts', [{ organization_id: organizationId, name, suggested_price: suggestedPrice }], { representation: true })
+    if (!created[0]) throw new Error('charge concept was not created')
+    return { id: created[0].id, name: created[0].name, suggestedPrice: created[0].suggested_price, active: created[0].active }
+  }
+
+  async updateChargeConcept(organizationId: string, id: string, patch: { name?: string; active?: boolean; suggestedPrice?: number | null }): Promise<void> {
+    const row: Record<string, unknown> = { updated_at: new Date().toISOString() }
+    if (patch.name !== undefined) row.name = patch.name
+    if (patch.active !== undefined) row.active = patch.active
+    if (patch.suggestedPrice !== undefined) row.suggested_price = patch.suggestedPrice
+    await this.patch('charge_concepts', `id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}`, row)
+  }
 }
 
 function toRateTable(r: RateTableRow): RateTable {
@@ -317,6 +339,13 @@ interface AgencyInfoRow {
 interface PaymentCatalogRow {
   id: string
   name: string
+  active: boolean
+}
+
+interface ChargeConceptRow {
+  id: string
+  name: string
+  suggested_price: number | null
   active: boolean
 }
 

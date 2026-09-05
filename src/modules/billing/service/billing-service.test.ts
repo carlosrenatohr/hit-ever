@@ -146,3 +146,61 @@ describe('createInvoice — package links', () => {
     expect(insertPackageEvent).toHaveBeenCalledWith('pkg-1', 'Factura #1 generada', expect.any(String))
   })
 })
+
+describe('createInvoice — other charges', () => {
+  function repoWithConcept(conceptInOrg: boolean) {
+    const bundle: InvoiceBundle = {
+      header: {
+        id: 'i1', invoice_number: 1, fiscal_year: 2026, client_id: null, client_name_raw: 'Ana',
+        issue_date: '2026-09-05', status: 'ISSUED', address: null, special_price: false, observations: null,
+        tracking_orders: [], agent_id: null, created_at: '', updated_at: '', total: 10, profit: 5.5, paid_usd: 0,
+      } as InvoiceBundle['header'],
+      lines: [{ id: 'l1', invoice_id: 'i1', line_no: 1, description: null, freight_type: 'AIR', quantity_lbs: 1, unit: 'lbs', unit_price: 7, total: 7, list_price: null, freight_cost: 4.5, profit: 2.5, price_tier: 'REGULAR', price_off_catalog: false }] as InvoiceBundle['lines'],
+      payments: [],
+      packages: [],
+    }
+    const insertLineItems = vi.fn(async () => {})
+    const repo = {
+      getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5 }] }],
+      upsertClient: async () => 'c1',
+      getClientDefaultRateTable: async () => null,
+      conceptBelongsToOrg: async () => conceptInOrg,
+      getChargeConcept: async () => ({ id: 'cc1', name: 'Delivery' }),
+      nextInvoiceNumber: async () => 1,
+      createInvoiceHeader: async () => 'i1',
+      insertLineItems,
+      linkPackage: async () => {},
+      getInvoiceBundle: async () => bundle,
+    } as unknown as BillingRepository
+    return { repo, insertLineItems }
+  }
+
+  it('rejects other charges with a non-positive amount', async () => {
+    const { repo } = repoWithConcept(true)
+    const svc = new BillingService(repo)
+    await expect(
+      svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], otherLines: [{ conceptId: 'cc1', amount: 0 }] }, 'tester', 'solo-guegue'),
+    ).rejects.toThrow(/positive amount/)
+  })
+
+  it('rejects a concept from another agency', async () => {
+    const { repo } = repoWithConcept(false)
+    const svc = new BillingService(repo)
+    await expect(
+      svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], otherLines: [{ conceptId: 'cc1', amount: 3 }] }, 'tester', 'solo-guegue'),
+    ).rejects.toThrow(/not found in your agency/)
+  })
+
+  it('composes the description from the concept name and adds the amount to the totals', async () => {
+    const { repo, insertLineItems } = repoWithConcept(true)
+    const svc = new BillingService(repo)
+    await svc.createInvoice(
+      { clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], otherLines: [{ conceptId: 'cc1', description: 'zona norte', amount: 3 }] },
+      'tester',
+      'solo-guegue',
+    )
+    const rows = insertLineItems.mock.calls[0][1] as Record<string, unknown>[]
+    const other = rows.find((r) => r.line_type === 'other')
+    expect(other).toMatchObject({ description: 'Delivery — zona norte', unit_price: 3, total: 3, profit: 3, freight_cost: 0, quantity_lbs: null, concept_id: 'cc1' })
+  })
+})

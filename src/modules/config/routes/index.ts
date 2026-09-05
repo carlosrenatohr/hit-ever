@@ -119,6 +119,63 @@ config.get('/payments', configAuth('config:read'), async (c) => {
 })
 
 /**
+ * GET /api/config/concepts — the agency's custom extra-charge templates ("otros").
+ */
+config.get('/concepts', configAuth('config:read'), async (c) => {
+  const svc = new ConfigService(getConfigRepo(c.env))
+  return Res.ok(c, await svc.listChargeConcepts(c.get('configSession').agency))
+})
+
+/**
+ * POST /api/config/concepts — add a concept (name + optional suggested price
+ * that only prefills the invoice form). config:write.
+ */
+config.post(
+  '/concepts',
+  configAuth('config:write'),
+  zValidator('json', z.object({ name: z.string().min(1).max(40), suggestedPrice: z.number().nonnegative().nullable().optional() }), (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_BODY', 'name is required; suggestedPrice must be a nonnegative number.', 422)
+  }),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      const { name, suggestedPrice } = c.req.valid('json')
+      return Res.ok(c, await svc.createChargeConcept(c.get('configSession').agency, name, suggestedPrice ?? null, c.get('configSession'), c.get('requestId')), undefined, 201)
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/**
+ * PATCH /api/config/concepts/:id — rename / reprice / toggle a concept. config:write.
+ */
+config.patch(
+  '/concepts/:id',
+  configAuth('config:write'),
+  zValidator(
+    'json',
+    z.object({
+      name: z.string().min(1).max(40).optional(),
+      active: z.boolean().optional(),
+      suggestedPrice: z.number().nonnegative().nullable().optional(),
+    }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'Invalid concept patch.', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      await svc.updateChargeConcept(c.get('configSession').agency, c.req.param('id'), c.req.valid('json'), c.get('configSession'), c.get('requestId'))
+      return Res.ok(c, { ok: true })
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/**
  * POST /api/config/payments/methods — add a payment method. config:write.
  */
 config.post(

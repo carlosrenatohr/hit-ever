@@ -124,6 +124,13 @@ const LINE_SCHEMA = z.object({
   tier: z.string().min(1),
   quantityLbs: z.number().positive(),
   description: z.string().nullish(),
+  rateTableId: z.string().uuid().nullish(),
+})
+
+const OTHER_LINE_SCHEMA = z.object({
+  conceptId: z.string().uuid().nullish(),
+  description: z.string().max(200).nullish(),
+  amount: z.number().positive(),
 })
 
 /** POST /api/billing/invoices — create (prices from catalog, assigns the year sequence). */
@@ -140,6 +147,7 @@ billing.post(
       observations: z.string().nullish(),
       status: z.enum(INVOICE_STATUSES).optional(),
       lines: z.array(LINE_SCHEMA).min(1),
+      otherLines: z.array(OTHER_LINE_SCHEMA).max(20).optional(),
       packageIds: z.array(z.string()).optional(),
     }),
     (r, c) => {
