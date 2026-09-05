@@ -28,6 +28,9 @@ export class CustomerService {
       nameNormalized: key,
       casillero: input.casillero?.trim() || null,
       toReview: input.toReview ?? false,
+      email: input.email?.trim() || null,
+      phone: input.phone?.trim() || null,
+      address: input.address?.trim() || null,
     })
   }
 
@@ -40,6 +43,9 @@ export class CustomerService {
     }
     if (input.casillero !== undefined) patch.casillero = input.casillero?.trim() || null
     if (input.toReview !== undefined) patch.toReview = input.toReview
+    if (input.email !== undefined) patch.email = input.email?.trim() || null
+    if (input.phone !== undefined) patch.phone = input.phone?.trim() || null
+    if (input.address !== undefined) patch.address = input.address?.trim() || null
     return this.repo.update(id, patch, organizationId)
   }
 }

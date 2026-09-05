@@ -8,13 +8,16 @@ interface BillingClientDbRow {
   name_normalized: string
   casillero: string | null
   to_review: boolean
+  email: string | null
+  phone: string | null
+  address: string | null
 }
 
 export interface CustomerRepository {
   list(filter: CustomerListFilter): Promise<CustomerPage>
   get(id: string, organizationId?: string): Promise<BillingClient | null>
-  create(input: { organizationId: string; name: string; nameNormalized: string; casillero: string | null; toReview: boolean }): Promise<BillingClient>
-  update(id: string, input: { name?: string; nameNormalized?: string; casillero?: string | null; toReview?: boolean }, organizationId?: string): Promise<BillingClient | null>
+  create(input: { organizationId: string; name: string; nameNormalized: string; casillero: string | null; toReview: boolean; email: string | null; phone: string | null; address: string | null }): Promise<BillingClient>
+  update(id: string, input: { name?: string; nameNormalized?: string; casillero?: string | null; toReview?: boolean; email?: string | null; phone?: string | null; address?: string | null }, organizationId?: string): Promise<BillingClient | null>
 }
 
 function toDomain(row: BillingClientDbRow): BillingClient {
@@ -24,6 +27,9 @@ function toDomain(row: BillingClientDbRow): BillingClient {
     nameNormalized: row.name_normalized,
     casillero: row.casillero ?? null,
     toReview: row.to_review,
+    email: row.email ?? null,
+    phone: row.phone ?? null,
+    address: row.address ?? null,
   }
 }
 
@@ -79,7 +85,7 @@ export class InsforgeCustomerRepo implements CustomerRepository {
   async list(filter: CustomerListFilter): Promise<CustomerPage> {
     const page = Math.max(1, filter.page ?? 1)
     const pageSize = Math.min(100, Math.max(1, filter.pageSize ?? 25))
-    const parts = ['select=id,name,name_normalized,casillero,to_review', 'order=name.asc']
+    const parts = ['select=id,name,name_normalized,casillero,to_review,email,phone,address', 'order=name.asc']
     parts.push(`organization_id=eq.${encodeURIComponent(filter.organizationId)}`)
     if (filter.search) {
       const search = filter.search.replace(/[(),*]/g, '')
@@ -93,27 +99,33 @@ export class InsforgeCustomerRepo implements CustomerRepository {
 
   async get(id: string, organizationId?: string): Promise<BillingClient | null> {
     const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
-    const rows = await this.fetchRows<BillingClientDbRow>(`id=eq.${encodeURIComponent(id)}${orgFilter}&select=id,name,name_normalized,casillero,to_review&limit=1`)
+    const rows = await this.fetchRows<BillingClientDbRow>(`id=eq.${encodeURIComponent(id)}${orgFilter}&select=id,name,name_normalized,casillero,to_review,email,phone,address&limit=1`)
     return rows[0] ? toDomain(rows[0]) : null
   }
 
-  async create(input: { organizationId: string; name: string; nameNormalized: string; casillero: string | null; toReview: boolean }): Promise<BillingClient> {
+  async create(input: { organizationId: string; name: string; nameNormalized: string; casillero: string | null; toReview: boolean; email: string | null; phone: string | null; address: string | null }): Promise<BillingClient> {
     const row = await this.post<BillingClientDbRow>({
       organization_id: input.organizationId,
       name: input.name,
       name_normalized: input.nameNormalized,
       casillero: input.casillero,
       to_review: input.toReview,
+      email: input.email,
+      phone: input.phone,
+      address: input.address,
     })
     return toDomain(row)
   }
 
-  async update(id: string, input: { name?: string; nameNormalized?: string; casillero?: string | null; toReview?: boolean }, organizationId?: string): Promise<BillingClient | null> {
+  async update(id: string, input: { name?: string; nameNormalized?: string; casillero?: string | null; toReview?: boolean; email?: string | null; phone?: string | null; address?: string | null }, organizationId?: string): Promise<BillingClient | null> {
     const row: Record<string, unknown> = {}
     if (input.name !== undefined) row.name = input.name
     if (input.nameNormalized !== undefined) row.name_normalized = input.nameNormalized
     if (input.casillero !== undefined) row.casillero = input.casillero
     if (input.toReview !== undefined) row.to_review = input.toReview
+    if (input.email !== undefined) row.email = input.email
+    if (input.phone !== undefined) row.phone = input.phone
+    if (input.address !== undefined) row.address = input.address
     row.updated_at = new Date().toISOString()
     const updated = await this.patch(id, row, organizationId)
     return updated ? toDomain(updated) : null
