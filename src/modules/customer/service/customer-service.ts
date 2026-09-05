@@ -16,13 +16,14 @@ export class CustomerService {
     return this.repo.list(filter)
   }
 
-  get(id: string): Promise<BillingClient | null> {
-    return this.repo.get(id)
+  get(id: string, organizationId?: string): Promise<BillingClient | null> {
+    return this.repo.get(id, organizationId)
   }
 
-  async create(input: CreateCustomerInput): Promise<BillingClient> {
+  async create(input: CreateCustomerInput, organizationId: string): Promise<BillingClient> {
     const { display, key } = normalizeClientName(requireName(input.name))
     return this.repo.create({
+      organizationId,
       name: display,
       nameNormalized: key,
       casillero: input.casillero?.trim() || null,
@@ -30,7 +31,7 @@ export class CustomerService {
     })
   }
 
-  async update(id: string, input: UpdateCustomerInput): Promise<BillingClient | null> {
+  async update(id: string, input: UpdateCustomerInput, organizationId?: string): Promise<BillingClient | null> {
     const patch: Parameters<CustomerRepository['update']>[1] = {}
     if (input.name !== undefined) {
       const { display, key } = normalizeClientName(requireName(input.name))
@@ -39,6 +40,6 @@ export class CustomerService {
     }
     if (input.casillero !== undefined) patch.casillero = input.casillero?.trim() || null
     if (input.toReview !== undefined) patch.toReview = input.toReview
-    return this.repo.update(id, patch)
+    return this.repo.update(id, patch, organizationId)
   }
 }

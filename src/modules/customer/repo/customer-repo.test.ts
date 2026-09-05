@@ -14,9 +14,10 @@ describe('InsforgeCustomerRepo', () => {
       })
     })
 
-    const result = await new InsforgeCustomerRepo('https://db.test', 'key').list({ search: 'Ana', page: 1, pageSize: 25 })
+    const result = await new InsforgeCustomerRepo('https://db.test', 'key').list({ organizationId: 'hit', search: 'Ana', page: 1, pageSize: 25 })
 
     expect(requested).toContain('/api/database/records/billing_clients?')
+    expect(requested).toContain('organization_id=eq.hit')
     expect(requested).toContain('name=ilike.*Ana*')
     expect(result).toEqual({ rows: [{ id: 'c1', name: 'Ana', nameNormalized: 'ana', casillero: 'A1', toReview: true }], count: 1 })
   })
@@ -28,9 +29,9 @@ describe('InsforgeCustomerRepo', () => {
       return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false }]), { status: 201 })
     })
 
-    const result = await new InsforgeCustomerRepo('https://db.test', 'key').create({ name: 'Ana', nameNormalized: 'ana', casillero: null, toReview: false })
+    const result = await new InsforgeCustomerRepo('https://db.test', 'key').create({ organizationId: 'hit', name: 'Ana', nameNormalized: 'ana', casillero: null, toReview: false })
 
-    expect(JSON.parse(body)).toEqual([{ name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false }])
+    expect(JSON.parse(body)).toEqual([{ organization_id: 'hit', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false }])
     expect(result.id).toBe('c1')
   })
 })

@@ -334,12 +334,12 @@ export class BillingService {
     }
   }
 
-  async get(id: string): Promise<InvoiceView | null> {
-    const b = await this.repo.getInvoiceBundle(id)
+  async get(id: string, organizationId?: string): Promise<InvoiceView | null> {
+    const b = await this.repo.getInvoiceBundle(id, organizationId)
     return b ? toView(b) : null
   }
 
-  async createInvoice(input: CreateInvoiceInput, actor: string): Promise<InvoiceView> {
+  async createInvoice(input: CreateInvoiceInput, actor: string, organizationId: string = 'hit'): Promise<InvoiceView> {
     if (!input.lines?.length) throw new Error('An invoice needs at least one line.')
     const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10)
     const fiscalYear = new Date(issueDate).getUTCFullYear()
@@ -363,16 +363,18 @@ export class BillingService {
         profit: q.profit,
         price_tier: l.tier,
         price_off_catalog: false,
+        organization_id: organizationId,
       })
     }
     const total = round2(lineRows.reduce((s, r) => s + r.total, 0))
     const profit = round2(lineRows.reduce((s, r) => s + r.profit, 0))
 
     const { display, key } = normalizeClientName(input.clientName)
-    const clientId = await this.repo.upsertClient(display, key)
-    const invoiceNumber = await this.repo.nextInvoiceNumber(fiscalYear)
+    const clientId = await this.repo.upsertClient(display, key, organizationId)
+    const invoiceNumber = await this.repo.nextInvoiceNumber(fiscalYear, organizationId)
 
     const invoiceId = await this.repo.createInvoiceHeader({
+      organization_id: organizationId,
       invoice_number: invoiceNumber,
       fiscal_year: fiscalYear,
       client_id: clientId,
@@ -389,13 +391,13 @@ export class BillingService {
     })
     await this.repo.insertLineItems(invoiceId, lineRows)
     for (const pkgId of input.packageIds ?? []) {
-      await this.repo.linkPackage(invoiceId, pkgId, 'manual', null, actor)
+      await this.repo.linkPackage(invoiceId, pkgId, 'manual', null, actor, organizationId)
     }
-    return (await this.get(invoiceId))!
+    return (await this.get(invoiceId, organizationId))!
   }
 
-  async applyPayment(id: string, input: ApplyPaymentInput): Promise<InvoiceView> {
-    const b = await this.repo.getInvoiceBundle(id)
+  async applyPayment(id: string, input: ApplyPaymentInput, organizationId?: string): Promise<InvoiceView> {
+    const b = await this.repo.getInvoiceBundle(id, organizationId)
     if (!b) throw new Error('Invoice not found.')
     if (b.header.status === 'VOID') throw new Error('Cannot pay a voided invoice.')
 
@@ -410,6 +412,7 @@ export class BillingService {
       paid_at: input.paidAt ?? new Date().toISOString(),
       raw: null,
       quarantined: false,
+      organization_id: organizationId ?? 'hit',
     })
     const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
     const paidUsd = round2(b.payments.reduce((s, p) => s + (p.amount_usd || 0), 0) + (amountUsd ?? 0))
@@ -417,55 +420,55 @@ export class BillingService {
     // Stamp paid_at when the invoice reaches PAID (for the issued->paid days badge).
     await this.repo.setInvoiceStatus(id, status, status === 'PAID' ? { paid_at: input.paidAt ?? new Date().toISOString() } : {})
     await this.repo.setInvoiceTotals(id, { total, profit: round2(b.lines.reduce((s, l) => s + (l.profit || 0), 0)), paidUsd })
-    return (await this.get(id))!
+    return (await this.get(id, organizationId))!
   }
 
-  async voidInvoice(id: string, reason?: string): Promise<InvoiceView> {
-    const b = await this.repo.getInvoiceBundle(id)
+  async voidInvoice(id: string, reason?: string, organizationId?: string): Promise<InvoiceView> {
+    const b = await this.repo.getInvoiceBundle(id, organizationId)
     if (!b) throw new Error('Invoice not found.')
     await this.repo.setInvoiceStatus(id, 'VOID', reason ? { observations: reason } : {})
-    return (await this.get(id))!
+    return (await this.get(id, organizationId))!
   }
 
-  async linkPackage(id: string, packageId: string, actor: string): Promise<InvoiceView> {
-    await this.repo.linkPackage(id, packageId, 'manual', null, actor)
-    const v = await this.get(id)
+  async linkPackage(id: string, packageId: string, actor: string, organizationId?: string): Promise<InvoiceView> {
+    await this.repo.linkPackage(id, packageId, 'manual', null, actor, organizationId)
+    const v = await this.get(id, organizationId)
     if (!v) throw new Error('Invoice not found.')
     return v
   }
 
-  async unlinkPackage(id: string, packageId: string): Promise<InvoiceView> {
+  async unlinkPackage(id: string, packageId: string, organizationId?: string): Promise<InvoiceView> {
     await this.repo.unlinkPackage(id, packageId)
-    const v = await this.get(id)
+    const v = await this.get(id, organizationId)
     if (!v) throw new Error('Invoice not found.')
     return v
   }
 
-  async closeMonth(year: number, month: number): Promise<MonthlyClose> {
+  async closeMonth(year: number, month: number, organizationId?: string): Promise<MonthlyClose> {
     const from = `${year}-${String(month).padStart(2, '0')}-01`
     const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate()
     const to = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`
-    const bundles = await this.repo.getBundlesByDateRange(from, to)
+    const bundles = await this.repo.getBundlesByDateRange(from, to, organizationId)
     return aggregateClose(year, month, bundles)
   }
 
-  async yearReport(year: number): Promise<YearReport> {
-    const bundles = await this.repo.getBundlesByDateRange(`${year}-01-01`, `${year}-12-31`)
+  async yearReport(year: number, organizationId?: string): Promise<YearReport> {
+    const bundles = await this.repo.getBundlesByDateRange(`${year}-01-01`, `${year}-12-31`, organizationId)
     return aggregateYear(year, bundles)
   }
 
-  async summary(from: string, to: string): Promise<DateRangeSummary> {
-    const bundles = await this.repo.getBundlesByDateRange(from, to)
+  async summary(from: string, to: string, organizationId?: string): Promise<DateRangeSummary> {
+    const bundles = await this.repo.getBundlesByDateRange(from, to, organizationId)
     return aggregateRange(from, to, bundles)
   }
 
-  async exceptions(): Promise<ExceptionsPayload> {
-    return this.repo.getExceptions()
+  async exceptions(organizationId?: string): Promise<ExceptionsPayload> {
+    return this.repo.getExceptions(organizationId)
   }
 
   /** Get (or lazily create) the invoice's public share token. */
-  async shareInvoice(id: string): Promise<string> {
-    const b = await this.repo.getInvoiceBundle(id)
+  async shareInvoice(id: string, organizationId?: string): Promise<string> {
+    const b = await this.repo.getInvoiceBundle(id, organizationId)
     if (!b) throw new Error('Invoice not found.')
     let token = b.header.public_token
     if (!token) {

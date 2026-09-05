@@ -136,11 +136,13 @@ export async function runMigration(
   repo: BillingRepository,
   catalogEntries: CatalogEntry[],
   invoices: ParsedInvoice[],
-  opts: { dryRun?: boolean; linkPackages?: boolean } = {},
+  opts: { dryRun?: boolean; linkPackages?: boolean; organizationId?: string } = {},
 ): Promise<ImportReport> {
   const catalog = new Map<FreightType, CatalogEntry>(catalogEntries.map((e) => [e.freightType, e]))
   const dryRun = opts.dryRun ?? false
   const linkPackages = opts.linkPackages ?? true
+  // Tenant scope for every row the import writes (historical workbook = 'hit').
+  const organizationId = opts.organizationId ?? 'hit'
 
   const report: ImportReport = {
     invoicesUpserted: 0,
@@ -173,7 +175,7 @@ export async function runMigration(
     if (!inv.isVoid && inv.clientRaw.trim() !== '') {
       const { display, key } = normalizeClientName(inv.clientRaw)
       if (!dryRun) {
-        clientId = clientCache.get(key) ?? (await repo.upsertClient(display, key))
+        clientId = clientCache.get(key) ?? (await repo.upsertClient(display, key, organizationId))
         clientCache.set(key, clientId)
       }
     }
@@ -194,6 +196,7 @@ export async function runMigration(
 
     if (!dryRun) {
       const invoiceId = await repo.upsertInvoiceHeader({
+        organization_id: organizationId,
         invoice_number: inv.invoiceNumber,
         fiscal_year: inv.fiscalYear,
         client_id: clientId,
@@ -208,8 +211,8 @@ export async function runMigration(
         source: inv.source,
       })
       report.invoicesUpserted++
-      await repo.replaceLineItems(invoiceId, lineRows)
-      await repo.replacePayments(invoiceId, payRows)
+      await repo.replaceLineItems(invoiceId, lineRows.map((r) => ({ ...r, organization_id: organizationId })))
+      await repo.replacePayments(invoiceId, payRows.map((r) => ({ ...r, organization_id: organizationId })))
       // Maintain denormalized header totals (imported payments carry no USD amount).
       const total = round2(lineRows.reduce((s, r) => s + (Number(r.total) || 0), 0))
       const profit = round2(lineRows.reduce((s, r) => s + (Number(r.profit) || 0), 0))
@@ -217,9 +220,9 @@ export async function runMigration(
 
       if (linkPackages) {
         for (const token of inv.oc) {
-          const pkgId = await repo.findPackageIdByToken(token)
+          const pkgId = await repo.findPackageIdByToken(token, organizationId)
           if (pkgId) {
-            await repo.linkPackage(invoiceId, pkgId, 'auto', token, 'import')
+            await repo.linkPackage(invoiceId, pkgId, 'auto', token, 'import', organizationId)
             report.packagesLinked++
           } else {
             report.ocTokensUnmatched++

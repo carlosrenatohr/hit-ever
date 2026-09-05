@@ -12,22 +12,22 @@ describe('CustomerService', () => {
     const create = vi.fn(async () => client())
     const service = new CustomerService({ create, list: vi.fn(), get: vi.fn(), update: vi.fn() } as unknown as CustomerRepository)
 
-    await service.create({ name: '  ANA   MARIA  ', casillero: ' A-7 ' })
+    await service.create({ name: '  ANA   MARIA  ', casillero: ' A-7 ' }, 'hit')
 
-    expect(create).toHaveBeenCalledWith({ name: 'Ana Maria', nameNormalized: 'ana maria', casillero: 'A-7', toReview: false })
+    expect(create).toHaveBeenCalledWith({ organizationId: 'hit', name: 'Ana Maria', nameNormalized: 'ana maria', casillero: 'A-7', toReview: false })
   })
 
   it('rejects blank names', async () => {
     const service = new CustomerService({ create: vi.fn(), list: vi.fn(), get: vi.fn(), update: vi.fn() } as unknown as CustomerRepository)
-    await expect(service.create({ name: '   ' })).rejects.toThrow('Customer name is required.')
+    await expect(service.create({ name: '   ' }, 'hit')).rejects.toThrow('Customer name is required.')
   })
 
   it('updates the normalized name and review flag', async () => {
     const update = vi.fn(async () => client({ toReview: true }))
     const service = new CustomerService({ create: vi.fn(), list: vi.fn(), get: vi.fn(), update } as unknown as CustomerRepository)
 
-    await service.update('c1', { name: '  BETA  ', toReview: true })
+    await service.update('c1', { name: '  BETA  ', toReview: true }, 'hit')
 
-    expect(update).toHaveBeenCalledWith('c1', { name: 'Beta', nameNormalized: 'beta', toReview: true })
+    expect(update).toHaveBeenCalledWith('c1', { name: 'Beta', nameNormalized: 'beta', toReview: true }, 'hit')
   })
 })

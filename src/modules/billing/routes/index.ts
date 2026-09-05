@@ -105,14 +105,14 @@ billing.get(
   ),
   async (c) => {
     const svc = new BillingService(getBillingRepo(c.env))
-    return Res.ok(c, await svc.list(c.req.valid('query')))
+    return Res.ok(c, await svc.list({ ...c.req.valid('query'), organizationId: c.get('billingSession').agency }))
   },
 )
 
 /** GET /api/billing/invoices/:id — full invoice (header + lines + payments + packages). */
 billing.get('/invoices/:id', async (c) => {
   const svc = new BillingService(getBillingRepo(c.env))
-  const view = await svc.get(c.req.param('id'))
+  const view = await svc.get(c.req.param('id'), c.get('billingSession').agency)
   if (!view) return Res.err(c, 'NOT_FOUND', 'Invoice not found.', 404)
   return Res.ok(c, view)
 })
@@ -147,7 +147,7 @@ billing.post(
   async (c) => {
     const svc = new BillingService(getBillingRepo(c.env))
     try {
-      const view = await svc.createInvoice(c.req.valid('json'), c.get('billingSession').email ?? 'panel')
+      const view = await svc.createInvoice(c.req.valid('json'), c.get('billingSession').email ?? 'panel', c.get('billingSession').agency)
       return Res.ok(c, view, undefined, 201)
     } catch (e) {
       return fail(c, e)
@@ -176,7 +176,7 @@ billing.post(
   async (c) => {
     const svc = new BillingService(getBillingRepo(c.env))
     try {
-      return Res.ok(c, await svc.applyPayment(c.req.param('id'), c.req.valid('json')))
+      return Res.ok(c, await svc.applyPayment(c.req.param('id'), c.req.valid('json'), c.get('billingSession').agency))
     } catch (e) {
       return fail(c, e)
     }
@@ -192,7 +192,7 @@ billing.post(
     const svc = new BillingService(getBillingRepo(c.env))
     try {
       const body = c.req.valid('json')
-      return Res.ok(c, await svc.voidInvoice(c.req.param('id'), body?.reason))
+      return Res.ok(c, await svc.voidInvoice(c.req.param('id'), body?.reason, c.get('billingSession').agency))
     } catch (e) {
       return fail(c, e)
     }
@@ -203,7 +203,7 @@ billing.post(
 billing.post('/invoices/:id/share', billingAuth('invoices:write'), async (c) => {
   const svc = new BillingService(getBillingRepo(c.env))
   try {
-    const token = await svc.shareInvoice(c.req.param('id'))
+    const token = await svc.shareInvoice(c.req.param('id'), c.get('billingSession').agency)
     const origin = new URL(c.req.url).origin
     return Res.ok(c, { token, url: `${origin}/billing/r/${token}` })
   } catch (e) {
@@ -226,7 +226,7 @@ billing.post(
       let pkgId = packageId ?? null
       if (!pkgId && guia) pkgId = await repo.findPackageIdByToken(guia)
       if (!pkgId) return Res.err(c, 'PACKAGE_NOT_FOUND', 'No package matched the given id/guía.', 404)
-      return Res.ok(c, await svc.linkPackage(c.req.param('id'), pkgId, c.get('billingSession').email ?? 'panel'))
+      return Res.ok(c, await svc.linkPackage(c.req.param('id'), pkgId, c.get('billingSession').email ?? 'panel', c.get('billingSession').agency))
     } catch (e) {
       return fail(c, e)
     }
@@ -237,7 +237,7 @@ billing.post(
 billing.delete('/invoices/:id/packages/:packageId', billingAuth('invoices:write'), async (c) => {
   const svc = new BillingService(getBillingRepo(c.env))
   try {
-    return Res.ok(c, await svc.unlinkPackage(c.req.param('id'), c.req.param('packageId')))
+    return Res.ok(c, await svc.unlinkPackage(c.req.param('id'), c.req.param('packageId'), c.get('billingSession').agency))
   } catch (e) {
     return fail(c, e)
   }
@@ -251,7 +251,7 @@ billing.get(
   }),
   async (c) => {
     const svc = new BillingService(getBillingRepo(c.env))
-    return Res.ok(c, await svc.yearReport(c.req.valid('query').year))
+    return Res.ok(c, await svc.yearReport(c.req.valid('query').year, c.get('billingSession').agency))
   },
 )
 
@@ -268,7 +268,7 @@ billing.get(
   async (c) => {
     const svc = new BillingService(getBillingRepo(c.env))
     const { from, to } = c.req.valid('query')
-    return Res.ok(c, await svc.summary(from, to))
+    return Res.ok(c, await svc.summary(from, to, c.get('billingSession').agency))
   },
 )
 
@@ -287,7 +287,7 @@ billing.get(
   async (c) => {
     const svc = new BillingService(getBillingRepo(c.env))
     const { year, month } = c.req.valid('query')
-    return Res.ok(c, await svc.closeMonth(year, month))
+    return Res.ok(c, await svc.closeMonth(year, month, c.get('billingSession').agency))
   },
 )
 

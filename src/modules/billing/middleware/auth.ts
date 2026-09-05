@@ -30,6 +30,7 @@ export interface BillingSession {
   email: string | null
   name: string | null
   role: BillingRole
+  agency: string
 }
 
 // Permission map. `billing` is the dedicated billing role; `admin` is superuser;
@@ -98,7 +99,7 @@ export async function resolveBillingSession(env: CloudflareBindings, token: stri
   let rowsRes: Response
   try {
     rowsRes = await fetch(
-      `${apiUrl}/api/database/records/app_users?id=eq.${encodeURIComponent(user.id)}&select=role,active,name,email&limit=1`,
+      `${apiUrl}/api/database/records/app_users?id=eq.${encodeURIComponent(user.id)}&select=role,active,name,email,agency&limit=1`,
       { headers: { Authorization: `Bearer ${env.INSFORGE_API_KEY}`, 'Content-Type': 'application/json' } },
     )
   } catch {
@@ -107,7 +108,7 @@ export async function resolveBillingSession(env: CloudflareBindings, token: stri
   if (!rowsRes.ok) {
     return { ok: false, code: 'AUTH_UPSTREAM', message: `Role lookup returned ${rowsRes.status}.`, status: 503 }
   }
-  const rows = (await rowsRes.json().catch(() => [])) as Array<{ role?: string; active?: boolean; name?: string | null; email?: string | null }>
+  const rows = (await rowsRes.json().catch(() => [])) as Array<{ role?: string; active?: boolean; name?: string | null; email?: string | null; agency?: string | null }>
   const row = rows[0]
   if (!row || row.active === false) {
     return { ok: false, code: 'FORBIDDEN', message: 'Account is not an active staff member.', status: 403 }
@@ -119,7 +120,7 @@ export async function resolveBillingSession(env: CloudflareBindings, token: stri
 
   return {
     ok: true,
-    session: { userId: user.id, email: row.email ?? user.email ?? null, name: row.name ?? null, role },
+    session: { userId: user.id, email: row.email ?? user.email ?? null, name: row.name ?? null, role, agency: row.agency ?? 'hit' },
   }
 }
 

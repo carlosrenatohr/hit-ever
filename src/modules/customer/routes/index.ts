@@ -21,13 +21,14 @@ customer.get(
   zValidator('query', z.object({ search: z.string().optional(), toReview: z.enum(['true', 'false']).optional(), page: z.coerce.number().int().positive().optional(), pageSize: z.coerce.number().int().positive().max(100).optional() })),
   async (c) => {
     const query = c.req.valid('query')
+    // Tenant scope comes from the session, never from the query string.
     const svc = new CustomerService(getCustomerRepo(c.env))
-    return Res.ok(c, await svc.list({ ...query, toReview: query.toReview === undefined ? undefined : query.toReview === 'true' }))
+    return Res.ok(c, await svc.list({ ...query, toReview: query.toReview === undefined ? undefined : query.toReview === 'true', organizationId: c.get('billingSession').agency }))
   },
 )
 
 customer.get('/clients/:id', async (c) => {
-  const customer = await new CustomerService(getCustomerRepo(c.env)).get(c.req.param('id'))
+  const customer = await new CustomerService(getCustomerRepo(c.env)).get(c.req.param('id'), c.get('billingSession').agency)
   return customer ? Res.ok(c, customer) : Res.err(c, 'NOT_FOUND', 'Customer not found.', 404)
 })
 
@@ -35,7 +36,7 @@ const CUSTOMER_INPUT = z.object({ name: z.string().min(1), casillero: z.string()
 
 customer.post('/clients', billingAuth('clients:write'), zValidator('json', CUSTOMER_INPUT), async (c) => {
   try {
-    return Res.ok(c, await new CustomerService(getCustomerRepo(c.env)).create(c.req.valid('json')), undefined, 201)
+    return Res.ok(c, await new CustomerService(getCustomerRepo(c.env)).create(c.req.valid('json'), c.get('billingSession').agency), undefined, 201)
   } catch (e) {
     return fail(c, e)
   }
@@ -43,7 +44,7 @@ customer.post('/clients', billingAuth('clients:write'), zValidator('json', CUSTO
 
 customer.patch('/clients/:id', billingAuth('clients:write'), zValidator('json', CUSTOMER_INPUT.partial()), async (c) => {
   try {
-    const result = await new CustomerService(getCustomerRepo(c.env)).update(c.req.param('id'), c.req.valid('json'))
+    const result = await new CustomerService(getCustomerRepo(c.env)).update(c.req.param('id'), c.req.valid('json'), c.get('billingSession').agency)
     return result ? Res.ok(c, result) : Res.err(c, 'NOT_FOUND', 'Customer not found.', 404)
   } catch (e) {
     return fail(c, e)
