@@ -109,6 +109,14 @@ function rowToCatalog(r: PricingCatalogRow): CatalogEntry {
 
 export type Row = Record<string, unknown>
 
+/** One org rate table with its rows (config module's rate_tables/rate_rows). */
+export interface OrgRateTable {
+  id: string
+  name: string
+  freightType: FreightType
+  rows: { tier: string; price: number; cost: number | null }[]
+}
+
 export interface ExceptionRow {
   invoiceId: string
   invoiceNumber: number
@@ -126,7 +134,11 @@ export interface ExceptionsPayload {
 // ─── Port ───────────────────────────────────────────────────────────────────
 export interface BillingRepository {
   getCatalog(): Promise<CatalogEntry[]>
-  upsertClient(display: string, key: string, organizationId?: string): Promise<string>
+  /** Org rate tables + rows — the per-tenant pricing source (legacy catalog is the fallback). */
+  getOrgRates(organizationId: string): Promise<OrgRateTable[]>
+  /** The client's default rate table (billing_clients.default_rate_id), or null. */
+  getClientDefaultRateTable(clientId: string): Promise<string | null>
+  upsertClient(display: string, key: string, organizationId: string): Promise<string>
   // Import (idempotent upsert path):
   upsertInvoiceHeader(row: Row): Promise<string>
   replaceLineItems(invoiceId: string, rows: Row[]): Promise<void>
@@ -147,7 +159,7 @@ export interface BillingRepository {
   getExceptions(organizationId?: string): Promise<ExceptionsPayload>
   // Package linking:
   findPackageIdByToken(token: string, organizationId?: string): Promise<string | null>
-  linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId?: string): Promise<void>
+  linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId: string): Promise<void>
   unlinkPackage(invoiceId: string, packageId: string): Promise<void>
 }
 
@@ -205,10 +217,29 @@ export class InsforgeBillingRepo implements BillingRepository {
     return rows.map(rowToCatalog)
   }
 
-  async upsertClient(display: string, key: string, organizationId?: string): Promise<string> {
+  async getOrgRates(organizationId: string): Promise<OrgRateTable[]> {
+    type RateTableRowDb = { id: string; name: string; freight_type: string; rate_rows: { tier: string; price: number; cost: number | null }[] }
+    const rows = await this.get<RateTableRowDb>(
+      'rate_tables',
+      `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,freight_type,rate_rows(tier,price,cost)&order=name`,
+    )
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      freightType: r.freight_type as FreightType,
+      rows: r.rate_rows ?? [],
+    }))
+  }
+
+  async getClientDefaultRateTable(clientId: string): Promise<string | null> {
+    const rows = await this.get<{ default_rate_id: string | null }>('billing_clients', `id=eq.${encodeURIComponent(clientId)}&select=default_rate_id&limit=1`)
+    return rows[0]?.default_rate_id ?? null
+  }
+
+  async upsertClient(display: string, key: string, organizationId: string): Promise<string> {
     const rows = await this.post<{ id: string }>(
       'billing_clients',
-      [{ name: display, name_normalized: key, organization_id: organizationId ?? 'hit' }],
+      [{ name: display, name_normalized: key, organization_id: organizationId }],
       // Composite unique (organization_id, name_normalized) — same client name in a
       // different agency must create its own row, never merge across tenants.
       { onConflict: 'organization_id,name_normalized', representation: true },
@@ -371,10 +402,10 @@ export class InsforgeBillingRepo implements BillingRepository {
     return byTracking[0]?.id ?? null
   }
 
-  async linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId?: string): Promise<void> {
+  async linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId: string): Promise<void> {
     await this.post(
       'invoice_packages',
-      [{ invoice_id: invoiceId, package_id: packageId, source, matched_oc: matchedOc, created_by: by, organization_id: organizationId ?? 'hit' }],
+      [{ invoice_id: invoiceId, package_id: packageId, source, matched_oc: matchedOc, created_by: by, organization_id: organizationId }],
       { onConflict: 'invoice_id,package_id' },
     )
   }

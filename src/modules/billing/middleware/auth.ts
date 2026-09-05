@@ -120,7 +120,9 @@ export async function resolveBillingSession(env: CloudflareBindings, token: stri
 
   return {
     ok: true,
-    session: { userId: user.id, email: row.email ?? user.email ?? null, name: row.name ?? null, role, agency: row.agency ?? 'hit' },
+    // app_users.agency is NOT NULL FK → agencies.slug: no fallback — a missing
+    // value must surface as an error, never silently resolve to another tenant.
+    session: { userId: user.id, email: row.email ?? user.email ?? null, name: row.name ?? null, role, agency: row.agency as string },
   }
 }
 

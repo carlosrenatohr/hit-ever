@@ -344,11 +344,17 @@ export class BillingService {
     const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10)
     const fiscalYear = new Date(issueDate).getUTCFullYear()
 
-    // Price every line from the catalog (rejects an unoffered tier).
+    // Resolve the client first: its default rate table drives per-tenant pricing.
+    const { display, key } = normalizeClientName(input.clientName)
+    const clientId = await this.repo.upsertClient(display, key, organizationId)
+    const defaultRateTableId = await this.repo.getClientDefaultRateTable(clientId)
+
+    // Price every line from the org's rate tables (client default first, legacy
+    // catalog fallback); rejects a tier the org does not offer.
     const lineRows = []
     for (let i = 0; i < input.lines.length; i++) {
       const l = input.lines[i]
-      const q = await this.catalog.quote(l.freightType, l.tier, l.quantityLbs)
+      const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, defaultRateTableId)
       if (!q) throw new Error(`Tier ${l.tier} is not offered for ${l.freightType}.`)
       lineRows.push({
         line_no: i + 1,
@@ -369,8 +375,6 @@ export class BillingService {
     const total = round2(lineRows.reduce((s, r) => s + r.total, 0))
     const profit = round2(lineRows.reduce((s, r) => s + r.profit, 0))
 
-    const { display, key } = normalizeClientName(input.clientName)
-    const clientId = await this.repo.upsertClient(display, key, organizationId)
     const invoiceNumber = await this.repo.nextInvoiceNumber(fiscalYear, organizationId)
 
     const invoiceId = await this.repo.createInvoiceHeader({
@@ -396,7 +400,7 @@ export class BillingService {
     return (await this.get(invoiceId, organizationId))!
   }
 
-  async applyPayment(id: string, input: ApplyPaymentInput, organizationId?: string): Promise<InvoiceView> {
+  async applyPayment(id: string, input: ApplyPaymentInput, organizationId: string): Promise<InvoiceView> {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
     if (!b) throw new Error('Invoice not found.')
     if (b.header.status === 'VOID') throw new Error('Cannot pay a voided invoice.')
@@ -412,7 +416,7 @@ export class BillingService {
       paid_at: input.paidAt ?? new Date().toISOString(),
       raw: null,
       quarantined: false,
-      organization_id: organizationId ?? 'hit',
+      organization_id: organizationId,
     })
     const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
     const paidUsd = round2(b.payments.reduce((s, p) => s + (p.amount_usd || 0), 0) + (amountUsd ?? 0))
@@ -430,7 +434,7 @@ export class BillingService {
     return (await this.get(id, organizationId))!
   }
 
-  async linkPackage(id: string, packageId: string, actor: string, organizationId?: string): Promise<InvoiceView> {
+  async linkPackage(id: string, packageId: string, actor: string, organizationId: string): Promise<InvoiceView> {
     await this.repo.linkPackage(id, packageId, 'manual', null, actor, organizationId)
     const v = await this.get(id, organizationId)
     if (!v) throw new Error('Invoice not found.')

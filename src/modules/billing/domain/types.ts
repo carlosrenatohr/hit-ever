@@ -14,17 +14,12 @@ import type {
   PriceTier,
 } from './enums.js'
 
-/** One freight type's pricing, mirroring an Excel `BD` row. USD/lb. */
+/** One freight type's pricing, mirroring an Excel `BD` row. USD/lb. Tiers are the
+ * legacy global-catalog columns (now text in the DB) — the fallback source. */
 export interface CatalogEntry {
   freightType: FreightType
   cost: number
-  tiers: {
-    REGULAR: number
-    ESPECIAL: number
-    VIP: number
-    MADRES: number | null
-    DARIO: number
-  }
+  tiers: Record<string, number | null>
 }
 
 export interface BillingClient {
@@ -33,6 +28,9 @@ export interface BillingClient {
   nameNormalized: string
   casillero: string | null
   toReview: boolean
+  email: string | null
+  phone: string | null
+  address: string | null
 }
 
 export interface Payment {

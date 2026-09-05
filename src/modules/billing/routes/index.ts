@@ -11,7 +11,7 @@ import { z } from 'zod'
 import { Res } from '../../../lib/response.js'
 import { CatalogService } from '../catalog/catalog.js'
 import { margin } from '../domain/calc.js'
-import { CURRENCIES, FREIGHT_TYPES, INVOICE_STATUSES, PAYMENT_BANKS, PAYMENT_METHODS, PRICE_TIERS } from '../domain/enums.js'
+import { CURRENCIES, FREIGHT_TYPES, INVOICE_STATUSES, PAYMENT_BANKS, PAYMENT_METHODS } from '../domain/enums.js'
 import { billingAuth, type BillingEnv } from '../middleware/auth.js'
 import { getBillingRepo } from '../repo/billing-repo.js'
 import { BillingService } from '../service/billing-service.js'
@@ -59,8 +59,9 @@ billing.get('/catalog', async (c) => {
 
 /**
  * GET /api/billing/quote?freightType=AIR&tier=REGULAR&lbs=3.2
- * Dynamic price for a would-be line: unit price from the catalog, then total /
- * freight cost / profit / margin. 404 if the tier is not offered for that freight.
+ * Org-aware price for a would-be line: the session agency's rate tables (client
+ * default first, legacy catalog fallback), then total / freight cost / profit /
+ * margin. 404 if no source prices that tier for the freight.
  */
 billing.get(
   '/quote',
@@ -68,7 +69,7 @@ billing.get(
     'query',
     z.object({
       freightType: z.enum(FREIGHT_TYPES),
-      tier: z.enum(PRICE_TIERS),
+      tier: z.string().min(1),
       lbs: z.coerce.number().positive(),
     }),
     (result, c) => {
@@ -78,7 +79,7 @@ billing.get(
   async (c) => {
     const { freightType, tier, lbs } = c.req.valid('query')
     const svc = new CatalogService(getBillingRepo(c.env))
-    const q = await svc.quote(freightType, tier, lbs)
+    const q = await svc.quoteOrg(c.get('billingSession').agency, freightType, tier, lbs)
     if (!q) return Res.err(c, 'TIER_NOT_OFFERED', `Tier ${tier} is not offered for ${freightType}.`, 404)
     return Res.ok(c, { ...q, margin: margin(q.total, q.profit) })
   },
@@ -119,7 +120,7 @@ billing.get('/invoices/:id', async (c) => {
 
 const LINE_SCHEMA = z.object({
   freightType: z.enum(FREIGHT_TYPES),
-  tier: z.enum(PRICE_TIERS),
+  tier: z.string().min(1),
   quantityLbs: z.number().positive(),
   description: z.string().nullish(),
 })
