@@ -54,7 +54,7 @@ app.use(
       if (STATIC_ALLOWED_ORIGINS.has(origin) || PAGES_ORIGIN_RE.test(origin) || PANEL_ORIGIN_RE.test(origin)) return origin
       return null // not allowed → no ACAO header → browser blocks the response
     },
-    allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization'],
     maxAge: 86400,
   }),
