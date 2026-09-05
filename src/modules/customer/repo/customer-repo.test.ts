@@ -8,7 +8,7 @@ describe('InsforgeCustomerRepo', () => {
     let requested = ''
     vi.stubGlobal('fetch', async (input: Request | string) => {
       requested = typeof input === 'string' ? input : input.url
-      return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: 'A1', to_review: true }]), {
+      return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: 'A1', to_review: true, email: 'a@t.com', phone: null, address: null }]), {
         status: 200,
         headers: { 'content-range': '0-0/1' },
       })
@@ -19,19 +19,19 @@ describe('InsforgeCustomerRepo', () => {
     expect(requested).toContain('/api/database/records/billing_clients?')
     expect(requested).toContain('organization_id=eq.hit')
     expect(requested).toContain('name=ilike.*Ana*')
-    expect(result).toEqual({ rows: [{ id: 'c1', name: 'Ana', nameNormalized: 'ana', casillero: 'A1', toReview: true }], count: 1 })
+    expect(result).toEqual({ rows: [{ id: 'c1', name: 'Ana', nameNormalized: 'ana', casillero: 'A1', toReview: true, email: 'a@t.com', phone: null, address: null }], count: 1 })
   })
 
   it('creates a billing_clients row using the canonical snake_case columns', async () => {
     let body = ''
     vi.stubGlobal('fetch', async (_input: Request | string, init?: RequestInit) => {
       body = String(init?.body ?? '')
-      return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false }]), { status: 201 })
+      return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false, email: null, phone: null, address: null }]), { status: 201 })
     })
 
-    const result = await new InsforgeCustomerRepo('https://db.test', 'key').create({ organizationId: 'hit', name: 'Ana', nameNormalized: 'ana', casillero: null, toReview: false })
+    const result = await new InsforgeCustomerRepo('https://db.test', 'key').create({ organizationId: 'hit', name: 'Ana', nameNormalized: 'ana', casillero: null, toReview: false, email: null, phone: null, address: null })
 
-    expect(JSON.parse(body)).toEqual([{ organization_id: 'hit', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false }])
+    expect(JSON.parse(body)).toEqual([{ organization_id: 'hit', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false, email: null, phone: null, address: null }])
     expect(result.id).toBe('c1')
   })
 })

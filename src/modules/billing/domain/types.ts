@@ -28,6 +28,9 @@ export interface BillingClient {
   nameNormalized: string
   casillero: string | null
   toReview: boolean
+  email: string | null
+  phone: string | null
+  address: string | null
 }
 
 export interface Payment {

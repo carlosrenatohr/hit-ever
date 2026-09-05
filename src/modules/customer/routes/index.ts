@@ -32,7 +32,14 @@ customer.get('/clients/:id', async (c) => {
   return customer ? Res.ok(c, customer) : Res.err(c, 'NOT_FOUND', 'Customer not found.', 404)
 })
 
-const CUSTOMER_INPUT = z.object({ name: z.string().min(1), casillero: z.string().nullish(), toReview: z.boolean().optional() })
+const CUSTOMER_INPUT = z.object({
+  name: z.string().min(1),
+  casillero: z.string().nullish(),
+  toReview: z.boolean().optional(),
+  email: z.string().email().nullish(),
+  phone: z.string().max(40).nullish(),
+  address: z.string().max(300).nullish(),
+})
 
 customer.post('/clients', billingAuth('clients:write'), zValidator('json', CUSTOMER_INPUT), async (c) => {
   try {
