@@ -23,8 +23,7 @@ on conflict (slug) do nothing;
 -- GC is currently assigned to 'hit'. Reassign so the demo agency has its own
 -- provider. This is a temporary 1:N mapping; T5 will create provider_agencies.
 update providers
-set organization_id = 'solo-guegue',
-    updated_at = now()
+set organization_id = 'solo-guegue'
 where code = 'global_connection';
 
 -- ─── 3. Rate tables — one per freight type, REGULAR tier only ────────────────
