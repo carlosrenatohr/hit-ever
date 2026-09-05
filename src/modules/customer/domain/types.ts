@@ -10,7 +10,7 @@ export interface CustomerListFilter {
   pageSize?: number
 }
 
-export interface CreateCustomerInput {
+export interface CreateCustomerInput extends CustomerRateDefaults {
   name: string
   casillero?: string | null
   toReview?: boolean
@@ -19,7 +19,7 @@ export interface CreateCustomerInput {
   address?: string | null
 }
 
-export interface UpdateCustomerInput {
+export interface UpdateCustomerInput extends CustomerRateDefaults {
   name?: string
   casillero?: string | null
   toReview?: boolean
@@ -31,4 +31,9 @@ export interface UpdateCustomerInput {
 export interface CustomerPage {
   rows: Customer[]
   count: number
+}
+
+export interface CustomerRateDefaults {
+  /** Default rate table for this client (preselects pricing on future invoices). */
+  defaultRateTableId?: string | null
 }

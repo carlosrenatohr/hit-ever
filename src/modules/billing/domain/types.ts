@@ -31,6 +31,8 @@ export interface BillingClient {
   email: string | null
   phone: string | null
   address: string | null
+  /** Default rate table for this client (preselects pricing on their next invoice). */
+  defaultRateId: string | null
 }
 
 export interface Payment {

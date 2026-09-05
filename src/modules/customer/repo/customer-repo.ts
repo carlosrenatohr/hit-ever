@@ -11,13 +11,14 @@ interface BillingClientDbRow {
   email: string | null
   phone: string | null
   address: string | null
+  default_rate_id: string | null
 }
 
 export interface CustomerRepository {
   list(filter: CustomerListFilter): Promise<CustomerPage>
   get(id: string, organizationId?: string): Promise<BillingClient | null>
   create(input: { organizationId: string; name: string; nameNormalized: string; casillero: string | null; toReview: boolean; email: string | null; phone: string | null; address: string | null }): Promise<BillingClient>
-  update(id: string, input: { name?: string; nameNormalized?: string; casillero?: string | null; toReview?: boolean; email?: string | null; phone?: string | null; address?: string | null }, organizationId?: string): Promise<BillingClient | null>
+  update(id: string, input: { name?: string; nameNormalized?: string; casillero?: string | null; toReview?: boolean; email?: string | null; phone?: string | null; address?: string | null; defaultRateId?: string | null }, organizationId?: string): Promise<BillingClient | null>
 }
 
 function toDomain(row: BillingClientDbRow): BillingClient {
@@ -30,6 +31,7 @@ function toDomain(row: BillingClientDbRow): BillingClient {
     email: row.email ?? null,
     phone: row.phone ?? null,
     address: row.address ?? null,
+    defaultRateId: row.default_rate_id ?? null,
   }
 }
 
@@ -85,7 +87,7 @@ export class InsforgeCustomerRepo implements CustomerRepository {
   async list(filter: CustomerListFilter): Promise<CustomerPage> {
     const page = Math.max(1, filter.page ?? 1)
     const pageSize = Math.min(100, Math.max(1, filter.pageSize ?? 25))
-    const parts = ['select=id,name,name_normalized,casillero,to_review,email,phone,address', 'order=name.asc']
+    const parts = ['select=id,name,name_normalized,casillero,to_review,email,phone,address,default_rate_id', 'order=name.asc']
     parts.push(`organization_id=eq.${encodeURIComponent(filter.organizationId)}`)
     if (filter.search) {
       const search = filter.search.replace(/[(),*]/g, '')
@@ -99,11 +101,11 @@ export class InsforgeCustomerRepo implements CustomerRepository {
 
   async get(id: string, organizationId?: string): Promise<BillingClient | null> {
     const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
-    const rows = await this.fetchRows<BillingClientDbRow>(`id=eq.${encodeURIComponent(id)}${orgFilter}&select=id,name,name_normalized,casillero,to_review,email,phone,address&limit=1`)
+    const rows = await this.fetchRows<BillingClientDbRow>(`id=eq.${encodeURIComponent(id)}${orgFilter}&select=id,name,name_normalized,casillero,to_review,email,phone,address,default_rate_id&limit=1`)
     return rows[0] ? toDomain(rows[0]) : null
   }
 
-  async create(input: { organizationId: string; name: string; nameNormalized: string; casillero: string | null; toReview: boolean; email: string | null; phone: string | null; address: string | null }): Promise<BillingClient> {
+  async create(input: { organizationId: string; name: string; nameNormalized: string; casillero: string | null; toReview: boolean; email: string | null; phone: string | null; address: string | null; defaultRateId?: string | null }): Promise<BillingClient> {
     const row = await this.post<BillingClientDbRow>({
       organization_id: input.organizationId,
       name: input.name,
@@ -113,6 +115,7 @@ export class InsforgeCustomerRepo implements CustomerRepository {
       email: input.email,
       phone: input.phone,
       address: input.address,
+      default_rate_id: input.defaultRateId ?? null,
     })
     return toDomain(row)
   }
@@ -126,6 +129,7 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     if (input.email !== undefined) row.email = input.email
     if (input.phone !== undefined) row.phone = input.phone
     if (input.address !== undefined) row.address = input.address
+    if (input.defaultRateId !== undefined) row.default_rate_id = input.defaultRateId
     row.updated_at = new Date().toISOString()
     const updated = await this.patch(id, row, organizationId)
     return updated ? toDomain(updated) : null

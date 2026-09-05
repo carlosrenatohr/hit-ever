@@ -119,6 +119,12 @@ billing.get('/invoices/:id', async (c) => {
   return Res.ok(c, view)
 })
 
+/** GET /api/billing/invoices/:id/events — linear action history (org-scoped). */
+billing.get('/invoices/:id/events', async (c) => {
+  const svc = new BillingService(getBillingRepo(c.env))
+  return Res.ok(c, { events: await svc.events(c.req.param('id'), c.get('billingSession').agency) })
+})
+
 const LINE_SCHEMA = z.object({
   freightType: z.enum(FREIGHT_TYPES),
   tier: z.string().min(1),
@@ -201,7 +207,7 @@ billing.post(
       if (input.bank && banks.length > 0 && !banks.some((b) => b.active && b.name === input.bank)) {
         return Res.err(c, 'INVALID_REQUEST', `El banco "${input.bank}" no está disponible para esta agencia.`, 422)
       }
-      return Res.ok(c, await svc.applyPayment(c.req.param('id'), input, agency))
+      return Res.ok(c, await svc.applyPayment(c.req.param('id'), input, agency, c.get('billingSession').email ?? 'panel'))
     } catch (e) {
       return fail(c, e)
     }

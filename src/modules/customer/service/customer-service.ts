@@ -31,6 +31,7 @@ export class CustomerService {
       email: input.email?.trim() || null,
       phone: input.phone?.trim() || null,
       address: input.address?.trim() || null,
+      defaultRateId: input.defaultRateTableId ?? null,
     })
   }
 
@@ -46,6 +47,7 @@ export class CustomerService {
     if (input.email !== undefined) patch.email = input.email?.trim() || null
     if (input.phone !== undefined) patch.phone = input.phone?.trim() || null
     if (input.address !== undefined) patch.address = input.address?.trim() || null
+    if (input.defaultRateTableId !== undefined) patch.defaultRateId = input.defaultRateTableId
     return this.repo.update(id, patch, organizationId)
   }
 }
