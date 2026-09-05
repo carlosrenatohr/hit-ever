@@ -400,7 +400,7 @@ export class BillingService {
     return (await this.get(invoiceId, organizationId))!
   }
 
-  async applyPayment(id: string, input: ApplyPaymentInput, organizationId?: string): Promise<InvoiceView> {
+  async applyPayment(id: string, input: ApplyPaymentInput, organizationId: string): Promise<InvoiceView> {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
     if (!b) throw new Error('Invoice not found.')
     if (b.header.status === 'VOID') throw new Error('Cannot pay a voided invoice.')
@@ -416,7 +416,7 @@ export class BillingService {
       paid_at: input.paidAt ?? new Date().toISOString(),
       raw: null,
       quarantined: false,
-      organization_id: organizationId ?? 'hit',
+      organization_id: organizationId,
     })
     const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
     const paidUsd = round2(b.payments.reduce((s, p) => s + (p.amount_usd || 0), 0) + (amountUsd ?? 0))
@@ -434,7 +434,7 @@ export class BillingService {
     return (await this.get(id, organizationId))!
   }
 
-  async linkPackage(id: string, packageId: string, actor: string, organizationId?: string): Promise<InvoiceView> {
+  async linkPackage(id: string, packageId: string, actor: string, organizationId: string): Promise<InvoiceView> {
     await this.repo.linkPackage(id, packageId, 'manual', null, actor, organizationId)
     const v = await this.get(id, organizationId)
     if (!v) throw new Error('Invoice not found.')

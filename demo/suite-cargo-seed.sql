@@ -1,6 +1,11 @@
 -- ============================================================================
--- Suite Cargo — demo dataset (fictional company)
+-- Suite Cargo — demo dataset (fictional company) — DEPRECATED
 -- ============================================================================
+-- DEPRECATED (2026-09-04, T32): the suite_demo provider is set active=false in
+-- migration 20260904130000 and its junction link to the suite agency was removed
+-- (20260904080000). Suite Cargo prices via global_connection like every other
+-- agency. This seed stays for the historical fixtures only — do not build on it.
+--
 -- Idempotent seed for the demo: a complete, realistic-looking dataset for a
 -- fictional freight forwarder ("Suite Cargo") living alongside the real HIT data
 -- in the same InsForge project. Re-runnable: every INSERT uses deterministic

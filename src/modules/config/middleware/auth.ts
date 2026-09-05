@@ -114,7 +114,9 @@ export async function resolveConfigSession(env: CloudflareBindings, token: strin
       email: row.email ?? user.email ?? null,
       name: row.name ?? null,
       role,
-      agency: row.agency ?? 'hit',
+      // app_users.agency is NOT NULL FK → agencies.slug: no fallback — a missing
+      // value must surface as an error, never silently resolve to another tenant.
+      agency: row.agency as string,
     },
   }
 }
