@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { InvoiceBundle } from '../repo/billing-repo.js'
 import type { BillingRepository } from '../repo/billing-repo.js'
 import { aggregateClose, aggregateYear, BillingService, computeStatus, paymentUsd, toView } from './billing-service.js'
@@ -99,5 +99,50 @@ describe('aggregateYear', () => {
     expect(r.byMonth[0]).toEqual({ month: 1, revenue: 32.5, profit: 10, invoices: 1 })
     expect(r.byMonth[2]).toEqual({ month: 3, revenue: 20, profit: 8, invoices: 1 })
     expect(r.byFreight.AIR.revenue).toBe(32.5)
+  })
+})
+
+describe('createInvoice — package links', () => {
+  function repoForPackages(belongs: boolean) {
+    const bundle: InvoiceBundle = {
+      header: {
+        id: 'i1', invoice_number: 1, fiscal_year: 2026, client_id: null, client_name_raw: 'Ana',
+        issue_date: '2026-09-05', status: 'ISSUED', address: null, special_price: false, observations: null,
+        tracking_orders: [], agent_id: null, created_at: '', updated_at: '', total: 7, profit: 2.5, paid_usd: 0,
+      } as InvoiceBundle['header'],
+      lines: [{ id: 'l1', invoice_id: 'i1', line_no: 1, description: null, freight_type: 'AIR', quantity_lbs: 1, unit: 'lbs', unit_price: 7, total: 7, list_price: null, freight_cost: 4.5, profit: 2.5, price_tier: 'REGULAR', price_off_catalog: false }] as InvoiceBundle['lines'],
+      payments: [],
+      packages: [{ id: 'lk1', invoice_id: 'i1', package_id: 'pkg-1', source: 'manual', matched_oc: null }],
+    }
+    const insertPackageEvent = vi.fn(async () => {})
+    const repo = {
+      getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5 }] }],
+      upsertClient: async () => 'c1',
+      getClientDefaultRateTable: async () => null,
+      packageBelongsToOrg: async () => belongs,
+      nextInvoiceNumber: async () => 1,
+      createInvoiceHeader: async () => 'i1',
+      insertLineItems: async () => {},
+      linkPackage: async () => {},
+      insertPackageEvent,
+      getInvoiceBundle: async () => bundle,
+    } as unknown as BillingRepository
+    return { repo, insertPackageEvent }
+  }
+
+  it('rejects a package that does not belong to the agency (no writes)', async () => {
+    const { repo, insertPackageEvent } = repoForPackages(false)
+    const svc = new BillingService(repo)
+    await expect(
+      svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], packageIds: ['pkg-1'] }, 'tester', 'solo-guegue'),
+    ).rejects.toThrow(/not found in your agency/)
+    expect(insertPackageEvent).not.toHaveBeenCalled()
+  })
+
+  it('stamps the package history with the invoice number on success', async () => {
+    const { repo, insertPackageEvent } = repoForPackages(true)
+    const svc = new BillingService(repo)
+    await svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], packageIds: ['pkg-1'] }, 'tester', 'solo-guegue')
+    expect(insertPackageEvent).toHaveBeenCalledWith('pkg-1', 'Factura #1 generada', expect.any(String))
   })
 })

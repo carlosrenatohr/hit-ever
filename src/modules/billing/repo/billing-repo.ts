@@ -158,6 +158,9 @@ export interface BillingRepository {
   // Exception queue (import + ongoing data-quality flags):
   getExceptions(organizationId?: string): Promise<ExceptionsPayload>
   // Package linking:
+  packageBelongsToOrg(packageId: string, organizationId: string): Promise<boolean>
+  /** Append a panel-sourced entry to the package's event history (e.g. invoice generated). */
+  insertPackageEvent(packageId: string, description: string, occurredAt: string): Promise<void>
   findPackageIdByToken(token: string, organizationId?: string): Promise<string | null>
   linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId: string): Promise<void>
   unlinkPackage(invoiceId: string, packageId: string): Promise<void>
@@ -391,6 +394,15 @@ export class InsforgeBillingRepo implements BillingRepository {
         .map((i) => ({ invoiceId: i.id, invoiceNumber: i.invoice_number, fiscalYear: i.fiscal_year, client: i.client_name_raw ?? null, detail: (i.tracking_orders ?? []).join(', ') })),
       clientsToReview: clients.map((c) => ({ id: c.id, name: c.name })),
     }
+  }
+
+  async packageBelongsToOrg(packageId: string, organizationId: string): Promise<boolean> {
+    const rows = await this.get<{ id: string }>('packages', `id=eq.${encodeURIComponent(packageId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=id&limit=1`)
+    return rows.length > 0
+  }
+
+  async insertPackageEvent(packageId: string, description: string, occurredAt: string): Promise<void> {
+    await this.post('events', [{ package_id: packageId, occurred_at: occurredAt, office: null, description, status: null, source: 'panel' }])
   }
 
   async findPackageIdByToken(token: string, organizationId?: string): Promise<string | null> {
