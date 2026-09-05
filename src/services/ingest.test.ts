@@ -24,10 +24,10 @@ function makeList(overrides: Partial<ListRow> = {}): ListRow {
 }
 
 describe('toPackageRow fallback chain', () => {
-  const PROVIDER_CODE = 'everest'
+  const ORG = 'hit'
 
   it('uses list.weightLb when both list and detail have it', () => {
-    const row = toPackageRow(PROVIDER_ID, PROVIDER_CODE, BASE_URL, '123456',
+    const row = toPackageRow(PROVIDER_ID, ORG, BASE_URL, '123456',
       makeList({ weightLb: 5.0 }),
       makeDetail({ weightLb: 3.0 }),
     )
@@ -35,7 +35,7 @@ describe('toPackageRow fallback chain', () => {
   })
 
   it('falls back to detail.weightLb when list has no weight', () => {
-    const row = toPackageRow(PROVIDER_ID, PROVIDER_CODE, BASE_URL, '123456',
+    const row = toPackageRow(PROVIDER_ID, ORG, BASE_URL, '123456',
       makeList({ weightLb: undefined }),
       makeDetail({ weightLb: 2.8 }),
     )
@@ -43,7 +43,7 @@ describe('toPackageRow fallback chain', () => {
   })
 
   it('returns null when neither list nor detail has weight', () => {
-    const row = toPackageRow(PROVIDER_ID, PROVIDER_CODE, BASE_URL, '123456',
+    const row = toPackageRow(PROVIDER_ID, ORG, BASE_URL, '123456',
       makeList({ weightLb: undefined }),
       makeDetail({ weightLb: undefined }),
     )
@@ -51,7 +51,7 @@ describe('toPackageRow fallback chain', () => {
   })
 
   it('uses list.volumeCf when both list and detail have it', () => {
-    const row = toPackageRow(PROVIDER_ID, PROVIDER_CODE, BASE_URL, '123456',
+    const row = toPackageRow(PROVIDER_ID, ORG, BASE_URL, '123456',
       makeList({ volumeCf: 1.0 }),
       makeDetail({ volumeCf: 0.5 }),
     )
@@ -59,7 +59,7 @@ describe('toPackageRow fallback chain', () => {
   })
 
   it('falls back to detail.volumeCf when list has no volume', () => {
-    const row = toPackageRow(PROVIDER_ID, PROVIDER_CODE, BASE_URL, '123456',
+    const row = toPackageRow(PROVIDER_ID, ORG, BASE_URL, '123456',
       makeList({ volumeCf: undefined }),
       makeDetail({ volumeCf: 0.481 }),
     )
@@ -67,7 +67,7 @@ describe('toPackageRow fallback chain', () => {
   })
 
   it('uses list.pieces when both list and detail have it', () => {
-    const row = toPackageRow(PROVIDER_ID, PROVIDER_CODE, BASE_URL, '123456',
+    const row = toPackageRow(PROVIDER_ID, ORG, BASE_URL, '123456',
       makeList({ pieces: 2 }),
       makeDetail({ pieces: 1 }),
     )
@@ -75,30 +75,15 @@ describe('toPackageRow fallback chain', () => {
   })
 
   it('falls back to detail.pieces when list has no pieces', () => {
-    const row = toPackageRow(PROVIDER_ID, PROVIDER_CODE, BASE_URL, '123456',
+    const row = toPackageRow(PROVIDER_ID, ORG, BASE_URL, '123456',
       makeList({ pieces: undefined }),
       makeDetail({ pieces: 3 }),
     )
     expect(row.pieces).toBe(3)
   })
 
-  it('sets organization_id to the tenant for the provider', () => {
-    const row = toPackageRow(PROVIDER_ID, 'everest', BASE_URL, '123456')
-    expect(row.organization_id).toBe('hit')
-  })
-
-  it('defaults to hit tenant for unknown providers', () => {
-    const row = toPackageRow(PROVIDER_ID, 'unknown', BASE_URL, '123456')
-    expect(row.organization_id).toBe('hit')
-  })
-
-  it('maps global_connection to hit tenant (GC is HITs account)', () => {
-    const row = toPackageRow(PROVIDER_ID, 'global_connection', BASE_URL, '123456')
-    expect(row.organization_id).toBe('hit')
-  })
-
-  it('maps suite_demo to suite tenant', () => {
-    const row = toPackageRow(PROVIDER_ID, 'suite_demo', BASE_URL, '123456')
-    expect(row.organization_id).toBe('suite')
+  it('stamps the organization_id resolved by the caller (no hardcoded fallback)', () => {
+    const row = toPackageRow(PROVIDER_ID, 'solo-guegue', BASE_URL, '123456')
+    expect(row.organization_id).toBe('solo-guegue')
   })
 })

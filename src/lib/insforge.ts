@@ -187,6 +187,11 @@ export class InsforgeClient implements TrackingRepository {
     }))
   }
 
+  async getProviderAgencies(): Promise<{ providerId: string; agencySlug: string }[]> {
+    const rows = await this.get<{ provider_id: string; agency_slug: string }>('provider_agencies', 'select=provider_id,agency_slug')
+    return rows.map((r) => ({ providerId: r.provider_id, agencySlug: r.agency_slug }))
+  }
+
   /** Upsert a package (conflict on provider_id, almacen_id). Returns its id. */
   async upsertPackage(pkg: Record<string, unknown>): Promise<string | null> {
     const rows = await this.upsertPackages([pkg])
