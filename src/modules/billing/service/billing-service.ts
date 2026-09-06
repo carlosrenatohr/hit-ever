@@ -9,6 +9,7 @@
 import { CatalogService } from '../catalog/catalog.js'
 import { margin, round2 } from '../domain/calc.js'
 import type { Currency, FreightType, InvoiceStatus, PaymentBank, PaymentMethod, PriceTier } from '../domain/enums.js'
+import { SERVICE_TYPE_TO_FREIGHT } from '../domain/enums.js'
 import { normalizeClientName } from '../ingest/normalize/client.js'
 import type { BillingRepository, ExceptionsPayload, InvoiceBundle } from '../repo/billing-repo.js'
 
@@ -642,5 +643,179 @@ export class BillingService {
       paidUsd,
       outstanding: outstandingOf(b.header.status, total, paidUsd),
     }
+  }
+
+  // ─── Bulk invoicing (from Paquetería) ────────────────────────────────────────
+
+  /**
+   * Preview: validate + price a batch of packages before creating the invoice.
+   * All packages must be in the same org, have an invoiceable status
+   * (en_destino | entregado), and belong to one client (resolved from
+   * client_id, falling back to referencia_name). Returns one priced line per
+   * package with the snapshot data needed for the bulk create.
+   */
+  async previewBulkPackages(
+    packageIds: string[],
+    organizationId: string,
+  ): Promise<{
+    clientName: string
+    clientId: string | null
+    lines: Array<{
+      packageId: string
+      guia: string
+      tracking: string | null
+      serviceType: string | null
+      freightType: FreightType
+      weightLb: number | null
+      tier: string
+      unitPrice: number
+      total: number
+      freightCost: number
+      profit: number
+    }>
+    total: number
+    profit: number
+  }> {
+    if (!packageIds.length) throw new Error('No packages selected.')
+    if (packageIds.length > 100) throw new Error('Too many packages (max 100).')
+
+    const pkgs = await this.repo.getPackagesForBulk(packageIds, organizationId)
+    if (pkgs.length === 0) throw new Error('No packages found in your agency.')
+
+    // Validate: all invoiceable (en_destino | entregado)
+    const invoiceable = new Set(['en_destino', 'entregado'])
+    const bad = pkgs.filter((p) => !invoiceable.has(p.effective_status))
+    if (bad.length) {
+      throw new Error(`${bad.length} package(s) are not invoiceable (must be en destino or entregado).`)
+    }
+
+    // Resolve client: prefer client_id (UUID) + referencia_name (display).
+    // All packages must belong to one client.
+    let clientName: string | null = null
+    let clientId: string | null = null
+    for (const p of pkgs) {
+      const name = (p.referencia_name ?? '').trim() || null
+      if (clientId && p.client_id && p.client_id !== clientId) {
+        throw new Error('Packages belong to different clients — select one client at a time.')
+      }
+      if (clientName && name && name !== clientName && !p.client_id) {
+        throw new Error('Packages belong to different clients — select one client at a time.')
+      }
+      if (p.client_id) clientId = p.client_id
+      if (name) clientName = name
+    }
+    if (!clientName && !clientId) {
+      throw new Error('Packages have no client assigned — assign a client first.')
+    }
+
+    // Get the client's default rate table (if we have a clientId).
+    const defaultRateTableId = clientId ? await this.repo.getClientDefaultRateTable(clientId) : null
+
+    // Price each line (one line per package, freight from service_type, tier = REGULAR).
+    const lines: Array<{
+      packageId: string; guia: string; tracking: string | null; serviceType: string | null
+      freightType: FreightType; weightLb: number | null; tier: string
+      unitPrice: number; total: number; freightCost: number; profit: number
+    }> = []
+    for (const p of pkgs) {
+      const freightType = SERVICE_TYPE_TO_FREIGHT[p.service_type ?? ''] ?? 'AIR'
+      const weightLb = p.weight_lb ?? 1 // minimum 1 lb for pricing
+      const q = await this.catalog.quoteOrg(organizationId, freightType, 'REGULAR', weightLb, defaultRateTableId)
+      lines.push({
+        packageId: p.id,
+        guia: p.almacen_id,
+        tracking: p.tracking_number,
+        serviceType: p.service_type,
+        freightType,
+        weightLb: p.weight_lb,
+        tier: 'REGULAR',
+        unitPrice: q ? round2(q.unitPrice) : 0,
+        total: q ? round2(q.total) : 0,
+        freightCost: q ? round2(q.freightCost) : 0,
+        profit: q ? round2(q.profit) : 0,
+      })
+    }
+
+    const total = round2(lines.reduce((s, l) => s + l.total, 0))
+    const profit = round2(lines.reduce((s, l) => s + l.profit, 0))
+    return { clientName: clientName ?? clientId!, clientId, lines, total, profit }
+  }
+
+  /**
+   * Create: atomically build a DRAFT invoice from bulk-selected packages.
+   * Snapshots each package's guide + tracking into the line item so the
+   * invoice stays readable even if the package row changes. Links all
+   * packages and emits timeline events.
+   */
+  async createBulkInvoice(
+    input: { clientName: string; packageIds: string[]; observations?: string | null; issueDate?: string | null },
+    actor: string,
+    organizationId: string = 'hit',
+  ): Promise<InvoiceView> {
+    if (!input.packageIds?.length) throw new Error('No packages selected.')
+
+    // Re-validate + price via the preview path (single source of truth).
+    const preview = await this.previewBulkPackages(input.packageIds, organizationId)
+
+    const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10)
+    const fiscalYear = new Date(issueDate).getUTCFullYear()
+    const clientId = await this.repo.upsertClient(preview.clientName, preview.clientName.toLowerCase(), organizationId)
+    const invoiceNumber = await this.repo.nextInvoiceNumber(fiscalYear, organizationId)
+
+    // Build line rows — one freight line per package with snapshots.
+    const lineRows = preview.lines.map((l, i) => ({
+      line_no: i + 1,
+      description: `${l.serviceType ?? 'paquete'} — ${l.guia}`,
+      freight_type: l.freightType,
+      line_type: 'freight',
+      concept_id: null,
+      quantity_lbs: l.weightLb ?? 1,
+      unit: 'lbs',
+      unit_price: l.unitPrice,
+      total: l.total,
+      list_price: null,
+      freight_cost: l.freightCost,
+      profit: l.profit,
+      price_tier: l.tier,
+      price_off_catalog: l.unitPrice === 0,
+      package_id: l.packageId,
+      package_guia: l.guia,
+      package_tracking: l.tracking,
+      organization_id: organizationId,
+    }))
+
+    const total = round2(lineRows.reduce((s, r) => s + r.total, 0))
+    const profit = round2(lineRows.reduce((s, r) => s + r.profit, 0))
+
+    // Create as DRAFT (stays open until closeInvoice is called).
+    const invoiceId = await this.repo.createInvoiceHeader({
+      organization_id: organizationId,
+      invoice_number: invoiceNumber,
+      fiscal_year: fiscalYear,
+      client_id: clientId,
+      client_name_raw: preview.clientName,
+      issue_date: issueDate,
+      status: 'DRAFT',
+      closed_at: null,
+      closed_by: null,
+      address: null,
+      special_price: false,
+      observations: input.observations ?? null,
+      tracking_orders: [],
+      total,
+      profit,
+      paid_usd: 0,
+    })
+
+    await this.repo.insertLineItems(invoiceId, lineRows)
+
+    // Link every package + emit timeline events.
+    for (const pkgId of input.packageIds) {
+      await this.repo.linkPackage(invoiceId, pkgId, 'manual', null, actor, organizationId)
+      await this.repo.insertPackageEvent(pkgId, `Factura #${invoiceNumber} generada`, new Date().toISOString())
+    }
+
+    await this.repo.insertInvoiceEvent(invoiceId, organizationId, 'Factura generada', `Bulk: ${input.packageIds.length} paquetes, total ${total.toFixed(2)} USD`, actor)
+    return (await this.get(invoiceId, organizationId))!
   }
 }
