@@ -10,6 +10,8 @@ import { CatalogService } from '../catalog/catalog.js'
 import { margin, round2 } from '../domain/calc.js'
 import type { Currency, FreightType, InvoiceStatus, PaymentBank, PaymentMethod, PriceTier } from '../domain/enums.js'
 import { SERVICE_TYPE_TO_FREIGHT } from '../domain/enums.js'
+import { computeAmountsByModel } from '../domain/calc.js'
+import type { PriceModel } from '../domain/calc.js'
 import { normalizeClientName } from '../ingest/normalize/client.js'
 import type { BillingRepository, ExceptionsPayload, InvoiceBundle } from '../repo/billing-repo.js'
 
@@ -720,8 +722,12 @@ export class BillingService {
     for (const p of pkgs) {
       const freightType = SERVICE_TYPE_TO_FREIGHT[p.service_type ?? ''] ?? 'AIR'
       const weightLb = p.weight_lb ?? 1 // minimum 1 lb for pricing
-      const q = await this.catalog.quoteOrg(organizationId, freightType, 'REGULAR', weightLb, defaultRateTableId)
-      lines.push({
+    const tables = await this.repo.getOrgRates(organizationId)
+    const q = await this.catalog.quoteOrg(organizationId, freightType, 'REGULAR', weightLb, defaultRateTableId)
+    // Resolve priceModel from the rate table row (weight by default).
+    const rateRow = tables.find((t) => t.freightType === freightType)?.rows.find((r) => r.tier === 'REGULAR')
+    const priceModel: PriceModel = (rateRow?.priceModel ?? 'weight') as PriceModel
+    lines.push({
         packageId: p.id,
         guia: p.almacen_id,
         tracking: p.tracking_number,
@@ -733,6 +739,7 @@ export class BillingService {
         total: q ? round2(q.total) : 0,
         freightCost: q ? round2(q.freightCost) : 0,
         profit: q ? round2(q.profit) : 0,
+        priceModel,
       })
     }
 

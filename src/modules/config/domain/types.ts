@@ -14,10 +14,13 @@ export interface Agency {
   logoKey: string | null
 }
 
+export type PriceModel = 'weight' | 'volume' | 'fixed'
+
 export interface RateRow {
   tier: PriceTier
   price: number
   cost: number
+  priceModel: PriceModel
 }
 
 export interface RateTable {

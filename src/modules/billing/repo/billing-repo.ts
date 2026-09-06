@@ -132,7 +132,7 @@ export interface OrgRateTable {
   id: string
   name: string
   freightType: FreightType
-  rows: { tier: string; price: number; cost: number | null }[]
+  rows: { tier: string; price: number; cost: number | null; priceModel: string }[]
 }
 
 /** Row returned by getPackagesForBulk — the subset of package fields needed to price + link. */
@@ -279,10 +279,10 @@ export class InsforgeBillingRepo implements BillingRepository {
   }
 
   async getOrgRates(organizationId: string): Promise<OrgRateTable[]> {
-    type RateTableRowDb = { id: string; name: string; freight_type: string; rate_rows: { tier: string; price: number; cost: number | null }[] }
+    type RateTableRowDb = { id: string; name: string; freight_type: string; rate_rows: { tier: string; price: number; cost: number | null; price_model: string }[] }
     const rows = await this.get<RateTableRowDb>(
       'rate_tables',
-      `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,freight_type,rate_rows(tier,price,cost)&order=name`,
+      `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,freight_type,rate_rows(tier,price,cost,price_model)&order=name`,
     )
     return rows.map((r) => ({
       id: r.id,

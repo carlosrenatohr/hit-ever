@@ -116,7 +116,7 @@ describe('createInvoice — package links', () => {
     }
     const insertPackageEvent = vi.fn(async () => {})
     const repo = {
-      getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5 }] }],
+      getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] }],
       upsertClient: async () => 'c1',
       getClientDefaultRateTable: async () => null,
       packageBelongsToOrg: async () => belongs,
@@ -163,7 +163,7 @@ describe('createInvoice — other charges', () => {
     }
     const insertLineItems = vi.fn(async () => {})
     const repo = {
-      getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5 }] }],
+      getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] }],
       upsertClient: async () => 'c1',
       getClientDefaultRateTable: async () => null,
       conceptBelongsToOrg: async () => conceptInOrg,
@@ -294,7 +294,7 @@ describe('createInvoice — initial lock state', () => {
   function captureHeader() {
     const createInvoiceHeader = vi.fn(async () => 'i1')
     const repo = {
-      getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5 }] }],
+      getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] }],
       upsertClient: async () => 'c1',
       getClientDefaultRateTable: async () => null,
       nextInvoiceNumber: async () => 1,
@@ -343,7 +343,7 @@ function bulkRepo(pkgs: Array<{ id: string; almacen_id: string; effective_status
   const repo = {
     getPackagesForBulk: async () => pkgs.map((p) => ({ ...p, organization_id: 'hit', tracking_number: null })),
     getClientDefaultRateTable: async () => defaultRateTableId,
-    getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5 }] }],
+    getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] }],
     upsertClient: async () => 'c1',
     nextInvoiceNumber: async () => 1,
     createInvoiceHeader,

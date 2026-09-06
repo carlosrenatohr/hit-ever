@@ -23,7 +23,7 @@ function stubAuthAndDb(opts: { packages?: unknown[]; rates?: unknown[]; methods?
     calls.push({ method, url, body: typeof init?.body === 'string' ? init.body : undefined })
     if (method === 'GET' && url.includes('/records/packages?')) return new Response(JSON.stringify(opts.packages ?? []), { status: 200 })
     if (method === 'GET' && url.includes('/records/billing_clients?')) return new Response(JSON.stringify([{ default_rate_id: null }]), { status: 200 })
-    if (method === 'GET' && url.includes('/records/rate_tables?')) return new Response(JSON.stringify([{ id: 't1', name: 'Estándar', freight_type: 'AIR', rate_rows: [{ tier: 'REGULAR', price: 7, cost: 4.5 }] }]), { status: 200 })
+    if (method === 'GET' && url.includes('/records/rate_tables?')) return new Response(JSON.stringify([{ id: 't1', name: 'Estándar', freight_type: 'AIR', rate_rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, price_model: 'weight' }] }]), { status: 200 })
     if (method === 'GET' && url.includes('/records/pricing_catalog?')) return new Response(JSON.stringify([{ freight_type: 'AIR', cost: 4.5, tier_regular: 6.5, tier_especial: 6, tier_vip: 5.5, tier_madres: null, tier_dario: 4.3 }]), { status: 200 })
     if (method === 'GET' && url.includes('/records/payment_methods?')) return new Response(JSON.stringify(opts.methods ?? []), { status: 200 })
     if (method === 'GET' && url.includes('/records/payment_banks?')) return new Response(JSON.stringify([]), { status: 200 })
