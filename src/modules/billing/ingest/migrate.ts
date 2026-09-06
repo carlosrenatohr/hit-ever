@@ -204,6 +204,12 @@ export async function runMigration(
         issue_date: inv.issueDate,
         status,
         paid_at: status === 'PAID' ? inv.paidAt : null,
+        // Imported money is final: in the DRAFT-only model every non-VOID
+        // import lands closed (stamp = last paid date). The key is omitted
+        // (never sent as null) so a re-import cannot unlock an invoice.
+        ...(status !== 'VOID'
+          ? { closed_at: inv.paidAt ?? new Date().toISOString(), closed_by: 'import:historical-sheets' }
+          : {}),
         address: inv.address,
         special_price: inv.specialPrice,
         observations: inv.observations,

@@ -21,7 +21,7 @@ import { BillingService } from '../service/billing-service.js'
 function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   const msg = e instanceof Error ? e.message : 'Unexpected error.'
   if (/not found/i.test(msg)) return Res.err(c, 'NOT_FOUND', msg, 404)
-  if (/voided|at least one|not offered/i.test(msg)) return Res.err(c, 'INVALID_REQUEST', msg, 422)
+  if (/voided|at least one|not offered|already closed|close the invoice|links are frozen/i.test(msg)) return Res.err(c, 'INVALID_REQUEST', msg, 422)
   return Res.err(c, 'BILLING_ERROR', msg, 500)
 }
 
@@ -151,7 +151,9 @@ billing.post(
       address: z.string().nullish(),
       specialPrice: z.boolean().optional(),
       observations: z.string().nullish(),
-      status: z.enum(INVOICE_STATUSES).optional(),
+      // Money state is derived from payments, never asserted at creation:
+      // PARTIAL/PAID here would fabricate a closed zero-balance invoice.
+      status: z.enum(['DRAFT', 'ISSUED']).optional(),
       lines: z.array(LINE_SCHEMA).min(1),
       otherLines: z.array(OTHER_LINE_SCHEMA).max(20).optional(),
       packageIds: z.array(z.string()).optional(),
@@ -230,6 +232,17 @@ billing.post(
   },
 )
 
+/** POST /api/billing/invoices/:id/close — financial lock: freezes lines/links and
+ * enables payment registration. One-way; a closed invoice only takes payments or VOID. */
+billing.post('/invoices/:id/close', billingAuth('invoices:write'), async (c) => {
+  const svc = new BillingService(getBillingRepo(c.env))
+  try {
+    return Res.ok(c, await svc.closeInvoice(c.req.param('id'), c.get('billingSession').agency, c.get('billingSession').email ?? 'panel'))
+  } catch (e) {
+    return fail(c, e)
+  }
+})
+
 /** POST /api/billing/invoices/:id/share — get/create the public receipt link. */
 billing.post('/invoices/:id/share', billingAuth('invoices:write'), async (c) => {
   const svc = new BillingService(getBillingRepo(c.env))
@@ -255,7 +268,7 @@ billing.post(
     const { packageId, guia } = c.req.valid('json')
     try {
       let pkgId = packageId ?? null
-      if (!pkgId && guia) pkgId = await repo.findPackageIdByToken(guia)
+      if (!pkgId && guia) pkgId = await repo.findPackageIdByToken(guia, c.get('billingSession').agency)
       if (!pkgId) return Res.err(c, 'PACKAGE_NOT_FOUND', 'No package matched the given id/guía.', 404)
       return Res.ok(c, await svc.linkPackage(c.req.param('id'), pkgId, c.get('billingSession').email ?? 'panel', c.get('billingSession').agency))
     } catch (e) {
