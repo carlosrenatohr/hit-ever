@@ -331,3 +331,116 @@ describe('createInvoice — initial lock state', () => {
     expect(row.paid_usd).toBe(0)
   })
 })
+
+// ─── Bulk invoicing (from Paquetería) ────────────────────────────────────────
+
+function bulkRepo(pkgs: Array<{ id: string; almacen_id: string; effective_status: string; service_type: string | null; weight_lb: number | null; client_id: string | null; referencia_name: string | null }>, defaultRateTableId: string | null = null) {
+  const insertLineItems = vi.fn(async () => {})
+  const insertInvoiceEvent = vi.fn(async () => {})
+  const insertPackageEvent = vi.fn(async () => {})
+  const linkPackage = vi.fn(async () => {})
+  const createInvoiceHeader = vi.fn(async () => 'i-bulk')
+  const repo = {
+    getPackagesForBulk: async () => pkgs.map((p) => ({ ...p, organization_id: 'hit', tracking_number: null })),
+    getClientDefaultRateTable: async () => defaultRateTableId,
+    getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5 }] }],
+    upsertClient: async () => 'c1',
+    nextInvoiceNumber: async () => 1,
+    createInvoiceHeader,
+    insertLineItems,
+    linkPackage,
+    insertPackageEvent,
+    insertInvoiceEvent,
+    getInvoiceBundle: async () => ({
+      header: { id: 'i-bulk', invoice_number: 1, fiscal_year: 2026, client_id: 'c1', client_name_raw: 'Test', issue_date: '2026-09-06', status: 'DRAFT', address: null, special_price: false, observations: null, tracking_orders: [], agent_id: null, public_token: null, paid_at: null, total: 14, profit: 5, paid_usd: 0, closed_at: null, closed_by: null, created_at: '', updated_at: '' },
+      lines: [{ id: 'l1', invoice_id: 'i-bulk', line_no: 1, description: null, freight_type: 'AIR', quantity_lbs: 2, unit: 'lbs', unit_price: 7, total: 14, list_price: null, freight_cost: 9, profit: 5, price_tier: 'REGULAR', price_off_catalog: false, package_id: pkgs[0]?.id ?? null, package_guia: pkgs[0]?.almacen_id ?? null, package_tracking: null }],
+      payments: [],
+      packages: [],
+    }),
+  } as unknown as BillingRepository
+  return { repo, insertLineItems, linkPackage, createInvoiceHeader }
+}
+
+const enDestino = (id: string, client: string | null = 'Ana', ref: string | null = 'Ana') => ({
+  id,
+  almacen_id: `g${id}`,
+  effective_status: 'en_destino',
+  service_type: 'aereo',
+  weight_lb: 2,
+  client_id: client ? `c-${client}` : null,
+  referencia_name: ref,
+})
+
+const entregado = (id: string) => ({ ...enDestino(id), effective_status: 'entregado' })
+const enTransito = (id: string) => ({ ...enDestino(id), effective_status: 'en_transito' })
+
+describe('previewBulkPackages — validation', () => {
+  it('rejects empty selection', async () => {
+    const { repo } = bulkRepo([])
+    await expect(new BillingService(repo).previewBulkPackages([], 'hit')).rejects.toThrow(/No packages/)
+  })
+  it('rejects more than 100 packages', async () => {
+    const { repo } = bulkRepo([])
+    await expect(new BillingService(repo).previewBulkPackages(Array.from({ length: 101 }, (_, i) => `p${i}`), 'hit')).rejects.toThrow(/Too many/)
+  })
+  it('rejects non-invoiceable statuses (en_transito)', async () => {
+    const { repo } = bulkRepo([enTransito('p1')])
+    await expect(new BillingService(repo).previewBulkPackages(['p1'], 'hit')).rejects.toThrow(/not invoiceable/)
+  })
+  it('rejects packages with no client (neither client_id nor referencia_name)', async () => {
+    const { repo } = bulkRepo([{ ...enDestino('p1'), client_id: null, referencia_name: null }])
+    await expect(new BillingService(repo).previewBulkPackages(['p1'], 'hit')).rejects.toThrow(/no client assigned/)
+  })
+  it('rejects mixed clients', async () => {
+    const { repo } = bulkRepo([enDestino('p1', 'Ana'), enDestino('p2', 'Luis')])
+    await expect(new BillingService(repo).previewBulkPackages(['p1', 'p2'], 'hit')).rejects.toThrow(/different clients/)
+  })
+})
+
+describe('previewBulkPackages — pricing', () => {
+  it('prices each line from the org rate table (AIR/REGULAR) and returns totals', async () => {
+    const { repo } = bulkRepo([enDestino('p1'), entregado('p2')])
+    const preview = await new BillingService(repo).previewBulkPackages(['p1', 'p2'], 'hit')
+    expect(preview.lines).toHaveLength(2)
+    expect(preview.lines[0].unitPrice).toBe(7)
+    expect(preview.lines[0].total).toBe(14) // 2 lb × 7
+    expect(preview.total).toBe(28)
+    expect(preview.clientName).toBeTruthy()
+  })
+  it('uses client_id when set, falls back to referencia_name', async () => {
+    const pkgs = [{ ...enDestino('p1'), client_id: 'c-ana', referencia_name: 'ANA' }]
+    const { repo } = bulkRepo(pkgs)
+    const preview = await new BillingService(repo).previewBulkPackages(['p1'], 'hit')
+    expect(preview.clientId).toBe('c-ana')
+    expect(preview.clientName).toBe('ANA')
+  })
+  it('uses referencia_name when client_id is null', async () => {
+    const pkgs = [{ ...enDestino('p1'), client_id: null, referencia_name: 'Luis' }]
+    const { repo } = bulkRepo(pkgs)
+    const preview = await new BillingService(repo).previewBulkPackages(['p1'], 'hit')
+    expect(preview.clientId).toBeNull()
+    expect(preview.clientName).toBe('Luis')
+  })
+})
+
+describe('createBulkInvoice', () => {
+  it('creates a DRAFT invoice with one line per package and links every package', async () => {
+    const { repo, insertLineItems, linkPackage, createInvoiceHeader } = bulkRepo([enDestino('p1'), entregado('p2')])
+    const svc = new BillingService(repo)
+    const view = await svc.createBulkInvoice({ packageIds: ['p1', 'p2'] }, 'admin@hit.com', 'hit')
+    expect(view.status).toBe('DRAFT')
+    expect(view.closedAt).toBeNull()
+    expect(createInvoiceHeader).toHaveBeenCalled()
+    const header = createInvoiceHeader.mock.calls[0][0]
+    expect(header.status).toBe('DRAFT')
+    expect(header.closed_at).toBeNull()
+    // Two line rows written
+    const rows = insertLineItems.mock.calls[0][1]
+    expect(rows).toHaveLength(2)
+    expect(rows[0].package_id).toBe('p1')
+    expect(rows[0].package_guia).toBe('gp1')
+    expect(rows[0].package_tracking).toBeNull()
+    // Both packages linked
+    expect(linkPackage).toHaveBeenCalledTimes(2)
+  })
+})

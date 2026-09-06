@@ -21,7 +21,7 @@ import { BillingService } from '../service/billing-service.js'
 function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   const msg = e instanceof Error ? e.message : 'Unexpected error.'
   if (/not found/i.test(msg)) return Res.err(c, 'NOT_FOUND', msg, 404)
-  if (/voided|at least one|not offered|already closed|close the invoice|links are frozen/i.test(msg)) return Res.err(c, 'INVALID_REQUEST', msg, 422)
+  if (/voided|at least one|not offered|already closed|close the invoice|links are frozen|not invoiceable|different clients|no client assigned|No packages|Too many/i.test(msg)) return Res.err(c, 'INVALID_REQUEST', msg, 422)
   return Res.err(c, 'BILLING_ERROR', msg, 500)
 }
 
@@ -333,6 +333,61 @@ billing.get(
     const svc = new BillingService(getBillingRepo(c.env))
     const { year, month } = c.req.valid('query')
     return Res.ok(c, await svc.closeMonth(year, month, c.get('billingSession').agency))
+  },
+)
+
+// ─── Bulk invoicing (from Paquetería) ─────────────────────────────────────────
+
+/** POST /api/billing/invoices/bulk/preview — validate + price a batch of packages. */
+billing.post(
+  '/invoices/bulk/preview',
+  billingAuth('invoices:write'),
+  zValidator(
+    'json',
+    z.object({ packageIds: z.array(z.string().min(1)).min(1).max(100) }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'packageIds (1-100) is required.', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new BillingService(getBillingRepo(c.env))
+    try {
+      const preview = await svc.previewBulkPackages(c.req.valid('json').packageIds, c.get('billingSession').agency)
+      return Res.ok(c, preview)
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/** POST /api/billing/invoices/bulk/create — create a DRAFT invoice from selected packages. */
+billing.post(
+  '/invoices/bulk/create',
+  billingAuth('invoices:write'),
+  zValidator(
+    'json',
+    z.object({
+      packageIds: z.array(z.string().min(1)).min(1).max(100),
+      observations: z.string().max(500).nullish(),
+      issueDate: z.string().nullish(),
+    }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'At least one package is required.', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new BillingService(getBillingRepo(c.env))
+    try {
+      const body = c.req.valid('json')
+      const view = await svc.createBulkInvoice(
+        { packageIds: body.packageIds, observations: body.observations ?? null, issueDate: body.issueDate ?? null },
+        c.get('billingSession').email ?? 'panel',
+        c.get('billingSession').agency,
+      )
+      return Res.ok(c, view, undefined, 201)
+    } catch (e) {
+      return fail(c, e)
+    }
   },
 )
 

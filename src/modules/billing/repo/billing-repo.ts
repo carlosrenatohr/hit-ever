@@ -135,6 +135,19 @@ export interface OrgRateTable {
   rows: { tier: string; price: number; cost: number | null }[]
 }
 
+/** Row returned by getPackagesForBulk — the subset of package fields needed to price + link. */
+export interface PackageBulkRow {
+  id: string
+  almacen_id: string
+  tracking_number: string | null
+  effective_status: string
+  service_type: string | null
+  weight_lb: number | null
+  client_id: string | null
+  referencia_name: string | null
+  organization_id: string
+}
+
 export interface ExceptionRow {
   invoiceId: string
   invoiceNumber: number
@@ -183,6 +196,7 @@ export interface BillingRepository {
   // Exception queue (import + ongoing data-quality flags):
   getExceptions(organizationId?: string): Promise<ExceptionsPayload>
   // Package linking:
+  getPackagesForBulk(packageIds: string[], organizationId: string): Promise<PackageBulkRow[]>
   packageBelongsToOrg(packageId: string, organizationId: string): Promise<boolean>
   /** Whether the charge concept exists within the agency (validates client input). */
   conceptBelongsToOrg(conceptId: string, organizationId: string): Promise<boolean>
@@ -454,6 +468,13 @@ export class InsforgeBillingRepo implements BillingRepository {
         .map((i) => ({ invoiceId: i.id, invoiceNumber: i.invoice_number, fiscalYear: i.fiscal_year, client: i.client_name_raw ?? null, detail: (i.tracking_orders ?? []).join(', ') })),
       clientsToReview: clients.map((c) => ({ id: c.id, name: c.name })),
     }
+  }
+
+  async getPackagesForBulk(packageIds: string[], organizationId: string): Promise<PackageBulkRow[]> {
+    if (packageIds.length === 0) return []
+    const ids = packageIds.map((id) => encodeURIComponent(id)).join(',')
+    const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&select=id,almacen_id,tracking_number,effective_status,service_type,weight_lb,client_id,referencia_name,organization_id&limit=${packageIds.length}`
+    return this.get<PackageBulkRow>('packages', q)
   }
 
   async packageBelongsToOrg(packageId: string, organizationId: string): Promise<boolean> {
