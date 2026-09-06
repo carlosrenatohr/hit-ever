@@ -47,6 +47,23 @@ export function computeAmounts(quantityLbs: number, unitPrice: number, cost: num
   return { unitPrice, total, freightCost, profit }
 }
 
+// Price model: weight (lbs × price), volume (ft³ × price), fixed (flat per package).
+export type PriceModel = 'weight' | 'volume' | 'fixed'
+
+/** Compute line amounts respecting the price model of the rate row. */
+export function computeAmountsByModel(
+  quantity: number,
+  unitPrice: number,
+  cost: number,
+  priceModel: PriceModel = 'weight',
+): LineAmounts {
+  const total = round2(quantity * unitPrice)
+  // freight_cost scales with weight regardless of how the customer is billed.
+  const freightCost = round2(quantity * cost)
+  const profit = round2(total - freightCost)
+  return { unitPrice, total, freightCost, profit }
+}
+
 /** profit / total. Null when total is 0 (avoids Infinity/NaN leaking into reports). */
 export function margin(total: number, profit: number): number | null {
   if (!total) return null

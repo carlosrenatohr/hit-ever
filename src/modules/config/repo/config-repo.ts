@@ -33,7 +33,11 @@ interface RateRowDb {
   tier: string
   price: number
   cost: number
+  price_model: string
 }
+
+// Alias for the domain type used by the config service.
+import type { PriceModel } from '../domain/types.js'
 
 interface AuditRow {
   id: number
@@ -151,7 +155,7 @@ export class InsforgeConfigRepo implements ConfigRepository {
   async listRateTables(organizationId: string): Promise<RateTable[]> {
     const rows = await this.get<RateTableRow>(
       'rate_tables',
-      `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,organization_id,name,freight_type,created_at,updated_at,rate_rows(tier,price,cost)&order=name`,
+      `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,organization_id,name,freight_type,created_at,updated_at,rate_rows(tier,price,cost,price_model)&order=name`,
     )
     return rows.map(toRateTable)
   }
@@ -159,7 +163,7 @@ export class InsforgeConfigRepo implements ConfigRepository {
   async getRateTable(id: string): Promise<RateTable | null> {
     const rows = await this.get<RateTableRow>(
       'rate_tables',
-      `id=eq.${encodeURIComponent(id)}&select=id,organization_id,name,freight_type,created_at,updated_at,rate_rows(tier,price,cost)&limit=1`,
+      `id=eq.${encodeURIComponent(id)}&select=id,organization_id,name,freight_type,created_at,updated_at,rate_rows(tier,price,cost,price_model)&limit=1`,
     )
     return rows[0] ? toRateTable(rows[0]) : null
   }
@@ -185,7 +189,7 @@ export class InsforgeConfigRepo implements ConfigRepository {
       await this.del('rate_rows', `rate_table_id=eq.${encodeURIComponent(rateTableId)}`)
       return
     }
-    await this.post('rate_rows', rows.map((r) => ({ rate_table_id: rateTableId, tier: r.tier, price: r.price, cost: r.cost })), {
+    await this.post('rate_rows', rows.map((r) => ({ rate_table_id: rateTableId, tier: r.tier, price: r.price, cost: r.cost, price_model: r.priceModel ?? 'weight' })), {
       onConflict: 'rate_table_id,tier',
     })
     const keep = rows.map((r) => r.tier).join(',')
@@ -321,7 +325,7 @@ function toRateTable(r: RateTableRow): RateTable {
     freightType: r.freight_type,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
-    rows: (r.rate_rows ?? []).map((row) => ({ tier: row.tier as RateRow['tier'], price: row.price, cost: row.cost })),
+    rows: (r.rate_rows ?? []).map((row) => ({ tier: row.tier as RateRow['tier'], price: row.price, cost: row.cost, priceModel: (row.price_model ?? 'weight') as PriceModel })),
   }
 }
 

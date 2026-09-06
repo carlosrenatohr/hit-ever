@@ -5,10 +5,11 @@
 // into money via domain/calc.ts. Fetches on demand (2 rows, cheap) so a catalog
 // edit takes effect immediately with no cache to bust.
 
-import { computeAmounts, inferTier, quoteLine, type LineAmounts } from '../domain/calc.js'
+import { computeAmounts, computeAmountsByModel, inferTier, quoteLine, type LineAmounts } from '../domain/calc.js'
 import type { FreightType, PriceTier } from '../domain/enums.js'
 import type { CatalogEntry } from '../domain/types.js'
 import type { BillingRepository, OrgRateTable } from '../repo/billing-repo.js'
+import type { PriceModel } from '../domain/calc.js'
 
 export interface Quote extends LineAmounts {
   freightType: FreightType
@@ -29,17 +30,17 @@ export function resolveOrgRate(
   freightType: FreightType,
   tier: string,
   defaultRateTableId?: string | null,
-): { price: number; cost: number } | null {
+): { price: number; cost: number; priceModel: string } | null {
   const tierRow = (t: OrgRateTable) => t.rows.find((r) => r.tier === tier && r.price != null)
   if (defaultRateTableId) {
     const t = tables.find((x) => x.id === defaultRateTableId && x.freightType === freightType)
     const row = t ? tierRow(t) : undefined
-    if (row) return { price: row.price, cost: row.cost ?? 0 }
+    if (row) return { price: row.price, cost: row.cost ?? 0, priceModel: row.priceModel ?? 'weight' }
   }
   for (const t of tables) {
     if (t.freightType !== freightType) continue
     const row = tierRow(t)
-    if (row) return { price: row.price, cost: row.cost ?? 0 }
+    if (row) return { price: row.price, cost: row.cost ?? 0, priceModel: row.priceModel ?? 'weight' }
   }
   return null
 }
@@ -84,7 +85,7 @@ export class CatalogService {
     const tables = await this.repo.getOrgRates(organizationId)
     const rate = resolveOrgRate(tables, freightType, tier, defaultRateTableId)
     if (rate) {
-      return { freightType, tier, quantityLbs, ...computeAmounts(quantityLbs, rate.price, rate.cost) }
+      return { freightType, tier, quantityLbs, ...computeAmountsByModel(quantityLbs, rate.price, rate.cost, (rate.priceModel ?? 'weight') as PriceModel) }
     }
     // Legacy fallback: only the global catalog's fixed tiers.
     return this.quote(freightType, tier, quantityLbs)
