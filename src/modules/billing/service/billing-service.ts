@@ -73,6 +73,8 @@ export interface InvoiceView {
   margin: number | null
   paidUsd: number
   outstanding: number
+  closedAt: string | null
+  closedBy: string | null
   lines: Array<{
     lineNo: number
     description: string | null
@@ -85,6 +87,9 @@ export interface InvoiceView {
     profit: number
     priceTier: PriceTier | null
     priceOffCatalog: boolean
+    packageId: string | null
+    packageGuia: string | null
+    packageTracking: string | null
   }>
   payments: Array<{
     method: string | null
@@ -185,6 +190,8 @@ export function toView(b: InvoiceBundle): InvoiceView {
     margin: margin(total, profit),
     paidUsd,
     outstanding: outstandingOf(b.header.status, total, paidUsd),
+    closedAt: b.header.closed_at ?? null,
+    closedBy: b.header.closed_by ?? null,
     lines: b.lines.map((l) => ({
       lineNo: l.line_no,
       description: l.description,
@@ -197,6 +204,9 @@ export function toView(b: InvoiceBundle): InvoiceView {
       profit: l.profit,
       priceTier: (l.price_tier as PriceTier | null) ?? null,
       priceOffCatalog: l.price_off_catalog,
+      packageId: l.package_id ?? null,
+      packageGuia: l.package_guia ?? null,
+      packageTracking: l.package_tracking ?? null,
     })),
     payments: b.payments.map((p) => ({
       method: p.method,
@@ -349,6 +359,8 @@ export class BillingService {
         total: h.total,
         profit: h.profit,
         paidUsd: h.paid_usd,
+        closedAt: h.closed_at ?? null,
+        closedBy: h.closed_by ?? null,
         outstanding: outstandingOf(h.status, h.total, h.paid_usd),
       })),
     }
@@ -442,6 +454,14 @@ export class BillingService {
 
     const invoiceNumber = await this.repo.nextInvoiceNumber(fiscalYear, organizationId)
 
+    // Only an explicit DRAFT stays open (editable, payments blocked) until
+    // closeInvoice() locks it. Anything else is final at creation and is
+    // auto-closed here — the panel's "Nueva factura" flow (ISSUED) keeps
+    // accepting payments exactly as before the financial lock existed.
+    // Clamped defensively: PARTIAL/PAID/VOID can never be born, they are
+    // derived from payments / the void override only.
+    const initialStatus: InvoiceStatus = input.status === 'DRAFT' ? 'DRAFT' : 'ISSUED'
+
     const invoiceId = await this.repo.createInvoiceHeader({
       organization_id: organizationId,
       invoice_number: invoiceNumber,
@@ -449,7 +469,9 @@ export class BillingService {
       client_id: clientId,
       client_name_raw: display,
       issue_date: issueDate,
-      status: input.status ?? 'ISSUED',
+      status: initialStatus,
+      closed_at: initialStatus === 'DRAFT' ? null : new Date().toISOString(),
+      closed_by: initialStatus === 'DRAFT' ? null : actor,
       address: input.address ?? null,
       special_price: input.specialPrice ?? false,
       observations: input.observations ?? null,
@@ -468,10 +490,34 @@ export class BillingService {
     return (await this.get(invoiceId, organizationId))!
   }
 
+  /**
+   * Financial lock: freeze the invoice (lines, links, descriptions, amounts)
+   * and enable payment registration. One-way — only a DRAFT is open in the
+   * DRAFT-only model; a closed invoice can take payments or go VOID (admin
+   * override). Closing a DRAFT promotes it to ISSUED (it left the edit phase).
+   * The write itself is a compare-and-set (closed_at IS NULL) so concurrent
+   * closes/voids can't clobber each other.
+   */
+  async closeInvoice(id: string, organizationId: string, actor: string | null): Promise<InvoiceView> {
+    const b = await this.repo.getInvoiceBundle(id, organizationId)
+    if (!b) throw new Error('Invoice not found.')
+    if (b.header.status === 'VOID') throw new Error('Cannot close a voided invoice.')
+    if (b.header.closed_at) throw new Error('Invoice is already closed.')
+    const status = b.header.status === 'DRAFT' ? 'ISSUED' : b.header.status
+    const won = await this.repo.closeInvoiceIfOpen(id, organizationId, b.header.status, status, new Date().toISOString(), actor)
+    if (!won) throw new Error('Invoice is already closed or voided — reload it.')
+    const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
+    await this.repo.insertInvoiceEvent(id, organizationId, 'Factura cerrada', `Total fijado en ${total.toFixed(2)} USD`, actor)
+    return (await this.get(id, organizationId))!
+  }
+
   async applyPayment(id: string, input: ApplyPaymentInput, organizationId: string, actor?: string | null): Promise<InvoiceView> {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
     if (!b) throw new Error('Invoice not found.')
     if (b.header.status === 'VOID') throw new Error('Cannot pay a voided invoice.')
+    // Financial lock: the total must be frozen before money starts flowing.
+    // Legacy/import invoices with payments were already backfilled as closed.
+    if (!b.header.closed_at) throw new Error('Close the invoice before recording payments.')
 
     const amountUsd = paymentUsd(input.currency, input.amount, input.fxRate)
     await this.repo.insertPayment(id, {
@@ -510,6 +556,15 @@ export class BillingService {
   }
 
   async linkPackage(id: string, packageId: string, actor: string, organizationId: string): Promise<InvoiceView> {
+    // Closed invoices are frozen: no package may be attached after the lock.
+    const before = await this.repo.getInvoiceBundle(id, organizationId)
+    if (!before) throw new Error('Invoice not found.')
+    if (before.header.closed_at) throw new Error('Invoice is closed — package links are frozen.')
+    // Tenant pin (same rule as createInvoice's packageIds): a package from
+    // another agency can never be attached to this invoice.
+    if (!(await this.repo.packageBelongsToOrg(packageId, organizationId))) {
+      throw new Error(`Package ${packageId} not found in your agency.`)
+    }
     await this.repo.linkPackage(id, packageId, 'manual', null, actor, organizationId)
     const v = await this.get(id, organizationId)
     if (!v) throw new Error('Invoice not found.')
@@ -519,6 +574,10 @@ export class BillingService {
   }
 
   async unlinkPackage(id: string, packageId: string, organizationId?: string): Promise<InvoiceView> {
+    // Same freeze as linking: links are frozen once the invoice is closed.
+    const before = await this.repo.getInvoiceBundle(id, organizationId)
+    if (!before) throw new Error('Invoice not found.')
+    if (before.header.closed_at) throw new Error('Invoice is closed — package links are frozen.')
     await this.repo.unlinkPackage(id, packageId)
     const v = await this.get(id, organizationId)
     if (!v) throw new Error('Invoice not found.')

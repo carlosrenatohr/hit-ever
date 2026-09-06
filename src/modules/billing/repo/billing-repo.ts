@@ -36,6 +36,15 @@ export interface InvoiceHeaderDbRow {
   agent_id: string | null
   public_token: string | null
   paid_at: string | null
+  // Stored on the header by setInvoiceTotals (the service reads them on every
+  // list/receivables pass; select=* returns them whether declared or not).
+  total: number
+  profit: number
+  paid_usd: number
+  // Financial lock (bulk-invoicing-foundation migration): non-NULL once the
+  // invoice is closed — lines/links freeze, payments keep flowing.
+  closed_at: string | null
+  closed_by: string | null
   created_at: string
   updated_at: string
 }
@@ -57,6 +66,11 @@ export interface LineItemDbRow {
   profit: number
   price_tier: string | null
   price_off_catalog: boolean
+  // Bulk-invoicing per-line snapshot: the package this freight line bills and
+  // its guide/tracking text frozen at billing time (NULL on manual/import lines).
+  package_id: string | null
+  package_guia: string | null
+  package_tracking: string | null
 }
 
 export interface PaymentDbRow {
@@ -153,6 +167,13 @@ export interface BillingRepository {
   insertLineItems(invoiceId: string, rows: Row[]): Promise<void>
   insertPayment(invoiceId: string, row: Row): Promise<void>
   setInvoiceStatus(invoiceId: string, status: InvoiceStatus, patch?: Row): Promise<void>
+  /**
+   * Atomic close: patches ONLY while the invoice still matches what the caller
+   * read (open + unchanged status), scoped to its organization. True = this
+   * caller won the lock; false = a concurrent close/void/payment moved it
+   * first — no clobbering, no resurrection of VOID.
+   */
+  closeInvoiceIfOpen(invoiceId: string, organizationId: string, expectedStatus: InvoiceStatus, newStatus: InvoiceStatus, closedAt: string, closedBy: string | null): Promise<boolean>
   setInvoiceTotals(invoiceId: string, totals: { total: number; profit: number; paidUsd: number }): Promise<void>
   listInvoices(filter: ListFilter): Promise<{ rows: InvoiceHeaderDbRow[]; count: number }>
   getInvoiceBundle(invoiceId: string, organizationId?: string): Promise<InvoiceBundle | null>
@@ -211,13 +232,26 @@ export class InsforgeBillingRepo implements BillingRepository {
       .filter(Boolean)
       .join(',')
     const res = await fetch(`${this.base}/${table}${q}`, { method: 'POST', headers: { ...this.headers, Prefer: prefer }, body: JSON.stringify(rows) })
-    if (!res.ok) throw new Error(`InsForge POST ${table} → ${res.status}: ${(await res.text()).slice(0, 300)}`)
+    if (!res.ok) {
+      // Upstream detail (constraint names, table shapes) goes to Worker logs
+      // only — never reflected to API clients through the thrown message.
+      const detail = (await res.text()).slice(0, 500)
+      console.error(`billing repo POST ${table} failed`, res.status, detail)
+      throw new Error(`InsForge POST ${table} → ${res.status}`)
+    }
     return opts.representation ? ((await res.json()) as T[]) : []
   }
 
   private async patch(table: string, query: string, patch: Row): Promise<void> {
     const res = await fetch(`${this.base}/${table}?${query}`, { method: 'PATCH', headers: { ...this.headers, Prefer: 'return=minimal' }, body: JSON.stringify(patch) })
     if (!res.ok) throw new Error(`InsForge PATCH ${table} → ${res.status}`)
+  }
+
+  /** PATCH that returns the updated rows (for guarded/conditional writes). */
+  private async patchReturning<T>(table: string, query: string, patch: Row): Promise<T[]> {
+    const res = await fetch(`${this.base}/${table}?${query}`, { method: 'PATCH', headers: { ...this.headers, Prefer: 'return=representation' }, body: JSON.stringify(patch) })
+    if (!res.ok) throw new Error(`InsForge PATCH ${table} → ${res.status}`)
+    return (await res.json()) as T[]
   }
 
   private async del(table: string, query: string): Promise<void> {
@@ -290,6 +324,22 @@ export class InsforgeBillingRepo implements BillingRepository {
 
   async setInvoiceStatus(invoiceId: string, status: InvoiceStatus, patch: Row = {}): Promise<void> {
     await this.patch('invoices', `id=eq.${encodeURIComponent(invoiceId)}`, { status, updated_at: new Date().toISOString(), ...patch })
+  }
+
+  async closeInvoiceIfOpen(invoiceId: string, organizationId: string, expectedStatus: InvoiceStatus, newStatus: InvoiceStatus, closedAt: string, closedBy: string | null): Promise<boolean> {
+    // Compare-and-set: the filters pin the exact state the caller read
+    // (open + status unchanged, in-organization). A concurrent close/void
+    // matches no rows instead of being clobbered.
+    const q =
+      `id=eq.${encodeURIComponent(invoiceId)}&organization_id=eq.${encodeURIComponent(organizationId)}` +
+      `&closed_at=is.null&status=eq.${expectedStatus}`
+    const rows = await this.patchReturning<{ id: string }>('invoices', q, {
+      status: newStatus,
+      closed_at: closedAt,
+      closed_by: closedBy,
+      updated_at: new Date().toISOString(),
+    })
+    return rows.length > 0
   }
 
   async setInvoiceTotals(invoiceId: string, totals: { total: number; profit: number; paidUsd: number }): Promise<void> {

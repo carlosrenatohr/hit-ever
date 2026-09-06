@@ -207,3 +207,127 @@ describe('createInvoice — other charges', () => {
     expect(other).toMatchObject({ description: 'Delivery — zona norte', unit_price: 3, total: 3, profit: 3, freight_cost: 0, quantity_lbs: null, concept_id: 'cc1' })
   })
 })
+
+// ─── Financial lock (bulk-invoicing-foundation) ───────────────────────────────
+
+function lockRepo(headerOver: Partial<InvoiceBundle['header']> = {}, closeWins = true) {
+  const b = bundle({ status: 'DRAFT', total: 40, closed_at: null, closed_by: null, ...headerOver } as Partial<InvoiceBundle['header']>, [
+    { total: 32.5, profit: 10 },
+    { total: 7.5, profit: 3 },
+  ])
+  const closeInvoiceIfOpen = vi.fn(async () => closeWins)
+  const setInvoiceStatus = vi.fn(async () => {})
+  const insertInvoiceEvent = vi.fn(async () => {})
+  const linkPackage = vi.fn(async () => {})
+  const unlinkPackage = vi.fn(async () => {})
+  const insertPayment = vi.fn(async () => {})
+  const repo = {
+    getInvoiceBundle: async () => b,
+    get: async () => toView(b),
+    setInvoiceStatus,
+    closeInvoiceIfOpen,
+    insertInvoiceEvent,
+    linkPackage,
+    unlinkPackage,
+    insertPayment,
+    setInvoiceTotals: async () => {},
+  } as unknown as BillingRepository
+  return { repo, b, setInvoiceStatus, closeInvoiceIfOpen, insertInvoiceEvent, linkPackage, unlinkPackage, insertPayment }
+}
+
+describe('closeInvoice — financial lock', () => {
+  it('closes an open DRAFT, promoting it to ISSUED with actor + event', async () => {
+    const { repo, closeInvoiceIfOpen, insertInvoiceEvent } = lockRepo()
+    const svc = new BillingService(repo)
+    await svc.closeInvoice('i1', 'hit', 'ana@hit.com')
+    expect(closeInvoiceIfOpen).toHaveBeenCalledWith('i1', 'hit', 'DRAFT', 'ISSUED', expect.stringMatching(/^\d{4}-/), 'ana@hit.com')
+    expect(insertInvoiceEvent).toHaveBeenCalledWith('i1', 'hit', 'Factura cerrada', 'Total fijado en 40.00 USD', 'ana@hit.com')
+  })
+  it('fails cleanly when the compare-and-set loses to a concurrent close/void', async () => {
+    const { repo, insertInvoiceEvent } = lockRepo({}, false)
+    await expect(new BillingService(repo).closeInvoice('i1', 'hit', 'a@b.c')).rejects.toThrow(/already closed or voided/)
+    expect(insertInvoiceEvent).not.toHaveBeenCalled()
+  })
+  it('rejects closing twice', async () => {
+    const { repo, closeInvoiceIfOpen } = lockRepo({ closed_at: '2026-09-01T00:00:00Z', closed_by: 'x@y.z' })
+    await expect(new BillingService(repo).closeInvoice('i1', 'hit', 'a@b.c')).rejects.toThrow(/already closed/)
+    expect(closeInvoiceIfOpen).not.toHaveBeenCalled()
+  })
+  it('rejects closing a VOID invoice', async () => {
+    const { repo } = lockRepo({ status: 'VOID' })
+    await expect(new BillingService(repo).closeInvoice('i1', 'hit', 'a@b.c')).rejects.toThrow(/voided/)
+  })
+})
+
+describe('payment + link guards vs the lock', () => {
+  it('blocks payments while the invoice is open', async () => {
+    const { repo, insertPayment } = lockRepo({ status: 'ISSUED' })
+    await expect(
+      new BillingService(repo).applyPayment('i1', { method: 'CASH', currency: 'USD', amount: 5 }, 'hit', 'a@b.c'),
+    ).rejects.toThrow(/Close the invoice before recording payments/)
+    expect(insertPayment).not.toHaveBeenCalled()
+  })
+  it('allows payments once closed (legacy with money was backfilled closed)', async () => {
+    const { repo, insertPayment } = lockRepo({ status: 'ISSUED', closed_at: '2026-09-01T00:00:00Z', closed_by: 'system:bulk-invoicing-backfill' })
+    await new BillingService(repo).applyPayment('i1', { method: 'CASH', currency: 'USD', amount: 5 }, 'hit', 'a@b.c')
+    expect(insertPayment).toHaveBeenCalled()
+  })
+  it('freezes package links after closing', async () => {
+    const { repo, linkPackage, unlinkPackage } = lockRepo({ closed_at: '2026-09-01T00:00:00Z' })
+    const svc = new BillingService(repo)
+    await expect(svc.linkPackage('i1', 'pkg-1', 'a@b.c', 'hit')).rejects.toThrow(/links are frozen/)
+    await expect(svc.unlinkPackage('i1', 'pkg-1', 'hit')).rejects.toThrow(/links are frozen/)
+    expect(linkPackage).not.toHaveBeenCalled()
+    expect(unlinkPackage).not.toHaveBeenCalled()
+  })
+  it('rejects a package from another agency on manual link (tenant pin)', async () => {
+    const { repo } = lockRepo()
+    const withPin = {
+      ...repo,
+      packageBelongsToOrg: async () => false,
+    } as unknown as BillingRepository
+    await expect(new BillingService(withPin).linkPackage('i1', 'pkg-1', 'a@b.c', 'hit')).rejects.toThrow(/not found in your agency/)
+  })
+})
+
+describe('createInvoice — initial lock state', () => {
+  function captureHeader() {
+    const createInvoiceHeader = vi.fn(async () => 'i1')
+    const repo = {
+      getOrgRates: async () => [{ id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5 }] }],
+      upsertClient: async () => 'c1',
+      getClientDefaultRateTable: async () => null,
+      nextInvoiceNumber: async () => 1,
+      createInvoiceHeader,
+      insertLineItems: async () => {},
+      insertInvoiceEvent: async () => {},
+      getInvoiceBundle: async () => bundle({}),
+    } as unknown as BillingRepository
+    return { repo, createInvoiceHeader }
+  }
+  const input = { clientName: 'Ana', lines: [{ freightType: 'AIR' as const, tier: 'REGULAR', quantityLbs: 1 }] }
+
+  it('auto-closes an ISSUED invoice at creation (panel "Nueva factura" keeps paying)', async () => {
+    const { repo, createInvoiceHeader } = captureHeader()
+    await new BillingService(repo).createInvoice(input, 'ana@hit.com', 'hit')
+    const row = createInvoiceHeader.mock.calls[0][0] as Record<string, unknown>
+    expect(row.status).toBe('ISSUED')
+    expect(row.closed_at).toMatch(/^\d{4}-/)
+    expect(row.closed_by).toBe('ana@hit.com')
+  })
+  it('leaves an explicit DRAFT open until closeInvoice', async () => {
+    const { repo, createInvoiceHeader } = captureHeader()
+    await new BillingService(repo).createInvoice({ ...input, status: 'DRAFT' }, 'ana@hit.com', 'hit')
+    const row = createInvoiceHeader.mock.calls[0][0] as Record<string, unknown>
+    expect(row.status).toBe('DRAFT')
+    expect(row.closed_at).toBeNull()
+    expect(row.closed_by).toBeNull()
+  })
+  it('clamps a client-fabricated money status (PAID) to ISSUED — money state is derived, never asserted', async () => {
+    const { repo, createInvoiceHeader } = captureHeader()
+    await new BillingService(repo).createInvoice({ ...input, status: 'PAID' }, 'ana@hit.com', 'hit')
+    const row = createInvoiceHeader.mock.calls[0][0] as Record<string, unknown>
+    expect(row.status).toBe('ISSUED')
+    expect(row.paid_usd).toBe(0)
+  })
+})
