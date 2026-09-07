@@ -27,6 +27,14 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
 
 const billing = new Hono<BillingEnv>()
 
+/** GET /api/billing/linked-packages — org-scoped package IDs with at least one invoice link.
+ *  Registered before the global billingAuth gate so that the viewer role (reports:read only)
+ *  can access it without needing invoices:read. */
+billing.get('/linked-packages', billingAuth('reports:read'), async (c) => {
+  const svc = new BillingService(getBillingRepo(c.env))
+  return Res.ok(c, { ids: await svc.linkedPackageIds(c.get('billingSession').agency) })
+})
+
 // Read access gates the whole surface; write routes additionally re-check
 // 'invoices:write' at the route level (Stage 3).
 billing.use('*', billingAuth('invoices:read'))
@@ -321,12 +329,6 @@ billing.get('/exceptions', async (c) => {
   const svc = new BillingService(getBillingRepo(c.env))
   // Tenant scope: without this, every agency sees every other agency's queue.
   return Res.ok(c, await svc.exceptions(c.get('billingSession').agency))
-})
-
-/** GET /api/billing/linked-packages — org-scoped package IDs with at least one invoice link. */
-billing.get('/linked-packages', async (c) => {
-  const svc = new BillingService(getBillingRepo(c.env))
-  return Res.ok(c, { ids: await svc.linkedPackageIds(c.get('billingSession').agency) })
 })
 
 /** GET /api/billing/close-month?year=2026&month=6 — monthly aggregation (replaces TOTAL JUNIO). */

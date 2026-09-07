@@ -23,7 +23,7 @@ import { Res } from '../../../lib/response.js'
 import type { CloudflareBindings } from '../../../types/index.js'
 
 export type BillingRole = 'admin' | 'billing' | 'staff' | 'viewer'
-export type BillingPermission = 'invoices:read' | 'invoices:write' | 'clients:read' | 'clients:write'
+export type BillingPermission = 'invoices:read' | 'invoices:write' | 'clients:read' | 'clients:write' | 'reports:read'
 
 export interface BillingSession {
   userId: string
@@ -40,7 +40,7 @@ const ROLE_PERMISSIONS: Record<BillingRole, BillingPermission[]> = {
   admin: ['invoices:read', 'invoices:write', 'clients:read', 'clients:write'],
   billing: ['invoices:read', 'invoices:write', 'clients:read', 'clients:write'],
   staff: ['invoices:read', 'clients:read'],
-  viewer: [],
+  viewer: ['reports:read'],
 }
 
 export function roleHasPermission(role: BillingRole, permission: BillingPermission): boolean {
