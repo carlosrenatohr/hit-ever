@@ -385,10 +385,15 @@ export class BillingService {
     const defaultRateTableId = await this.repo.getClientDefaultRateTable(clientId)
 
     // Validate client-supplied package links BEFORE writing anything: a package
-    // from another agency must never be attached to an invoice.
+    // from another agency must never be attached to an invoice, and a package
+    // with an active invoice link cannot be double-invoiced.
     for (const pkgId of input.packageIds ?? []) {
       if (!(await this.repo.packageBelongsToOrg(pkgId, organizationId))) {
         throw new Error(`Package ${pkgId} not found in your agency.`)
+      }
+      const active = await this.repo.getActivePackageLink(pkgId)
+      if (active) {
+        throw new Error(`Package ${pkgId} is already invoiced (invoice ${active.invoiceId}).`)
       }
     }
 
@@ -556,6 +561,8 @@ export class BillingService {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
     if (!b) throw new Error('Invoice not found.')
     await this.repo.setInvoiceStatus(id, 'VOID', reason ? { observations: reason } : {})
+    // Release all active package links so the packages can be re-invoiced.
+    await this.repo.releasePackageLinksByInvoice(id, 'system:void')
     if (organizationId) {
       await this.repo.insertInvoiceEvent(id, organizationId, 'Factura anulada', reason ?? null, null)
     }
@@ -571,6 +578,12 @@ export class BillingService {
     // another agency can never be attached to this invoice.
     if (!(await this.repo.packageBelongsToOrg(packageId, organizationId))) {
       throw new Error(`Package ${packageId} not found in your agency.`)
+    }
+    // Active-link invariant: a package with an active invoice cannot be linked
+    // to another invoice.
+    const active = await this.repo.getActivePackageLink(packageId)
+    if (active && active.invoiceId !== id) {
+      throw new Error(`Package ${packageId} is already invoiced (invoice ${active.invoiceId}).`)
     }
     const [pkg] = await this.repo.getPackagesForBulk([packageId], organizationId)
     await this.repo.linkPackage(id, packageId, 'manual', pkg?.almacen_id ?? null, actor, organizationId)
@@ -660,6 +673,72 @@ export class BillingService {
   // ─── Bulk invoicing (from Paquetería) ────────────────────────────────────────
 
   /**
+   * Pre-validate a package selection without creating anything.
+   * Returns per-package eligibility so the UI can explain why a selection is blocked.
+   * Does NOT throw on ineligible packages — returns structured reasons instead.
+   */
+  async checkBulkEligibility(
+    packageIds: string[],
+    organizationId: string,
+  ): Promise<{
+    eligible: boolean
+    reasons: Array<{ packageId: string; guia: string | null; code: string; message: string }>
+  }> {
+    if (!packageIds.length) return { eligible: false, reasons: [] }
+    const pkgs = await this.repo.getPackagesForBulk(packageIds, organizationId)
+    const foundIds = new Set(pkgs.map((p) => p.id))
+    const reasons: Array<{ packageId: string; guia: string | null; code: string; message: string }> = []
+
+    // Missing or wrong-org packages
+    for (const id of packageIds) {
+      if (!foundIds.has(id)) {
+        reasons.push({ packageId: id, guia: null, code: 'PACKAGE_NOT_FOUND', message: 'Package not found in your agency.' })
+      }
+    }
+
+    const invoiceable = new Set(['en_destino', 'entregado'])
+    let clientName: string | null = null
+    let clientId: string | null = null
+
+    for (const p of pkgs) {
+      // Status check
+      if (!invoiceable.has(p.effective_status)) {
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_NOT_INVOICEABLE', message: `Package ${p.almacen_id} is not invoiceable (status: ${p.effective_status}).` })
+      }
+      // Client check
+      const name = (p.referencia_name ?? '').trim() || null
+      if (!p.client_id && !name) {
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_CLIENT_MISSING', message: `Package ${p.almacen_id} has no client assigned.` })
+      }
+      // Mixed client check
+      if (p.client_id && clientId && p.client_id !== clientId) {
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'BULK_MIXED_CLIENTS', message: `Package ${p.almacen_id} belongs to a different client.` })
+      } else if (name && clientName && name !== clientName && !p.client_id) {
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'BULK_MIXED_CLIENTS', message: `Package ${p.almacen_id} belongs to a different client.` })
+      }
+      if (p.client_id) clientId = p.client_id
+      if (name) clientName = name
+
+      // Active invoice check
+      const active = await this.repo.getActivePackageLink(p.id)
+      if (active) {
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_ALREADY_INVOICED', message: `Package ${p.almacen_id} is already invoiced.` })
+      }
+
+      // Weight check
+      if (p.weight_lb == null || p.weight_lb <= 0) {
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_MISSING_WEIGHT', message: `Package ${p.almacen_id} has no weight.` })
+      }
+      // Service check
+      if (!p.service_type) {
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_MISSING_SERVICE', message: `Package ${p.almacen_id} has no service type.` })
+      }
+    }
+
+    return { eligible: reasons.length === 0, reasons }
+  }
+
+  /**
    * Preview: validate + price a batch of packages before creating the invoice.
    * All packages must be in the same org, have an invoiceable status
    * (en_destino | entregado), and belong to one client (resolved from
@@ -699,6 +778,14 @@ export class BillingService {
     const bad = pkgs.filter((p) => !invoiceable.has(p.effective_status))
     if (bad.length) {
       throw new Error(`${bad.length} package(s) are not invoiceable (must be en destino or entregado).`)
+    }
+
+    // Validate: no package already has an active invoice link.
+    for (const p of pkgs) {
+      const active = await this.repo.getActivePackageLink(p.id)
+      if (active) {
+        throw new Error(`Package ${p.almacen_id} is already invoiced (invoice ${active.invoiceId}).`)
+      }
     }
 
     // Resolve client: prefer client_id (UUID) + referencia_name (display).

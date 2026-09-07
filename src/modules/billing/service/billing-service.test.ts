@@ -120,6 +120,7 @@ describe('createInvoice — package links', () => {
       upsertClient: async () => 'c1',
       getClientDefaultRateTable: async () => null,
       packageBelongsToOrg: async () => belongs,
+      getActivePackageLink: async () => null,
       getPackagesForBulk: async (ids: string[]) => ids.map((id) => ({ id, almacen_id: `G-${id}`, tracking_number: `T-${id}` })),
       nextInvoiceNumber: async () => 1,
       createInvoiceHeader: async () => 'i1',
@@ -222,6 +223,7 @@ function lockRepo(headerOver: Partial<InvoiceBundle['header']> = {}, closeWins =
   const linkPackage = vi.fn(async () => {})
   const unlinkPackage = vi.fn(async () => {})
   const insertPayment = vi.fn(async () => {})
+  const releasePackageLinksByInvoice = vi.fn(async () => {})
   const repo = {
     getInvoiceBundle: async () => b,
     get: async () => toView(b),
@@ -232,8 +234,11 @@ function lockRepo(headerOver: Partial<InvoiceBundle['header']> = {}, closeWins =
     unlinkPackage,
     insertPayment,
     setInvoiceTotals: async () => {},
+    getActivePackageLink: async () => null,
+    packageBelongsToOrg: async () => true,
+    releasePackageLinksByInvoice,
   } as unknown as BillingRepository
-  return { repo, b, setInvoiceStatus, closeInvoiceIfOpen, insertInvoiceEvent, linkPackage, unlinkPackage, insertPayment }
+  return { repo, b, setInvoiceStatus, closeInvoiceIfOpen, insertInvoiceEvent, linkPackage, unlinkPackage, insertPayment, releasePackageLinksByInvoice }
 }
 
 describe('closeInvoice — financial lock', () => {
@@ -303,6 +308,8 @@ describe('createInvoice — initial lock state', () => {
       insertLineItems: async () => {},
       insertInvoiceEvent: async () => {},
       getInvoiceBundle: async () => bundle({}),
+      getActivePackageLink: async () => null,
+      packageBelongsToOrg: async () => true,
     } as unknown as BillingRepository
     return { repo, createInvoiceHeader }
   }
@@ -335,7 +342,7 @@ describe('createInvoice — initial lock state', () => {
 
 // ─── Bulk invoicing (from Paquetería) ────────────────────────────────────────
 
-function bulkRepo(pkgs: Array<{ id: string; almacen_id: string; effective_status: string; service_type: string | null; weight_lb: number | null; client_id: string | null; referencia_name: string | null }>, defaultRateTableId: string | null = null) {
+function bulkRepo(pkgs: Array<{ id: string; almacen_id: string; effective_status: string; service_type: string | null; weight_lb: number | null; client_id: string | null; referencia_name: string | null }>, defaultRateTableId: string | null = null, activeLinks: Record<string, string> = {}) {
   const insertLineItems = vi.fn(async () => {})
   const insertInvoiceEvent = vi.fn(async () => {})
   const insertPackageEvent = vi.fn(async () => {})
@@ -352,6 +359,7 @@ function bulkRepo(pkgs: Array<{ id: string; almacen_id: string; effective_status
     linkPackage,
     insertPackageEvent,
     insertInvoiceEvent,
+    getActivePackageLink: async (packageId: string) => activeLinks[packageId] ? { invoiceId: activeLinks[packageId] } : null,
     getInvoiceBundle: async () => ({
       header: { id: 'i-bulk', invoice_number: 1, fiscal_year: 2026, client_id: 'c1', client_name_raw: 'Test', issue_date: '2026-09-06', status: 'DRAFT', address: null, special_price: false, observations: null, tracking_orders: [], agent_id: null, public_token: null, paid_at: null, total: 14, profit: 5, paid_usd: 0, closed_at: null, closed_by: null, created_at: '', updated_at: '' },
       lines: [{ id: 'l1', invoice_id: 'i-bulk', line_no: 1, description: null, freight_type: 'AIR', quantity_lbs: 2, unit: 'lbs', unit_price: 7, total: 14, list_price: null, freight_cost: 9, profit: 5, price_tier: 'REGULAR', price_off_catalog: false, package_id: pkgs[0]?.id ?? null, package_guia: pkgs[0]?.almacen_id ?? null, package_tracking: null }],
