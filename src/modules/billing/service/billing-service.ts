@@ -129,7 +129,7 @@ export interface PublicReceipt {
   total: number
   paidUsd: number
   outstanding: number
-  agency: { name: string; logoUrl: string | null; ruc: string | null; address: string | null; phone: string | null }
+  agency: { name: string; logoUrl: string | null; ruc: string | null; address: string | null; phone: string | null; currency: Currency }
 }
 
 export interface YearReport {
@@ -173,10 +173,28 @@ export function paymentUsd(currency: Currency, amount: number, fxRate?: number |
   return null // unreconciled (no rate) — recorded but not counted toward paid
 }
 
+/** Resolve legacy lines that predate the per-line package snapshot. */
+function resolvePackageLinks(lines: InvoiceBundle['lines'], packages: InvoiceBundle['packages']): Array<InvoiceBundle['packages'][number] | null> {
+  const used = new Set<string>()
+  return lines.map((line) => {
+    if (line.line_type === 'other') return null
+    const direct = line.package_id ? packages.find((p) => p.package_id === line.package_id) : null
+    if (direct) {
+      used.add(direct.package_id)
+      return direct
+    }
+    if (packages.length === 1) return packages[0]
+    const next = packages.find((p) => !used.has(p.package_id)) ?? null
+    if (next) used.add(next.package_id)
+    return next
+  })
+}
+
 export function toView(b: InvoiceBundle): InvoiceView {
   const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
   const profit = round2(b.lines.reduce((s, l) => s + (l.profit || 0), 0))
   const paidUsd = round2(b.payments.reduce((s, p) => s + (p.amount_usd || 0), 0))
+  const resolvedPackages = resolvePackageLinks(b.lines, b.packages)
   return {
     id: b.header.id,
     invoiceNumber: b.header.invoice_number,
@@ -197,7 +215,15 @@ export function toView(b: InvoiceBundle): InvoiceView {
     outstanding: outstandingOf(b.header.status, total, paidUsd),
     closedAt: b.header.closed_at ?? null,
     closedBy: b.header.closed_by ?? null,
-    lines: b.lines.map((l) => ({
+    lines: b.lines.map((l, i) => ({
+      ...(() => {
+        const pkg = resolvedPackages[i]
+        return {
+          packageId: l.package_id ?? pkg?.package_id ?? null,
+          packageGuia: l.package_guia ?? pkg?.packages?.almacen_id ?? pkg?.matched_oc ?? null,
+          packageTracking: l.package_tracking ?? pkg?.packages?.tracking_number ?? null,
+        }
+      })(),
       lineNo: l.line_no,
       description: l.description,
       freightType: l.freight_type,
@@ -209,9 +235,6 @@ export function toView(b: InvoiceBundle): InvoiceView {
       profit: l.profit,
       priceTier: (l.price_tier as PriceTier | null) ?? null,
       priceOffCatalog: l.price_off_catalog,
-      packageId: l.package_id ?? null,
-      packageGuia: l.package_guia ?? null,
-      packageTracking: l.package_tracking ?? null,
     })),
     payments: b.payments.map((p) => ({
       method: p.method,
@@ -774,6 +797,7 @@ export class BillingService {
     if (!b) return null
     const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
     const paidUsd = round2(b.header.paid_usd || 0)
+    const resolvedPackages = resolvePackageLinks(b.lines, b.packages)
     // Fetch agency info for multi-tenant branding
     const agencyInfo = await this.repo.getAgencyInfo(b.header.organization_id)
     return {
@@ -782,22 +806,14 @@ export class BillingService {
       clientName: b.header.client_name_raw,
       clientAddress: b.header.address ?? null,
       status: b.header.status,
-      lines: b.lines.map((l) => {
+      lines: b.lines.map((l, i) => {
         // Resolve guia/tracking: prefer line snapshot, fall back to linked packages
         let guia = l.package_guia ?? null
         let tracking = l.package_tracking ?? null
-        if (!guia && !tracking && b.packages.length > 0) {
-          // Try to match by package_id first
-          const pkg = l.package_id ? b.packages.find((p) => p.package_id === l.package_id) : null
-          if (pkg) {
-            guia = pkg.packages?.almacen_id ?? pkg.matched_oc ?? null
-            tracking = pkg.packages?.tracking_number ?? null
-          } else if (b.packages.length === 1 && l.line_type === 'freight') {
-            // Single-package invoice: use the only linked package for all freight lines
-            guia = b.packages[0].packages?.almacen_id ?? b.packages[0].matched_oc ?? null
-            tracking = b.packages[0].packages?.tracking_number ?? null
-          }
-        }
+        const pkg = resolvedPackages[i]
+        if (!guia && pkg) guia = pkg.packages?.almacen_id ?? pkg.matched_oc ?? null
+        if (!tracking && pkg) tracking = pkg.packages?.tracking_number ?? null
+        if (l.line_type === 'other') { guia = null; tracking = null }
         return { lineType: (l.line_type as 'freight' | 'other') ?? 'freight', description: l.description, freightType: l.freight_type, quantityLbs: l.quantity_lbs, unitPrice: l.unit_price, total: l.total, guia, tracking }
       }),
       total,
@@ -809,6 +825,7 @@ export class BillingService {
         ruc: agencyInfo?.ruc ?? null,
         address: agencyInfo?.address ?? null,
         phone: agencyInfo?.phone ?? null,
+        currency: agencyInfo?.currency ?? 'USD',
       },
     }
   }

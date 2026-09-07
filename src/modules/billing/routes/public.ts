@@ -15,26 +15,34 @@ const publicReceipt = new Hono<{ Bindings: CloudflareBindings }>()
 function esc(s: unknown): string {
   return String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch] as string)
 }
-const usd = (n: number) => `$${(n ?? 0).toFixed(2)}`
 const FREIGHT_ES: Record<FreightType, string> = { AIR: 'Aéreo', MAR: 'Marítimo' }
-const STATUS_ES: Record<string, string> = { DRAFT: 'Borrador', ISSUED: 'Emitida', PARTIAL: 'Pago parcial', PAID: 'Pagada', VOID: 'Anulada' }
+const money = (n: number, currency: 'USD' | 'NIO') => `${currency === 'NIO' ? 'C$' : '$'}${(n ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+function formatPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '')
+  if (digits.length === 8) return `${digits.slice(0, 4)}-${digits.slice(4)}`
+  if (digits.length === 11 && digits.startsWith('505')) return `+505 ${digits.slice(3, 7)}-${digits.slice(7)}`
+  if (digits.length === 11 && digits.startsWith('1')) return `+1 (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`
+  if (digits.length === 10) return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+  return phone
+}
 
 function receiptHtml(r: PublicReceipt): string {
   const rows = r.lines
     .map((l) => {
       const firstCell =
         l.lineType === 'freight'
-          ? `<span class="guia">${l.guia ? `Guía ${esc(l.guia)}` : esc(l.description ?? FREIGHT_ES[l.freightType ?? 'AIR'])}</span>${l.tracking ? `<br><span class="sub">Tracking ${esc(l.tracking)}</span>` : ''}`
+          ? `<span class="guia">${l.guia ? esc(l.guia) : ''}</span>${l.tracking ? `<br><span class="sub">Tracking ${esc(l.tracking)}</span>` : ''}`
           : esc(l.description ?? 'Otro cargo')
       return `<tr>
       <td>${firstCell}</td>
       <td>${l.freightType ? esc(FREIGHT_ES[l.freightType]) : '—'}</td>
       <td class="num">${l.quantityLbs != null ? esc(l.quantityLbs) : '—'}</td>
-      <td class="num">${usd(l.unitPrice)}</td>
-      <td class="num">${usd(l.total)}</td>
+      <td class="num">${money(l.unitPrice, r.agency.currency)}</td>
+      <td class="num">${money(l.total, r.agency.currency)}</td>
     </tr>`
     })
     .join('')
+  const subtotal = r.lines.reduce((sum, line) => sum + (line.total || 0), 0)
   const date = r.issueDate ? new Date(r.issueDate).toLocaleDateString('es-NI', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'
   const agencyName = esc(r.agency.name)
   const logo = r.agency.logoUrl
@@ -81,10 +89,9 @@ function receiptHtml(r: PublicReceipt): string {
       ${logo ? `<img src="${esc(logo)}" alt="${agencyName}">` : ''}
       <div class="info">
         <span class="name">${agencyName}</span>
-        <small>Factura</small>
         ${r.agency.ruc ? `<div class="ruc">RUC: ${esc(r.agency.ruc)}</div>` : ''}
         ${r.agency.address ? `<div class="address">${esc(r.agency.address)}</div>` : ''}
-        ${r.agency.phone ? `<div class="phone">${esc(r.agency.phone)}</div>` : ''}
+        ${r.agency.phone ? `<div class="phone">No de Telefono: ${esc(formatPhone(r.agency.phone))}</div>` : ''}
       </div>
     </div>
     <div class="meta"><div class="l">Factura N.º</div><div class="n">${esc(r.invoiceNumber)}</div><div class="l">${esc(date)}</div></div>
@@ -99,7 +106,8 @@ function receiptHtml(r: PublicReceipt): string {
     <tbody>${rows}</tbody>
   </table>
   <div class="totals">
-    <div class="row grand"><span>Total</span><span>${usd(r.total)}</span></div>
+    <div class="row"><span>Subtotal</span><span>${money(subtotal, r.agency.currency)}</span></div>
+    <div class="row grand"><span>Total</span><span>${money(r.total, r.agency.currency)}</span></div>
   </div>
   <div class="foot">Gracias por su preferencia · ${agencyName}</div>
 </div>
