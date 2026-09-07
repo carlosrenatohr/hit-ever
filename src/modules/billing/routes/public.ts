@@ -32,24 +32,28 @@ function receiptHtml(r: PublicReceipt): string {
     )
     .join('')
   const date = r.issueDate ? new Date(r.issueDate).toLocaleDateString('es-NI', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'
+  const agencyName = esc(r.agency.name)
+  const agencyLines = [r.agency.ruc && `RUC: ${esc(r.agency.ruc)}`, r.agency.address, r.agency.phone].filter(Boolean) as string[]
+  const logo = r.agency.logoUrl
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
-<title>Recibo #${esc(r.invoiceNumber)} — HIT Cargo</title>
+<title>Recibo #${esc(r.invoiceNumber)} — ${agencyName}</title>
 <style>
   :root { --ink:#111; --muted:#6b7280; --line:#e5e7eb; --brand:#FF3B3F; }
   * { box-sizing:border-box; }
   body { margin:0; background:#f3f4f6; color:var(--ink); font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
   .sheet { max-width:720px; margin:24px auto; background:#fff; padding:40px; border:1px solid var(--line); border-radius:12px; }
   .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid var(--ink); padding-bottom:16px; margin-bottom:20px; }
-  .brand { font-size:22px; font-weight:800; letter-spacing:-.02em; }
-  .brand small { display:block; font-size:12px; font-weight:500; color:var(--muted); letter-spacing:0; }
+  .brand { display:flex; align-items:center; gap:12px; font-size:22px; font-weight:800; letter-spacing:-.02em; }
+  .brand img { height:48px; width:48px; object-fit:contain; border-radius:6px; }
+  .brand .info { display:flex; flex-direction:column; }
+  .brand small { font-size:12px; font-weight:500; color:var(--muted); letter-spacing:0; }
+  .brand .agency-details { font-size:11px; color:var(--muted); margin-top:2px; }
   .meta { text-align:right; }
   .meta .n { font-size:24px; font-weight:800; }
   .meta .l { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
   .who { display:flex; justify-content:space-between; gap:24px; margin-bottom:20px; }
   .who .l { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
-  .status { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700; background:#f3f4f6; }
-  .status.PAID { background:#dcfce7; color:#166534; } .status.PARTIAL { background:#fef9c3; color:#854d0e; }
-  .status.ISSUED { background:#dbeafe; color:#1e40af; } .status.VOID { background:#fee2e2; color:#991b1b; }
+  .who .client-details { font-size:12px; color:var(--muted); margin-top:2px; }
   table { width:100%; border-collapse:collapse; margin-bottom:16px; }
   th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); border-bottom:1px solid var(--line); padding:8px 6px; }
   td { padding:8px 6px; border-bottom:1px solid var(--line); }
@@ -65,12 +69,22 @@ function receiptHtml(r: PublicReceipt): string {
 <div class="actions"><button class="btn" onclick="window.print()">Imprimir / Guardar PDF</button></div>
 <div class="sheet">
   <div class="top">
-    <div class="brand">HIT Cargo<small>Recibo de venta</small></div>
+    <div class="brand">
+      ${logo ? `<img src="${esc(logo)}" alt="${agencyName}">` : ''}
+      <div class="info">
+        <span>${agencyName}</span>
+        <small>Recibo de venta</small>
+        ${agencyLines.length > 0 ? `<div class="agency-details">${agencyLines.join(' · ')}</div>` : ''}
+      </div>
+    </div>
     <div class="meta"><div class="l">Recibo N.º</div><div class="n">${esc(r.invoiceNumber)}</div><div class="l">${esc(date)}</div></div>
   </div>
   <div class="who">
-    <div><div class="l">Cliente</div><div>${esc(r.clientName ?? '—')}</div></div>
-    <div><span class="status ${esc(r.status)}">${esc(STATUS_ES[r.status] ?? r.status)}</span></div>
+    <div>
+      <div class="l">Cliente</div>
+      <div>${esc(r.clientName ?? '—')}</div>
+      ${r.clientAddress ? `<div class="client-details">${esc(r.clientAddress)}</div>` : ''}
+    </div>
   </div>
   <table>
     <thead><tr><th>Descripción</th><th>Flete</th><th class="num">Libras</th><th class="num">P. unit.</th><th class="num">Total</th></tr></thead>
@@ -81,7 +95,7 @@ function receiptHtml(r: PublicReceipt): string {
     ${r.paidUsd > 0 ? `<div class="row"><span>Pagado</span><span>${usd(r.paidUsd)}</span></div>` : ''}
     ${r.outstanding > 0 ? `<div class="row"><span>Saldo pendiente</span><span>${usd(r.outstanding)}</span></div>` : ''}
   </div>
-  <div class="foot">Gracias por su preferencia · HIT Cargo</div>
+  <div class="foot">Gracias por su preferencia · ${agencyName}</div>
 </div>
 </body></html>`
 }
