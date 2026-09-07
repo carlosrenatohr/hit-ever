@@ -622,6 +622,11 @@ export class BillingService {
     return this.repo.getExceptions(organizationId)
   }
 
+  /** -- Package IDs that have at least one invoice link (org-scoped). -- */
+  async linkedPackageIds(organizationId: string): Promise<string[]> {
+    return this.repo.listLinkedPackageIds(organizationId)
+  }
+
   /** Get (or lazily create) the invoice's public share token. */
   async shareInvoice(id: string, organizationId?: string): Promise<string> {
     const b = await this.repo.getInvoiceBundle(id, organizationId)

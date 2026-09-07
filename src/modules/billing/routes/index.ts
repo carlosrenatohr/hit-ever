@@ -323,6 +323,12 @@ billing.get('/exceptions', async (c) => {
   return Res.ok(c, await svc.exceptions(c.get('billingSession').agency))
 })
 
+/** GET /api/billing/linked-packages — org-scoped package IDs with at least one invoice link. */
+billing.get('/linked-packages', async (c) => {
+  const svc = new BillingService(getBillingRepo(c.env))
+  return Res.ok(c, { ids: await svc.linkedPackageIds(c.get('billingSession').agency) })
+})
+
 /** GET /api/billing/close-month?year=2026&month=6 — monthly aggregation (replaces TOTAL JUNIO). */
 billing.get(
   '/close-month',
