@@ -211,6 +211,8 @@ export interface BillingRepository {
   findPackageIdByToken(token: string, organizationId?: string): Promise<string | null>
   linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId: string): Promise<void>
   unlinkPackage(invoiceId: string, packageId: string): Promise<void>
+  /** -- Package IDs that have at least one invoice link (org-scoped, for the reports filter). -- */
+  listLinkedPackageIds(organizationId: string): Promise<string[]>
 }
 
 // ─── InsForge adapter ─────────────────────────────────────────────────────────
@@ -529,6 +531,11 @@ export class InsforgeBillingRepo implements BillingRepository {
 
   async unlinkPackage(invoiceId: string, packageId: string): Promise<void> {
     await this.del('invoice_packages', `invoice_id=eq.${encodeURIComponent(invoiceId)}&package_id=eq.${encodeURIComponent(packageId)}`)
+  }
+
+  async listLinkedPackageIds(organizationId: string): Promise<string[]> {
+    const rows = await this.get<{ package_id: string }>('invoice_packages', `organization_id=eq.${encodeURIComponent(organizationId)}&select=package_id&limit=10000`)
+    return [...new Set(rows.map((r) => r.package_id))]
   }
 }
 

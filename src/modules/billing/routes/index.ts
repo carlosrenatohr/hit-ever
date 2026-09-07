@@ -27,6 +27,14 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
 
 const billing = new Hono<BillingEnv>()
 
+/** GET /api/billing/linked-packages — org-scoped package IDs with at least one invoice link.
+ *  Registered before the global billingAuth gate so that the viewer role (reports:read only)
+ *  can access it without needing invoices:read. */
+billing.get('/linked-packages', billingAuth('reports:read'), async (c) => {
+  const svc = new BillingService(getBillingRepo(c.env))
+  return Res.ok(c, { ids: await svc.linkedPackageIds(c.get('billingSession').agency) })
+})
+
 // Read access gates the whole surface; write routes additionally re-check
 // 'invoices:write' at the route level (Stage 3).
 billing.use('*', billingAuth('invoices:read'))
