@@ -123,11 +123,13 @@ export interface PublicReceipt {
   invoiceNumber: number
   issueDate: string | null
   clientName: string | null
+  clientAddress: string | null
   status: InvoiceStatus
   lines: Array<{ description: string | null; freightType: FreightType; quantityLbs: number; unitPrice: number; total: number }>
   total: number
   paidUsd: number
   outstanding: number
+  agency: { name: string; logoUrl: string | null; ruc: string | null; address: string | null; phone: string | null }
 }
 
 export interface YearReport {
@@ -772,15 +774,25 @@ export class BillingService {
     if (!b) return null
     const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
     const paidUsd = round2(b.header.paid_usd || 0)
+    // Fetch agency info for multi-tenant branding
+    const agencyInfo = await this.repo.getAgencyInfo(b.header.organization_id)
     return {
       invoiceNumber: b.header.invoice_number,
       issueDate: b.header.issue_date,
       clientName: b.header.client_name_raw,
+      clientAddress: b.header.address ?? null,
       status: b.header.status,
       lines: b.lines.map((l) => ({ description: l.description, freightType: l.freight_type, quantityLbs: l.quantity_lbs, unitPrice: l.unit_price, total: l.total })),
       total,
       paidUsd,
       outstanding: outstandingOf(b.header.status, total, paidUsd),
+      agency: {
+        name: agencyInfo?.name ?? b.header.organization_id ?? 'Factura',
+        logoUrl: agencyInfo?.logoUrl ?? null,
+        ruc: agencyInfo?.ruc ?? null,
+        address: agencyInfo?.address ?? null,
+        phone: agencyInfo?.phone ?? null,
+      },
     }
   }
 

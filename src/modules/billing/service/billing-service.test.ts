@@ -71,14 +71,16 @@ describe('publicReceipt', () => {
   it('exposes only customer-safe fields (no cost/profit/margin/freightCost)', async () => {
     const repo = {
       getPublicBundle: async () =>
-        bundle({ status: 'PAID', invoice_number: 5, client_name_raw: 'Ana', issue_date: '2026-06-10', paid_usd: 32.5 }, [
+        bundle({ status: 'PAID', invoice_number: 5, client_name_raw: 'Ana', issue_date: '2026-06-10', paid_usd: 32.5, organization_id: 'hit' }, [
           { freight_type: 'AIR', total: 32.5, profit: 10, freight_cost: 22.5, unit_price: 6.5, quantity_lbs: 5 },
         ]),
+      getAgencyInfo: async () => ({ name: 'HIT Cargo', logoUrl: null, ruc: null, address: null, phone: null }),
     } as unknown as BillingRepository
     const r = await new BillingService(repo).publicReceipt('tok')
     expect(r).not.toBeNull()
     expect(r!.total).toBe(32.5)
     expect(r!.invoiceNumber).toBe(5)
+    expect(r!.agency.name).toBe('HIT Cargo')
     const line = r!.lines[0] as Record<string, unknown>
     expect(line).not.toHaveProperty('profit')
     expect(line).not.toHaveProperty('freightCost')
