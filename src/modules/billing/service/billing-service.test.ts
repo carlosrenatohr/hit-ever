@@ -86,6 +86,28 @@ describe('publicReceipt', () => {
     expect(line).not.toHaveProperty('freightCost')
     expect(line.total).toBe(32.5)
   })
+
+  it('resolves legacy freight lines from linked packages in line order', async () => {
+    const b = bundle({ status: 'ISSUED', organization_id: 'solo-guegue' }, [
+      { line_no: 1, line_type: 'freight', package_id: null, package_guia: null, package_tracking: null },
+      { line_no: 2, line_type: 'freight', package_id: null, package_guia: null, package_tracking: null },
+    ])
+    b.packages = [
+      { id: 'link-1', invoice_id: 'i1', package_id: 'pkg-1', source: 'manual', matched_oc: null, packages: { almacen_id: 'SG-100111', tracking_number: 'TRACK-111' } },
+      { id: 'link-2', invoice_id: 'i1', package_id: 'pkg-2', source: 'manual', matched_oc: null, packages: { almacen_id: 'SG-100106', tracking_number: 'TRACK-106' } },
+    ]
+    const repo = {
+      getPublicBundle: async () => b,
+      getAgencyInfo: async () => ({ name: 'Solo Guegue', logoUrl: null, ruc: null, address: null, phone: null }),
+    } as unknown as BillingRepository
+
+    const receipt = await new BillingService(repo).publicReceipt('tok')
+
+    expect(receipt?.lines.map((line) => [line.guia, line.tracking])).toEqual([
+      ['SG-100111', 'TRACK-111'],
+      ['SG-100106', 'TRACK-106'],
+    ])
+  })
 })
 
 describe('aggregateYear', () => {
