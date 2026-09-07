@@ -95,6 +95,8 @@ export interface PackageLinkDbRow {
   package_id: string
   source: 'auto' | 'manual'
   matched_oc: string | null
+  /** True while the package is billed by this invoice; false once released (void/unlink). */
+  active?: boolean
   /** PostgREST many-to-one embed of the linked package (guide + tracking). */
   packages?: { almacen_id: string; tracking_number: string | null } | null
 }
@@ -201,6 +203,8 @@ export interface BillingRepository {
   getExceptions(organizationId?: string): Promise<ExceptionsPayload>
   // Package linking:
   getPackagesForBulk(packageIds: string[], organizationId: string): Promise<PackageBulkRow[]>
+  /** A client's packages in this agency (bulk row shape), for the guided new-invoice flow. */
+  getPackagesForClient(clientId: string, organizationId: string): Promise<PackageBulkRow[]>
   packageBelongsToOrg(packageId: string, organizationId: string): Promise<boolean>
   /** Whether the charge concept exists within the agency (validates client input). */
   conceptBelongsToOrg(conceptId: string, organizationId: string): Promise<boolean>
@@ -493,6 +497,11 @@ export class InsforgeBillingRepo implements BillingRepository {
     if (packageIds.length === 0) return []
     const ids = packageIds.map((id) => encodeURIComponent(id)).join(',')
     const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&select=id,almacen_id,tracking_number,effective_status,service_type,weight_lb,client_id,referencia_name,organization_id&limit=${packageIds.length}`
+    return this.get<PackageBulkRow>('packages', q)
+  }
+
+  async getPackagesForClient(clientId: string, organizationId: string): Promise<PackageBulkRow[]> {
+    const q = `client_id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=id,almacen_id,tracking_number,effective_status,service_type,weight_lb,client_id,referencia_name,organization_id&limit=1000`
     return this.get<PackageBulkRow>('packages', q)
   }
 

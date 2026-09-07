@@ -25,6 +25,9 @@ export interface CreateLineInput {
   /** Explicit rate table for this line (overrides the client's default). Must
    * belong to the caller's agency — the server validates. */
   rateTableId?: string | null
+  /** Package billed by this freight line. The server validates it and
+   * snapshots guía/tracking into the line. */
+  packageId?: string | null
 }
 export interface CreateOtherLineInput {
   /** Charge concept template used (traceability + prefill source). */
@@ -372,6 +375,118 @@ export class BillingService {
     this.catalog = new CatalogService(repo)
   }
 
+  /**
+   * Validate + resolve a set of packages for billing against one invoice.
+   * Enforces org scope (via getPackagesForBulk), invoiceable status, client
+   * match (client_id, or referencia_name for legacy rows), positive weight,
+   * service type, and the active-link invariant. Returns a map id → snapshot
+   * fields used to stamp each freight line and link the package.
+   */
+  private async resolveInvoicePackages(
+    packageIds: string[],
+    clientId: string | null,
+    clientName: string | null,
+    organizationId: string,
+    excludeInvoiceId?: string,
+  ): Promise<Map<string, { guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null }>> {
+    const invoiceable = new Set(['en_destino', 'entregado'])
+    const result = new Map<string, { guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null }>()
+    if (packageIds.length === 0) return result
+    const pkgs = await this.repo.getPackagesForBulk(packageIds, organizationId)
+    const byId = new Map(pkgs.map((p) => [p.id, p]))
+    for (const id of packageIds) {
+      const p = byId.get(id)
+      if (!p) throw new Error(`Package ${id} not found in your agency.`)
+      if (!invoiceable.has(p.effective_status)) {
+        throw new Error(`Package ${p.almacen_id} is not invoiceable (status: ${p.effective_status}).`)
+      }
+      const refName = (p.referencia_name ?? '').trim() || null
+      if (p.client_id && clientId && p.client_id !== clientId) {
+        throw new Error(`Package ${p.almacen_id} belongs to a different client.`)
+      }
+      if (!p.client_id && (!clientName || !refName || refName !== clientName)) {
+        throw new Error(`Package ${p.almacen_id} has no client assigned to ${clientName ?? 'this invoice'}.`)
+      }
+      if (p.weight_lb == null || p.weight_lb <= 0) {
+        throw new Error(`Package ${p.almacen_id} has no weight.`)
+      }
+      if (!p.service_type) {
+        throw new Error(`Package ${p.almacen_id} has no service type.`)
+      }
+      const active = await this.repo.getActivePackageLink(id)
+      if (active && active.invoiceId !== excludeInvoiceId) {
+        throw new Error(`Package ${p.almacen_id} is already invoiced (invoice ${active.invoiceId}).`)
+      }
+      result.set(id, {
+        guia: p.almacen_id,
+        tracking: p.tracking_number,
+        serviceType: p.service_type,
+        freightType: SERVICE_TYPE_TO_FREIGHT[p.service_type] ?? 'AIR',
+        weightLb: p.weight_lb,
+      })
+    }
+    return result
+  }
+
+  /** A client's packages in this agency, each marked eligible or not with a reason.
+   *  Feeds the guided new-invoice flow (select client → pick unbilled guides). */
+  async listUnbilledPackagesForClient(
+    clientId: string,
+    organizationId: string,
+  ): Promise<{
+    clientId: string
+    packages: Array<{
+      packageId: string
+      guia: string | null
+      tracking: string | null
+      status: string
+      serviceType: string | null
+      freightType: FreightType | null
+      weightLb: number | null
+      eligible: boolean
+      reason: string | null
+    }>
+  }> {
+    const pkgs = await this.repo.getPackagesForClient(clientId, organizationId)
+    const invoiceable = new Set(['en_destino', 'entregado'])
+    const packages: Array<{
+      packageId: string
+      guia: string | null
+      tracking: string | null
+      status: string
+      serviceType: string | null
+      freightType: FreightType | null
+      weightLb: number | null
+      eligible: boolean
+      reason: string | null
+    }> = []
+    for (const p of pkgs) {
+      let reason: string | null = null
+      if (!invoiceable.has(p.effective_status)) {
+        reason = `Estado ${p.effective_status} no facturable`
+      } else if (p.weight_lb == null || p.weight_lb <= 0) {
+        reason = 'Sin peso'
+      } else if (!p.service_type) {
+        reason = 'Sin servicio'
+      } else {
+        const active = await this.repo.getActivePackageLink(p.id)
+        if (active) reason = 'Ya facturado'
+      }
+      packages.push({
+        packageId: p.id,
+        guia: p.almacen_id,
+        tracking: p.tracking_number,
+        status: p.effective_status,
+        serviceType: p.service_type,
+        freightType: p.service_type ? (SERVICE_TYPE_TO_FREIGHT[p.service_type] ?? null) : null,
+        weightLb: p.weight_lb,
+        eligible: reason === null,
+        reason,
+      })
+    }
+    return { clientId, packages }
+  }
+
   async list(filter: Parameters<BillingRepository['listInvoices']>[0]) {
     const { rows, count } = await this.repo.listInvoices(filter)
     return {
@@ -409,18 +524,12 @@ export class BillingService {
     const clientId = await this.repo.upsertClient(display, key, organizationId)
     const defaultRateTableId = await this.repo.getClientDefaultRateTable(clientId)
 
-    // Validate client-supplied package links BEFORE writing anything: a package
-    // from another agency must never be attached to an invoice, and a package
-    // with an active invoice link cannot be double-invoiced.
-    for (const pkgId of input.packageIds ?? []) {
-      if (!(await this.repo.packageBelongsToOrg(pkgId, organizationId))) {
-        throw new Error(`Package ${pkgId} not found in your agency.`)
-      }
-      const active = await this.repo.getActivePackageLink(pkgId)
-      if (active) {
-        throw new Error(`Package ${pkgId} is already invoiced (invoice ${active.invoiceId}).`)
-      }
-    }
+    // Package links come from the per-line packageId (guided flow) or the
+    // legacy packageIds array. Validate them together (org, invoiceable,
+    // client match, active-link) and resolve the guía/tracking snapshot.
+    const linePkgIds = input.lines.filter((l) => l.packageId).map((l) => l.packageId as string)
+    const packageIds = [...new Set([...(input.packageIds ?? []), ...linePkgIds])]
+    const packageInfo = await this.resolveInvoicePackages(packageIds, clientId, display, organizationId)
 
     // Price every line from the org's rate tables (per-line table overrides the
     // client's default; legacy catalog fallback); rejects a tier the org does not offer.
@@ -429,6 +538,7 @@ export class BillingService {
       const l = input.lines[i]
       const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, l.rateTableId ?? defaultRateTableId)
       if (!q) throw new Error(`Tier ${l.tier} is not offered for ${l.freightType}.`)
+      const info = l.packageId ? packageInfo.get(l.packageId) : undefined
       lineRows.push({
         line_no: i + 1,
         description: l.description ?? null,
@@ -444,6 +554,9 @@ export class BillingService {
         profit: q.profit,
         price_tier: l.tier,
         price_off_catalog: false,
+        package_id: l.packageId ?? null,
+        package_guia: info?.guia ?? null,
+        package_tracking: info?.tracking ?? null,
         organization_id: organizationId,
       })
     }
@@ -514,12 +627,10 @@ export class BillingService {
       paid_usd: 0,
     })
     await this.repo.insertLineItems(invoiceId, lineRows)
-    const linkedPkgs = input.packageIds?.length ? await this.repo.getPackagesForBulk(input.packageIds, organizationId) : []
-    const guiaById = new Map(linkedPkgs.map((p) => [p.id, p.almacen_id]))
-    for (const pkgId of input.packageIds ?? []) {
+    for (const pkgId of packageIds) {
       // matched_oc carries the guide: the linked-packages view must show the
       // guía, never a raw UUID.
-      await this.repo.linkPackage(invoiceId, pkgId, 'manual', guiaById.get(pkgId) ?? null, actor, organizationId)
+      await this.repo.linkPackage(invoiceId, pkgId, 'manual', packageInfo.get(pkgId)?.guia ?? null, actor, organizationId)
       // Package history entry: the invoice trace must live with the package too.
       await this.repo.insertPackageEvent(pkgId, `Factura #${invoiceNumber} generada`, new Date().toISOString())
     }
@@ -537,7 +648,7 @@ export class BillingService {
     input: {
       issueDate?: string | null
       observations?: string | null
-      lines?: Array<{ freightType: FreightType; tier: PriceTier; quantityLbs: number; description?: string | null; rateTableId?: string | null }>
+      lines?: Array<{ freightType: FreightType; tier: PriceTier; quantityLbs: number; description?: string | null; rateTableId?: string | null; packageId?: string | null }>
       otherLines?: Array<{ conceptId?: string | null; description?: string | null; amount: number }>
     },
     actor: string,
@@ -559,15 +670,22 @@ export class BillingService {
 
     // Re-quote freight lines if provided.
     let lineRows: Array<Record<string, unknown>> | null = null
+    let linePkgIds: string[] = []
+    let packageInfo = new Map<string, { guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null }>()
     if (input.lines) {
       if (input.lines.length === 0) throw new Error('An invoice needs at least one line.')
       const clientId = b.header.client_id
       const defaultRateTableId = clientId ? await this.repo.getClientDefaultRateTable(clientId) : null
+      // Validate any per-line packages against this invoice (org, invoiceable,
+      // client match, active-link) and resolve their guía/tracking snapshots.
+      linePkgIds = input.lines.filter((l) => l.packageId).map((l) => l.packageId as string)
+      packageInfo = await this.resolveInvoicePackages(linePkgIds, b.header.client_id, b.header.client_name_raw, organizationId, id)
       lineRows = []
       for (let i = 0; i < input.lines.length; i++) {
         const l = input.lines[i]
         const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, l.rateTableId ?? defaultRateTableId)
         if (!q) throw new Error(`Tier ${l.tier} is not offered for ${l.freightType}.`)
+        const info = l.packageId ? packageInfo.get(l.packageId) : undefined
         lineRows.push({
           line_no: i + 1,
           description: l.description ?? null,
@@ -583,6 +701,9 @@ export class BillingService {
           profit: q.profit,
           price_tier: l.tier,
           price_off_catalog: false,
+          package_id: l.packageId ?? null,
+          package_guia: info?.guia ?? null,
+          package_tracking: info?.tracking ?? null,
           organization_id: organizationId,
         })
       }
@@ -633,6 +754,27 @@ export class BillingService {
         const profit = round2(allRows.reduce((s, r) => s + ((r.profit as number) || 0), 0))
         headerPatch.total = total
         headerPatch.profit = profit
+        // Sync package links while the draft stays open. Only when the edited
+        // lines actually carry packageIds — legacy edits that don't send them
+        // leave the existing links untouched.
+        if (linePkgIds.length > 0) {
+          const desired = new Set(linePkgIds)
+          const current = b.packages.filter((p) => p.active !== false).map((p) => p.package_id)
+          for (const pkgId of linePkgIds) {
+            if (!current.includes(pkgId)) {
+              await this.repo.linkPackage(id, pkgId, 'manual', packageInfo.get(pkgId)?.guia ?? null, actor, organizationId)
+              await this.repo.insertPackageEvent(pkgId, `Factura #${b.header.invoice_number} enlazada`, new Date().toISOString())
+              await this.repo.insertInvoiceEvent(id, organizationId, 'Paquete enlazado', pkgId, actor)
+            }
+          }
+          for (const pkgId of current) {
+            if (!desired.has(pkgId)) {
+              await this.repo.unlinkPackage(id, pkgId)
+              await this.repo.insertPackageEvent(pkgId, `Factura #${b.header.invoice_number} desenlazada`, new Date().toISOString())
+              await this.repo.insertInvoiceEvent(id, organizationId, 'Paquete desenlazado', pkgId, actor)
+            }
+          }
+        }
       }
     }
 
@@ -659,6 +801,11 @@ export class BillingService {
     if (!won) throw new Error('Invoice is already closed or voided — reload it.')
     const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
     await this.repo.insertInvoiceEvent(id, organizationId, 'Factura cerrada', `Total fijado en ${total.toFixed(2)} USD`, actor)
+    for (const p of b.packages) {
+      if (p.active !== false) {
+        await this.repo.insertPackageEvent(p.package_id, `Factura #${b.header.invoice_number} cerrada`, new Date().toISOString())
+      }
+    }
     return (await this.get(id, organizationId))!
   }
 
@@ -693,6 +840,12 @@ export class BillingService {
     await this.repo.setInvoiceTotals(id, { total, profit: round2(b.lines.reduce((s, l) => s + (l.profit || 0), 0)), paidUsd })
     const ref = input.reference?.trim() ? ` · Ref ${input.reference.trim()}` : ''
     await this.repo.insertInvoiceEvent(id, organizationId, `Pago registrado (${input.method})`, `${input.amount.toFixed(2)} ${input.currency}${ref}`, actor ?? null)
+    const payDesc = status === 'PAID' ? `Pago total de factura #${b.header.invoice_number}` : `Pago parcial de factura #${b.header.invoice_number}`
+    for (const p of b.packages) {
+      if (p.active !== false) {
+        await this.repo.insertPackageEvent(p.package_id, payDesc, new Date().toISOString())
+      }
+    }
     return (await this.get(id, organizationId))!
   }
 
@@ -702,6 +855,11 @@ export class BillingService {
     await this.repo.setInvoiceStatus(id, 'VOID', reason ? { observations: reason } : {})
     // Release all active package links so the packages can be re-invoiced.
     await this.repo.releasePackageLinksByInvoice(id, 'system:void')
+    for (const p of b.packages) {
+      if (p.active !== false) {
+        await this.repo.insertPackageEvent(p.package_id, `Factura #${b.header.invoice_number} anulada`, new Date().toISOString())
+      }
+    }
     if (organizationId) {
       await this.repo.insertInvoiceEvent(id, organizationId, 'Factura anulada', reason ?? null, null)
     }
@@ -741,6 +899,7 @@ export class BillingService {
     await this.repo.unlinkPackage(id, packageId)
     const v = await this.get(id, organizationId)
     if (!v) throw new Error('Invoice not found.')
+    await this.repo.insertPackageEvent(packageId, `Factura #${before.header.invoice_number} desenlazada`, new Date().toISOString())
     if (organizationId) {
       await this.repo.insertInvoiceEvent(id, organizationId, 'Paquete desenlazado', packageId, null)
     }

@@ -134,12 +134,25 @@ billing.get('/invoices/:id/events', async (c) => {
   return Res.ok(c, { events: await svc.events(c.req.param('id'), c.get('billingSession').agency) })
 })
 
+/**
+ * GET /api/billing/clients/:clientId/unbilled-packages
+ * Org-scoped list of a client's packages (eligible + ineligible with reasons)
+ * for the guided new-invoice flow (select client → pick unbilled guides).
+ * Requires invoices:write like the create flow it feeds.
+ */
+billing.get('/clients/:clientId/unbilled-packages', billingAuth('invoices:write'), async (c) => {
+  const svc = new BillingService(getBillingRepo(c.env))
+  const result = await svc.listUnbilledPackagesForClient(c.req.param('clientId'), c.get('billingSession').agency)
+  return Res.ok(c, result)
+})
+
 const LINE_SCHEMA = z.object({
   freightType: z.enum(FREIGHT_TYPES),
   tier: z.string().min(1),
   quantityLbs: z.number().positive(),
   description: z.string().nullish(),
   rateTableId: z.string().uuid().nullish(),
+  packageId: z.string().uuid().nullish(),
 })
 
 const OTHER_LINE_SCHEMA = z.object({
