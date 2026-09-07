@@ -445,3 +445,13 @@ describe('createBulkInvoice', () => {
     expect(linkPackage).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('linkedPackageIds', () => {
+  it('returns org-scoped package IDs from the repo', async () => {
+    const repo = { listLinkedPackageIds: vi.fn(async () => ['p1', 'p2', 'p1']) } as unknown as BillingRepository
+    const ids = await new BillingService(repo).linkedPackageIds('hit')
+    expect(repo.listLinkedPackageIds).toHaveBeenCalledWith('hit')
+    // dedup handled by the repo (Set in the impl), but the service passes through
+    expect(ids).toEqual(['p1', 'p2', 'p1'])
+  })
+})
