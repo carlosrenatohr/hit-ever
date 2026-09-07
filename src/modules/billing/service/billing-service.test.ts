@@ -120,6 +120,7 @@ describe('createInvoice — package links', () => {
       upsertClient: async () => 'c1',
       getClientDefaultRateTable: async () => null,
       packageBelongsToOrg: async () => belongs,
+      getPackagesForBulk: async (ids: string[]) => ids.map((id) => ({ id, almacen_id: `G-${id}`, tracking_number: `T-${id}` })),
       nextInvoiceNumber: async () => 1,
       createInvoiceHeader: async () => 'i1',
       insertLineItems: async () => {},
