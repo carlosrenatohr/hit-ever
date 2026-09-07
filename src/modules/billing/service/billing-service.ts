@@ -125,7 +125,7 @@ export interface PublicReceipt {
   clientName: string | null
   clientAddress: string | null
   status: InvoiceStatus
-  lines: Array<{ description: string | null; freightType: FreightType; quantityLbs: number; unitPrice: number; total: number }>
+  lines: Array<{ description: string | null; freightType: FreightType; quantityLbs: number; unitPrice: number; total: number; guia: string | null; tracking: string | null }>
   total: number
   paidUsd: number
   outstanding: number
@@ -782,7 +782,7 @@ export class BillingService {
       clientName: b.header.client_name_raw,
       clientAddress: b.header.address ?? null,
       status: b.header.status,
-      lines: b.lines.map((l) => ({ description: l.description, freightType: l.freight_type, quantityLbs: l.quantity_lbs, unitPrice: l.unit_price, total: l.total })),
+      lines: b.lines.map((l) => ({ description: l.description, freightType: l.freight_type, quantityLbs: l.quantity_lbs, unitPrice: l.unit_price, total: l.total, guia: l.package_guia ?? null, tracking: l.package_tracking ?? null })),
       total,
       paidUsd,
       outstanding: outstandingOf(b.header.status, total, paidUsd),
