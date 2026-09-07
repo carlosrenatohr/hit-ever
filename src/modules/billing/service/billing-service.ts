@@ -782,7 +782,13 @@ export class BillingService {
       clientName: b.header.client_name_raw,
       clientAddress: b.header.address ?? null,
       status: b.header.status,
-      lines: b.lines.map((l) => ({ description: l.description, freightType: l.freight_type, quantityLbs: l.quantity_lbs, unitPrice: l.unit_price, total: l.total, guia: l.package_guia ?? null, tracking: l.package_tracking ?? null })),
+      lines: b.lines.map((l) => {
+        // Resolve guia/tracking: prefer line snapshot, fall back to linked packages
+        const pkg = l.package_id ? b.packages.find((p) => p.package_id === l.package_id) : null
+        const guia = l.package_guia ?? pkg?.packages?.almacen_id ?? pkg?.matched_oc ?? null
+        const tracking = l.package_tracking ?? pkg?.packages?.tracking_number ?? null
+        return { description: l.description, freightType: l.freight_type, quantityLbs: l.quantity_lbs, unitPrice: l.unit_price, total: l.total, guia, tracking }
+      }),
       total,
       paidUsd,
       outstanding: outstandingOf(b.header.status, total, paidUsd),

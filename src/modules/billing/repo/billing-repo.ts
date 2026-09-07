@@ -435,8 +435,11 @@ export class InsforgeBillingRepo implements BillingRepository {
     const headers = await this.get<InvoiceHeaderDbRow>('invoices', `public_token=eq.${encodeURIComponent(token)}&limit=1`)
     const header = headers[0]
     if (!header) return null
-    const lines = await this.get<LineItemDbRow>('invoice_line_items', `invoice_id=eq.${header.id}&order=line_no.asc`)
-    return { header, lines, payments: [], packages: [] }
+    const [lines, packages] = await Promise.all([
+      this.get<LineItemDbRow>('invoice_line_items', `invoice_id=eq.${header.id}&order=line_no.asc`),
+      this.get<PackageLinkDbRow>('invoice_packages', `invoice_id=eq.${header.id}&select=*,packages(almacen_id,tracking_number)`),
+    ])
+    return { header, lines, payments: [], packages }
   }
 
   async getBundlesByDateRange(from: string, to: string, organizationId?: string): Promise<InvoiceBundle[]> {
