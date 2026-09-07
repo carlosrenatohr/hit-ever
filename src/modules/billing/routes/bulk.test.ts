@@ -6,7 +6,7 @@ const ENV = { INSFORGE_API_URL: 'https://db.test', INSFORGE_API_KEY: 'admin-key'
 
 afterEach(() => vi.unstubAllGlobals())
 
-function stubAuthAndDb(opts: { packages?: unknown[]; rates?: unknown[]; methods?: unknown[] } = {}) {
+function stubAuthAndDb(opts: { packages?: unknown[]; rates?: unknown[]; methods?: unknown[]; activeLinks?: Record<string, string> } = {}) {
   const calls: { method: string; url: string; body?: string }[] = []
   vi.stubGlobal('fetch', async (input: Request | string, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.url
@@ -21,6 +21,17 @@ function stubAuthAndDb(opts: { packages?: unknown[]; rates?: unknown[]; methods?
       return new Response(JSON.stringify([{ role: 'billing', active: true, name: 'B', email: 'billing@hit.com', agency: 'hit' }]), { status: 201 })
     }
     calls.push({ method, url, body: typeof init?.body === 'string' ? init.body : undefined })
+    // Active-link check: if the URL queries invoice_packages with active=eq.true
+    // and a package_id, return the configured active link (or empty).
+    if (method === 'GET' && url.includes('/records/invoice_packages?') && url.includes('active=eq.true')) {
+      const pkgMatch = url.match(/package_id=eq\.([^&]+)/)
+      if (pkgMatch) {
+        const pkgId = decodeURIComponent(pkgMatch[1])
+        const invoiceId = opts.activeLinks?.[pkgId]
+        if (invoiceId) return new Response(JSON.stringify([{ invoice_id: invoiceId }]), { status: 200 })
+      }
+      return new Response(JSON.stringify([]), { status: 200 })
+    }
     if (method === 'GET' && url.includes('/records/packages?')) return new Response(JSON.stringify(opts.packages ?? []), { status: 200 })
     if (method === 'GET' && url.includes('/records/billing_clients?')) return new Response(JSON.stringify([{ default_rate_id: null }]), { status: 200 })
     if (method === 'GET' && url.includes('/records/rate_tables?')) return new Response(JSON.stringify([{ id: 't1', name: 'Estándar', freight_type: 'AIR', rate_rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, price_model: 'weight' }] }]), { status: 200 })
@@ -99,5 +110,63 @@ describe('POST /api/billing/invoices/bulk/create', () => {
     })
     const res = await post('/api/billing/invoices/bulk/create', { packageIds: ['pkg-1', 'pkg-3'] })
     expect(res.status).toBe(422)
+  })
+})
+
+describe('POST /api/billing/invoices/bulk/eligibility', () => {
+  it('returns eligible=true for valid packages', async () => {
+    stubAuthAndDb({ packages: [EN_DESTINO_PKG, ENTREGADO_PKG] })
+    const res = await post('/api/billing/invoices/bulk/eligibility', { packageIds: ['pkg-1', 'pkg-2'] })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    expect(body.data.eligible).toBe(true)
+    expect(body.data.reasons).toHaveLength(0)
+  })
+  it('returns reasons for non-invoiceable packages', async () => {
+    stubAuthAndDb({ packages: [{ ...EN_DESTINO_PKG, effective_status: 'en_transito' }] })
+    const res = await post('/api/billing/invoices/bulk/eligibility', { packageIds: ['pkg-1'] })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.eligible).toBe(false)
+    expect(body.data.reasons[0].code).toBe('PACKAGE_NOT_INVOICEABLE')
+  })
+  it('returns reason for already-invoiced packages', async () => {
+    stubAuthAndDb({ packages: [EN_DESTINO_PKG], activeLinks: { 'pkg-1': 'existing-inv' } })
+    const res = await post('/api/billing/invoices/bulk/eligibility', { packageIds: ['pkg-1'] })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.eligible).toBe(false)
+    expect(body.data.reasons[0].code).toBe('PACKAGE_ALREADY_INVOICED')
+  })
+  it('returns reason for mixed clients', async () => {
+    stubAuthAndDb({
+      packages: [
+        { ...EN_DESTINO_PKG, client_id: 'c-ana', referencia_name: 'Ana' },
+        { ...EN_DESTINO_PKG, id: 'pkg-3', client_id: 'c-luis', referencia_name: 'Luis' },
+      ],
+    })
+    const res = await post('/api/billing/invoices/bulk/eligibility', { packageIds: ['pkg-1', 'pkg-3'] })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.eligible).toBe(false)
+    expect(body.data.reasons.some((r: { code: string }) => r.code === 'BULK_MIXED_CLIENTS')).toBe(true)
+  })
+})
+
+describe('Active-link invariant', () => {
+  it('409s preview when a package already has an active invoice', async () => {
+    stubAuthAndDb({ packages: [EN_DESTINO_PKG, ENTREGADO_PKG], activeLinks: { 'pkg-1': 'existing-inv' } })
+    const res = await post('/api/billing/invoices/bulk/preview', { packageIds: ['pkg-1', 'pkg-2'] })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('PACKAGE_ALREADY_INVOICED')
+  })
+  it('409s create when a package already has an active invoice', async () => {
+    stubAuthAndDb({ packages: [EN_DESTINO_PKG, ENTREGADO_PKG], activeLinks: { 'pkg-1': 'existing-inv' } })
+    const res = await post('/api/billing/invoices/bulk/create', { packageIds: ['pkg-1', 'pkg-2'] })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('PACKAGE_ALREADY_INVOICED')
   })
 })

@@ -21,6 +21,7 @@ import { BillingService } from '../service/billing-service.js'
 function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   const msg = e instanceof Error ? e.message : 'Unexpected error.'
   if (/not found/i.test(msg)) return Res.err(c, 'NOT_FOUND', msg, 404)
+  if (/already invoiced/i.test(msg)) return Res.err(c, 'PACKAGE_ALREADY_INVOICED', msg, 409)
   if (/voided|at least one|not offered|already closed|close the invoice|links are frozen|not invoiceable|different clients|no client assigned|No packages|Too many/i.test(msg)) return Res.err(c, 'INVALID_REQUEST', msg, 422)
   return Res.err(c, 'BILLING_ERROR', msg, 500)
 }
@@ -345,6 +346,25 @@ billing.get(
 )
 
 // ─── Bulk invoicing (from Paquetería) ─────────────────────────────────────────
+
+/** POST /api/billing/invoices/bulk/eligibility — pre-validate a selection without creating anything.
+ *  Returns per-package eligibility reasons so the UI can show which packages block the action. */
+billing.post(
+  '/invoices/bulk/eligibility',
+  billingAuth('invoices:write'),
+  zValidator(
+    'json',
+    z.object({ packageIds: z.array(z.string().min(1)).min(1).max(100) }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'packageIds (1-100) is required.', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new BillingService(getBillingRepo(c.env))
+    const result = await svc.checkBulkEligibility(c.req.valid('json').packageIds, c.get('billingSession').agency)
+    return Res.ok(c, result)
+  },
+)
 
 /** POST /api/billing/invoices/bulk/preview — validate + price a batch of packages. */
 billing.post(

@@ -213,6 +213,10 @@ export interface BillingRepository {
   unlinkPackage(invoiceId: string, packageId: string): Promise<void>
   /** -- Package IDs that have at least one invoice link (org-scoped, for the reports filter). -- */
   listLinkedPackageIds(organizationId: string): Promise<string[]>
+  /** Release all active package links for an invoice (sets active=false, released_at/by). Used on VOID. */
+  releasePackageLinksByInvoice(invoiceId: string, releasedBy: string): Promise<void>
+  /** Check if a package has an active invoice link. Returns the invoice id or null. */
+  getActivePackageLink(packageId: string): Promise<{ invoiceId: string } | null>
 }
 
 // ─── InsForge adapter ─────────────────────────────────────────────────────────
@@ -530,12 +534,36 @@ export class InsforgeBillingRepo implements BillingRepository {
   }
 
   async unlinkPackage(invoiceId: string, packageId: string): Promise<void> {
-    await this.del('invoice_packages', `invoice_id=eq.${encodeURIComponent(invoiceId)}&package_id=eq.${encodeURIComponent(packageId)}`)
+    // Soft-delete: mark inactive instead of removing, so the historical link
+    // is preserved and the package can be re-invoiced.
+    await this.patch(
+      'invoice_packages',
+      `invoice_id=eq.${encodeURIComponent(invoiceId)}&package_id=eq.${encodeURIComponent(packageId)}&active=eq.true`,
+      { active: false, released_at: new Date().toISOString(), released_by: 'panel:unlink' },
+    )
   }
 
   async listLinkedPackageIds(organizationId: string): Promise<string[]> {
     const rows = await this.get<{ package_id: string }>('invoice_packages', `organization_id=eq.${encodeURIComponent(organizationId)}&select=package_id&limit=10000`)
     return [...new Set(rows.map((r) => r.package_id))]
+  }
+
+  async releasePackageLinksByInvoice(invoiceId: string, releasedBy: string): Promise<void> {
+    // Release all active links for this invoice (used on VOID).
+    const now = new Date().toISOString()
+    await this.patch(
+      'invoice_packages',
+      `invoice_id=eq.${encodeURIComponent(invoiceId)}&active=eq.true`,
+      { active: false, released_at: now, released_by: releasedBy },
+    )
+  }
+
+  async getActivePackageLink(packageId: string): Promise<{ invoiceId: string } | null> {
+    const rows = await this.get<{ invoice_id: string }>(
+      'invoice_packages',
+      `package_id=eq.${encodeURIComponent(packageId)}&active=eq.true&select=invoice_id&limit=1`,
+    )
+    return rows[0] ? { invoiceId: rows[0].invoice_id } : null
   }
 }
 
