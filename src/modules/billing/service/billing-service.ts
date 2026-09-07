@@ -125,7 +125,7 @@ export interface PublicReceipt {
   clientName: string | null
   clientAddress: string | null
   status: InvoiceStatus
-  lines: Array<{ description: string | null; freightType: FreightType; quantityLbs: number; unitPrice: number; total: number; guia: string | null; tracking: string | null }>
+  lines: Array<{ lineType: 'freight' | 'other'; description: string | null; freightType: FreightType | null; quantityLbs: number | null; unitPrice: number; total: number; guia: string | null; tracking: string | null }>
   total: number
   paidUsd: number
   outstanding: number
@@ -784,10 +784,21 @@ export class BillingService {
       status: b.header.status,
       lines: b.lines.map((l) => {
         // Resolve guia/tracking: prefer line snapshot, fall back to linked packages
-        const pkg = l.package_id ? b.packages.find((p) => p.package_id === l.package_id) : null
-        const guia = l.package_guia ?? pkg?.packages?.almacen_id ?? pkg?.matched_oc ?? null
-        const tracking = l.package_tracking ?? pkg?.packages?.tracking_number ?? null
-        return { description: l.description, freightType: l.freight_type, quantityLbs: l.quantity_lbs, unitPrice: l.unit_price, total: l.total, guia, tracking }
+        let guia = l.package_guia ?? null
+        let tracking = l.package_tracking ?? null
+        if (!guia && !tracking && b.packages.length > 0) {
+          // Try to match by package_id first
+          const pkg = l.package_id ? b.packages.find((p) => p.package_id === l.package_id) : null
+          if (pkg) {
+            guia = pkg.packages?.almacen_id ?? pkg.matched_oc ?? null
+            tracking = pkg.packages?.tracking_number ?? null
+          } else if (b.packages.length === 1 && l.line_type === 'freight') {
+            // Single-package invoice: use the only linked package for all freight lines
+            guia = b.packages[0].packages?.almacen_id ?? b.packages[0].matched_oc ?? null
+            tracking = b.packages[0].packages?.tracking_number ?? null
+          }
+        }
+        return { lineType: (l.line_type as 'freight' | 'other') ?? 'freight', description: l.description, freightType: l.freight_type, quantityLbs: l.quantity_lbs, unitPrice: l.unit_price, total: l.total, guia, tracking }
       }),
       total,
       paidUsd,

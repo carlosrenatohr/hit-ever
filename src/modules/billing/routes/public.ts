@@ -21,15 +21,19 @@ const STATUS_ES: Record<string, string> = { DRAFT: 'Borrador', ISSUED: 'Emitida'
 
 function receiptHtml(r: PublicReceipt): string {
   const rows = r.lines
-    .map(
-      (l) => `<tr>
-      <td>${esc(l.description ?? FREIGHT_ES[l.freightType])}${l.guia || l.tracking ? `<br><span class="sub">${l.guia ? `Guía ${esc(l.guia)}` : ''}${l.guia && l.tracking ? ' · ' : ''}${l.tracking ? `Tracking ${esc(l.tracking)}` : ''}</span>` : ''}</td>
-      <td>${esc(FREIGHT_ES[l.freightType])}</td>
-      <td class="num">${esc(l.quantityLbs)}</td>
+    .map((l) => {
+      const firstCell =
+        l.lineType === 'freight'
+          ? `<span class="guia">${l.guia ? `Guía ${esc(l.guia)}` : esc(l.description ?? FREIGHT_ES[l.freightType ?? 'AIR'])}</span>${l.tracking ? `<br><span class="sub">Tracking ${esc(l.tracking)}</span>` : ''}`
+          : esc(l.description ?? 'Otro cargo')
+      return `<tr>
+      <td>${firstCell}</td>
+      <td>${l.freightType ? esc(FREIGHT_ES[l.freightType]) : '—'}</td>
+      <td class="num">${l.quantityLbs != null ? esc(l.quantityLbs) : '—'}</td>
       <td class="num">${usd(l.unitPrice)}</td>
       <td class="num">${usd(l.total)}</td>
-    </tr>`,
-    )
+    </tr>`
+    })
     .join('')
   const date = r.issueDate ? new Date(r.issueDate).toLocaleDateString('es-NI', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'
   const agencyName = esc(r.agency.name)
@@ -60,6 +64,7 @@ function receiptHtml(r: PublicReceipt): string {
   th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); border-bottom:1px solid var(--line); padding:8px 6px; }
   td { padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
   td .sub { font-size:11px; color:var(--muted); }
+  td .guia { font-weight:600; }
   .num { text-align:right; white-space:nowrap; }
   .totals { margin-left:auto; width:260px; }
   .totals .row { display:flex; justify-content:space-between; padding:4px 0; }
@@ -90,7 +95,7 @@ function receiptHtml(r: PublicReceipt): string {
     ${r.clientAddress ? `<div class="client-details">${esc(r.clientAddress)}</div>` : ''}
   </div>
   <table>
-    <thead><tr><th>Descripción</th><th>Flete</th><th class="num">Libras</th><th class="num">P. unit.</th><th class="num">Total</th></tr></thead>
+    <thead><tr><th>Guía / Concepto</th><th>Flete</th><th class="num">Libras</th><th class="num">P. unit.</th><th class="num">Total</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
   <div class="totals">
