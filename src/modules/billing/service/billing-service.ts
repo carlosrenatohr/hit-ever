@@ -503,6 +503,120 @@ export class BillingService {
   }
 
   /**
+   * Edit an open DRAFT invoice: re-quote lines, update totals, replace line items.
+   * Only DRAFT with closed_at IS NULL is editable. Throws if the invoice is
+   * closed, void, or not found. Returns the updated view.
+   */
+  async updateInvoice(
+    id: string,
+    input: {
+      issueDate?: string | null
+      observations?: string | null
+      lines?: Array<{ freightType: FreightType; tier: PriceTier; quantityLbs: number; description?: string | null; rateTableId?: string | null }>
+      otherLines?: Array<{ conceptId?: string | null; description?: string | null; amount: number }>
+    },
+    actor: string,
+    organizationId: string,
+  ): Promise<InvoiceView> {
+    const b = await this.repo.getInvoiceBundle(id, organizationId)
+    if (!b) throw new Error('Invoice not found.')
+    if (b.header.status === 'VOID') throw new Error('Cannot edit a voided invoice.')
+    if (b.header.closed_at) throw new Error('Invoice is closed — editing is frozen.')
+
+    // Update header fields if provided.
+    const headerPatch: Record<string, unknown> = { updated_at: new Date().toISOString() }
+    if (input.issueDate !== undefined) {
+      headerPatch.issue_date = input.issueDate ?? null
+    }
+    if (input.observations !== undefined) {
+      headerPatch.observations = input.observations ?? null
+    }
+
+    // Re-quote freight lines if provided.
+    let lineRows: Array<Record<string, unknown>> | null = null
+    if (input.lines) {
+      if (input.lines.length === 0) throw new Error('An invoice needs at least one line.')
+      const clientId = b.header.client_id
+      const defaultRateTableId = clientId ? await this.repo.getClientDefaultRateTable(clientId) : null
+      lineRows = []
+      for (let i = 0; i < input.lines.length; i++) {
+        const l = input.lines[i]
+        const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, l.rateTableId ?? defaultRateTableId)
+        if (!q) throw new Error(`Tier ${l.tier} is not offered for ${l.freightType}.`)
+        lineRows.push({
+          line_no: i + 1,
+          description: l.description ?? null,
+          freight_type: l.freightType,
+          line_type: 'freight',
+          concept_id: null,
+          quantity_lbs: l.quantityLbs,
+          unit: 'lbs',
+          unit_price: q.unitPrice,
+          total: q.total,
+          list_price: null,
+          freight_cost: q.freightCost,
+          profit: q.profit,
+          price_tier: l.tier,
+          price_off_catalog: false,
+          organization_id: organizationId,
+        })
+      }
+    }
+
+    // Re-build "other" lines if provided.
+    let otherRows: Array<Record<string, unknown>> | null = null
+    if (input.otherLines) {
+      otherRows = []
+      let lineNo = (lineRows ?? []).length || b.lines.filter((l) => l.line_type === 'freight').length
+      for (const o of input.otherLines) {
+        if (!(o.amount > 0)) throw new Error('Other charges need a positive amount.')
+        if (o.conceptId && !(await this.repo.conceptBelongsToOrg(o.conceptId, organizationId))) {
+          throw new Error(`Charge concept ${o.conceptId} not found in your agency.`)
+        }
+        lineNo++
+        let name = (o.description ?? '').trim()
+        if (o.conceptId) {
+          const concept = await this.repo.getChargeConcept(o.conceptId, organizationId)
+          if (concept) name = name ? `${concept.name} — ${name}` : concept.name
+        }
+        otherRows.push({
+          line_no: lineNo,
+          description: name || 'Otro cargo',
+          freight_type: null,
+          line_type: 'other',
+          concept_id: o.conceptId ?? null,
+          quantity_lbs: null,
+          unit: 'item',
+          unit_price: round2(o.amount),
+          total: round2(o.amount),
+          list_price: null,
+          freight_cost: 0,
+          profit: round2(o.amount),
+          price_tier: null,
+          price_off_catalog: false,
+          organization_id: organizationId,
+        })
+      }
+    }
+
+    // If lines changed, replace them and recompute totals.
+    if (lineRows || otherRows) {
+      const allRows = [...(lineRows ?? []), ...(otherRows ?? [])]
+      if (allRows.length > 0) {
+        await this.repo.replaceLineItems(id, allRows)
+        const total = round2(allRows.reduce((s, r) => s + ((r.total as number) || 0), 0))
+        const profit = round2(allRows.reduce((s, r) => s + ((r.profit as number) || 0), 0))
+        headerPatch.total = total
+        headerPatch.profit = profit
+      }
+    }
+
+    await this.repo.patchInvoiceHeader(id, organizationId, headerPatch)
+    await this.repo.insertInvoiceEvent(id, organizationId, 'Factura actualizada', `Campos: ${Object.keys(input).filter((k) => input[k as keyof typeof input] !== undefined).join(', ')}`, actor)
+    return (await this.get(id, organizationId))!
+  }
+
+  /**
    * Financial lock: freeze the invoice (lines, links, descriptions, amounts)
    * and enable payment registration. One-way — only a DRAFT is open in the
    * DRAFT-only model; a closed invoice can take payments or go VOID (admin
