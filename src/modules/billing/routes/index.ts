@@ -22,7 +22,7 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   const msg = e instanceof Error ? e.message : 'Unexpected error.'
   if (/not found/i.test(msg)) return Res.err(c, 'NOT_FOUND', msg, 404)
   if (/already invoiced/i.test(msg)) return Res.err(c, 'PACKAGE_ALREADY_INVOICED', msg, 409)
-  if (/voided|at least one|not offered|already closed|close the invoice|links are frozen|not invoiceable|different clients|no client assigned|No packages|Too many/i.test(msg)) return Res.err(c, 'INVALID_REQUEST', msg, 422)
+  if (/voided|at least one|not offered|already closed|close the invoice|links are frozen|not invoiceable|different clients|no client assigned|No packages|Too many|editing is frozen|Cannot edit/i.test(msg)) return Res.err(c, 'INVALID_REQUEST', msg, 422)
   return Res.err(c, 'BILLING_ERROR', msg, 500)
 }
 
@@ -147,6 +147,33 @@ const OTHER_LINE_SCHEMA = z.object({
   description: z.string().max(200).nullish(),
   amount: z.number().positive(),
 })
+
+/** PATCH /api/billing/invoices/:id — edit an open DRAFT invoice (lines, observations, issueDate). */
+billing.patch(
+  '/invoices/:id',
+  billingAuth('invoices:write'),
+  zValidator(
+    'json',
+    z.object({
+      issueDate: z.string().nullish(),
+      observations: z.string().max(1000).nullish(),
+      lines: z.array(LINE_SCHEMA).min(1).optional(),
+      otherLines: z.array(OTHER_LINE_SCHEMA).max(20).optional(),
+    }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'At least one field (issueDate, observations, lines, otherLines) is required.', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new BillingService(getBillingRepo(c.env))
+    try {
+      const view = await svc.updateInvoice(c.req.param('id'), c.req.valid('json'), c.get('billingSession').email ?? 'panel', c.get('billingSession').agency)
+      return Res.ok(c, view)
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
 
 /** POST /api/billing/invoices — create (prices from catalog, assigns the year sequence). */
 billing.post(

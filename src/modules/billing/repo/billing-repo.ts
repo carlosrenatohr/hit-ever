@@ -182,6 +182,8 @@ export interface BillingRepository {
   insertLineItems(invoiceId: string, rows: Row[]): Promise<void>
   insertPayment(invoiceId: string, row: Row): Promise<void>
   setInvoiceStatus(invoiceId: string, status: InvoiceStatus, patch?: Row): Promise<void>
+  /** Patch header fields (issue_date, observations, totals) on an open invoice. */
+  patchInvoiceHeader(invoiceId: string, organizationId: string, patch: Row): Promise<void>
   /**
    * Atomic close: patches ONLY while the invoice still matches what the caller
    * read (open + unchanged status), scoped to its organization. True = this
@@ -346,6 +348,10 @@ export class InsforgeBillingRepo implements BillingRepository {
 
   async setInvoiceStatus(invoiceId: string, status: InvoiceStatus, patch: Row = {}): Promise<void> {
     await this.patch('invoices', `id=eq.${encodeURIComponent(invoiceId)}`, { status, updated_at: new Date().toISOString(), ...patch })
+  }
+
+  async patchInvoiceHeader(invoiceId: string, organizationId: string, patch: Row): Promise<void> {
+    await this.patch('invoices', `id=eq.${encodeURIComponent(invoiceId)}&organization_id=eq.${encodeURIComponent(organizationId)}`, patch)
   }
 
   async closeInvoiceIfOpen(invoiceId: string, organizationId: string, expectedStatus: InvoiceStatus, newStatus: InvoiceStatus, closedAt: string, closedBy: string | null): Promise<boolean> {
