@@ -95,6 +95,8 @@ export interface PackageLinkDbRow {
   package_id: string
   source: 'auto' | 'manual'
   matched_oc: string | null
+  /** PostgREST many-to-one embed of the linked package (guide + tracking). */
+  packages?: { almacen_id: string; tracking_number: string | null } | null
 }
 
 export interface InvoiceBundle {
@@ -406,7 +408,7 @@ export class InsforgeBillingRepo implements BillingRepository {
     const [lines, payments, packages] = await Promise.all([
       this.get<LineItemDbRow>('invoice_line_items', `invoice_id=eq.${invoiceId}&order=line_no.asc`),
       this.get<PaymentDbRow>('invoice_payments', `invoice_id=eq.${invoiceId}&order=created_at.asc`),
-      this.get<PackageLinkDbRow>('invoice_packages', `invoice_id=eq.${invoiceId}`),
+      this.get<PackageLinkDbRow>('invoice_packages', `invoice_id=eq.${invoiceId}&select=*,packages(almacen_id,tracking_number)`),
     ])
     return { header, lines, payments, packages }
   }

@@ -105,7 +105,7 @@ export interface InvoiceView {
     raw: string | null
     quarantined: boolean
   }>
-  packages: Array<{ packageId: string; source: 'auto' | 'manual'; matchedOc: string | null }>
+  packages: Array<{ packageId: string; source: 'auto' | 'manual'; matchedOc: string | null; guia: string | null; tracking: string | null }>
 }
 
 export interface MonthlyClose {
@@ -224,7 +224,7 @@ export function toView(b: InvoiceBundle): InvoiceView {
       reference: p.reference,
       comments: p.comments,
     })),
-    packages: b.packages.map((p) => ({ packageId: p.package_id, source: p.source, matchedOc: p.matched_oc })),
+    packages: b.packages.map((p) => ({ packageId: p.package_id, source: p.source, matchedOc: p.matched_oc, guia: p.packages?.almacen_id ?? p.matched_oc ?? null, tracking: p.packages?.tracking_number ?? null })),
   }
 }
 
@@ -484,8 +484,12 @@ export class BillingService {
       paid_usd: 0,
     })
     await this.repo.insertLineItems(invoiceId, lineRows)
+    const linkedPkgs = input.packageIds?.length ? await this.repo.getPackagesForBulk(input.packageIds, organizationId) : []
+    const guiaById = new Map(linkedPkgs.map((p) => [p.id, p.almacen_id]))
     for (const pkgId of input.packageIds ?? []) {
-      await this.repo.linkPackage(invoiceId, pkgId, 'manual', null, actor, organizationId)
+      // matched_oc carries the guide: the linked-packages view must show the
+      // guía, never a raw UUID.
+      await this.repo.linkPackage(invoiceId, pkgId, 'manual', guiaById.get(pkgId) ?? null, actor, organizationId)
       // Package history entry: the invoice trace must live with the package too.
       await this.repo.insertPackageEvent(pkgId, `Factura #${invoiceNumber} generada`, new Date().toISOString())
     }
@@ -568,7 +572,8 @@ export class BillingService {
     if (!(await this.repo.packageBelongsToOrg(packageId, organizationId))) {
       throw new Error(`Package ${packageId} not found in your agency.`)
     }
-    await this.repo.linkPackage(id, packageId, 'manual', null, actor, organizationId)
+    const [pkg] = await this.repo.getPackagesForBulk([packageId], organizationId)
+    await this.repo.linkPackage(id, packageId, 'manual', pkg?.almacen_id ?? null, actor, organizationId)
     const v = await this.get(id, organizationId)
     if (!v) throw new Error('Invoice not found.')
     await this.repo.insertPackageEvent(packageId, `Factura #${v.invoiceNumber} enlazada`, new Date().toISOString())
@@ -772,7 +777,7 @@ export class BillingService {
     // Build line rows — one freight line per package with snapshots.
     const lineRows = preview.lines.map((l, i) => ({
       line_no: i + 1,
-      description: `${l.serviceType ?? 'paquete'} — ${l.guia}`,
+      description: `${l.serviceType ?? 'paquete'}`,
       freight_type: l.freightType,
       line_type: 'freight',
       concept_id: null,
@@ -816,10 +821,11 @@ export class BillingService {
 
     await this.repo.insertLineItems(invoiceId, lineRows)
 
-    // Link every package + emit timeline events.
-    for (const pkgId of input.packageIds) {
-      await this.repo.linkPackage(invoiceId, pkgId, 'manual', null, actor, organizationId)
-      await this.repo.insertPackageEvent(pkgId, `Factura #${invoiceNumber} generada`, new Date().toISOString())
+    // Link every package + emit timeline events. matched_oc carries the guía
+    // so the linked-packages view shows the guide, never a raw UUID.
+    for (const l of preview.lines) {
+      await this.repo.linkPackage(invoiceId, l.packageId, 'manual', l.guia, actor, organizationId)
+      await this.repo.insertPackageEvent(l.packageId, `Factura #${invoiceNumber} generada`, new Date().toISOString())
     }
 
     await this.repo.insertInvoiceEvent(invoiceId, organizationId, 'Factura generada', `Bulk: ${input.packageIds.length} paquetes, total ${total.toFixed(2)} USD`, actor)
