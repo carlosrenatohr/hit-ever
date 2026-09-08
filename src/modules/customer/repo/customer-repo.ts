@@ -15,6 +15,7 @@ interface BillingClientDbRow {
   tax_id: string | null
   active: boolean
   default_rate_id: string | null
+  default_rate_card_id: string | null
   /** PostgREST aggregate embed — packages(count) → [{ count }] (derived, never stored). */
   packages?: { count: number }[]
 }
@@ -48,6 +49,7 @@ export interface CustomerRepository {
     taxId?: string | null
     active?: boolean
     defaultRateId?: string | null
+    defaultRateCardId?: string | null
   }): Promise<BillingClient>
   update(
     id: string,
@@ -63,6 +65,7 @@ export interface CustomerRepository {
       taxId?: string | null
       active?: boolean
       defaultRateId?: string | null
+      defaultRateCardId?: string | null
     },
     organizationId?: string,
   ): Promise<BillingClient | null>
@@ -84,11 +87,12 @@ function toDomain(row: BillingClientDbRow): BillingClient {
     active: row.active,
     packageCount: row.packages?.[0]?.count ?? 0,
     defaultRateId: row.default_rate_id ?? null,
+    defaultRateCardId: row.default_rate_card_id ?? null,
   }
 }
 
 const CLIENT_COLS =
-  'id,name,name_normalized,casillero,to_review,email,phone,address,company_name,tax_id,active,default_rate_id,packages(count)'
+  'id,name,name_normalized,casillero,to_review,email,phone,address,company_name,tax_id,active,default_rate_id,default_rate_card_id,packages(count)'
 
 function statusPredicate(status: string): string {
   if (status === 'active') return 'active.eq.true'
@@ -192,6 +196,7 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     taxId?: string | null
     active?: boolean
     defaultRateId?: string | null
+    defaultRateCardId?: string | null
   }): Promise<BillingClient> {
     const row = await this.post<BillingClientDbRow>({
       organization_id: input.organizationId,
@@ -206,6 +211,7 @@ export class InsforgeCustomerRepo implements CustomerRepository {
       tax_id: input.taxId ?? null,
       active: input.active ?? true,
       default_rate_id: input.defaultRateId ?? null,
+      default_rate_card_id: input.defaultRateCardId ?? null,
     })
     return toDomain(row)
   }
@@ -224,6 +230,7 @@ export class InsforgeCustomerRepo implements CustomerRepository {
       taxId?: string | null
       active?: boolean
       defaultRateId?: string | null
+      defaultRateCardId?: string | null
     },
     organizationId?: string,
   ): Promise<BillingClient | null> {
@@ -239,6 +246,7 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     if (input.taxId !== undefined) row.tax_id = input.taxId
     if (input.active !== undefined) row.active = input.active
     if (input.defaultRateId !== undefined) row.default_rate_id = input.defaultRateId
+    if (input.defaultRateCardId !== undefined) row.default_rate_card_id = input.defaultRateCardId
     row.updated_at = new Date().toISOString()
     const updated = await this.patch(id, row, organizationId)
     return updated ? toDomain(updated) : null

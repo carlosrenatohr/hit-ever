@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { amountsDiffer, computeAmounts, inferTier, margin, quoteLine, tierPrice } from './calc.js'
+import { amountsDiffer, computeAmounts, computeAmountsByModel, inferTier, margin, quoteLine, tierPrice } from './calc.js'
 import type { CatalogEntry } from './types.js'
 
 // Real catalog values from the Excel `BD` sheet.
@@ -69,5 +69,17 @@ describe('amountsDiffer', () => {
   it('respects the 0.01 tolerance', () => {
     expect(amountsDiffer(19.25, 19.254)).toBe(false)
     expect(amountsDiffer(19.25, 19.3)).toBe(true)
+  })
+})
+
+describe('computeAmountsByModel', () => {
+  it('prices weight as quantity × price', () => {
+    const a = computeAmountsByModel(5, 6.5, 4.5, 'weight')
+    expect(a).toEqual({ unitPrice: 6.5, total: 32.5, freightCost: 22.5, profit: 10 })
+  })
+
+  it('throws for volume and fixed — never silently treated as weight', () => {
+    expect(() => computeAmountsByModel(5, 6.5, 4.5, 'volume')).toThrow(/not implemented/)
+    expect(() => computeAmountsByModel(5, 6.5, 4.5, 'fixed')).toThrow(/not implemented/)
   })
 })

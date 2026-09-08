@@ -33,6 +33,49 @@ export interface RateTable {
   rows: RateRow[]
 }
 
+// ─── Rate cards v2 (plan -> version -> entries) ─────────────────────────────
+// A rate_card is a commercial plan. A rate_card_version is a published revision
+// (price_model, currency, validity). rate_card_entries is the AIR/MAR price
+// pair for that version. See docs/pricing-model.md.
+
+export type RateCardStructure = 'simple_pair'
+
+export interface RateCardEntry {
+  id: string
+  serviceType: FreightType // 'AIR' | 'MAR'
+  name: string
+  unit: 'lb' | 'ft3' | 'package'
+  price: number
+  cost: number
+}
+
+/** Write-side entry (unit defaults to 'lb'; the Worker only accepts weight today). */
+export interface RateCardEntryInput {
+  serviceType: FreightType
+  name: string
+  price: number
+  cost: number
+}
+
+export interface RateCardVersion {
+  id: string
+  version: number
+  priceModel: PriceModel
+  currency: CurrencyCode
+  status: 'draft' | 'published' | 'archived'
+  entries: RateCardEntry[]
+}
+
+export interface RateCard {
+  id: string
+  organizationId: string
+  name: string
+  structure: RateCardStructure
+  currentVersion: RateCardVersion
+  createdAt: string
+  updatedAt: string
+}
+
 export type ActorType = 'user' | 'system' | 'service'
 
 export interface AuditLogEntry {
@@ -72,6 +115,10 @@ export interface AgencyInfo {
   currency: CurrencyCode
   /** When false, sync/scrape actions are refused server-side (manual-only agency). */
   isScrapable: boolean
+  /** Córdobas per US dollar. Manual today (default 37); automation is future. */
+  exchangeRateNioPerUsd: number | null
+  exchangeRateSource: 'manual' | 'automatic'
+  exchangeRateUpdatedAt: string | null
 }
 
 export interface AgencyInfoPatch {
@@ -79,6 +126,8 @@ export interface AgencyInfoPatch {
   address?: string | null
   phone?: string | null
   currency?: CurrencyCode
+  /** Setting the rate stamps source='manual' + updated_at server-side. */
+  exchangeRateNioPerUsd?: number | null
 }
 
 export interface PaymentCatalogItem {

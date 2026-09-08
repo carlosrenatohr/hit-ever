@@ -140,6 +140,7 @@ describe('createInvoice — package links', () => {
     }
     const insertPackageEvent = vi.fn(async () => {})
     const repo = {
+      getOrgRateCards: async () => [],
       getOrgRates: async () => [
         { id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] },
         { id: 't2', name: 'Estándar', freightType: 'MAR', rows: [{ tier: 'REGULAR', price: 9, cost: 5, priceModel: 'weight' }] },
@@ -147,6 +148,7 @@ describe('createInvoice — package links', () => {
       getCatalog: async () => [],
       upsertClient: async () => 'c1',
       getClientDefaultRateTable: async () => null,
+      getClientDefaultRateCard: async () => null,
       getClientLifecycle: async () => clientActive,
       getActivePackageLink: async () => null,
       getPackagesForBulk: async (ids: string[]) =>
@@ -233,12 +235,14 @@ describe('updateInvoice — package link sync', () => {
     const insertInvoiceEvent = vi.fn(async () => {})
     const repo = {
       getInvoiceBundle: async () => bundleWithLinks,
+      getOrgRateCards: async () => [],
       getOrgRates: async () => [
         { id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] },
         { id: 't2', name: 'Estándar', freightType: 'MAR', rows: [{ tier: 'REGULAR', price: 9, cost: 5, priceModel: 'weight' }] },
       ],
       getCatalog: async () => [],
       getClientDefaultRateTable: async () => null,
+      getClientDefaultRateCard: async () => null,
       getActivePackageLink: async () => null,
       getPackagesForBulk: async (ids: string[]) =>
         ids.map((id) => ({ id, almacen_id: `G-${id}`, tracking_number: `T-${id}`, effective_status: 'entregado', service_type: 'aereo', weight_lb: 5, client_id: 'c1', referencia_name: 'Ana', organization_id: 'solo-guegue' })),
@@ -282,12 +286,14 @@ describe('updateInvoice — package link sync', () => {
     const insertInvoiceEvent = vi.fn(async () => {})
     const repo = {
       getInvoiceBundle: async () => bundleWithLinks,
+      getOrgRateCards: async () => [],
       getOrgRates: async () => [
         { id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] },
         { id: 't2', name: 'Estándar', freightType: 'MAR', rows: [{ tier: 'REGULAR', price: 9, cost: 5, priceModel: 'weight' }] },
       ],
       getCatalog: async () => [],
       getClientDefaultRateTable: async () => null,
+      getClientDefaultRateCard: async () => null,
       getActivePackageLink: async () => null,
       getPackagesForBulk: async (ids: string[]) =>
         ids.map((id) => ({ id, almacen_id: `G-${id}`, tracking_number: `T-${id}`, effective_status: 'entregado', service_type: 'aereo', weight_lb: 5, client_id: 'c1', referencia_name: 'Ana', organization_id: 'solo-guegue' })),
@@ -358,6 +364,7 @@ describe('createInvoice — other charges', () => {
     }
     const insertLineItems = vi.fn(async () => {})
     const repo = {
+      getOrgRateCards: async () => [],
       getOrgRates: async () => [
         { id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] },
         { id: 't2', name: 'Estándar', freightType: 'MAR', rows: [{ tier: 'REGULAR', price: 9, cost: 5, priceModel: 'weight' }] },
@@ -365,6 +372,7 @@ describe('createInvoice — other charges', () => {
       getCatalog: async () => [],
       upsertClient: async () => 'c1',
       getClientDefaultRateTable: async () => null,
+      getClientDefaultRateCard: async () => null,
       getClientLifecycle: async () => true,
       conceptBelongsToOrg: async () => conceptInOrg,
       getChargeConcept: async () => ({ id: 'cc1', name: 'Delivery' }),
@@ -498,6 +506,7 @@ describe('createInvoice — initial lock state', () => {
   function captureHeader() {
     const createInvoiceHeader = vi.fn(async () => 'i1')
     const repo = {
+      getOrgRateCards: async () => [],
       getOrgRates: async () => [
         { id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] },
         { id: 't2', name: 'Estándar', freightType: 'MAR', rows: [{ tier: 'REGULAR', price: 9, cost: 5, priceModel: 'weight' }] },
@@ -505,6 +514,7 @@ describe('createInvoice — initial lock state', () => {
       getCatalog: async () => [],
       upsertClient: async () => 'c1',
       getClientDefaultRateTable: async () => null,
+      getClientDefaultRateCard: async () => null,
       getClientLifecycle: async () => true,
       nextInvoiceNumber: async () => 1,
       createInvoiceHeader,
@@ -554,8 +564,10 @@ function bulkRepo(pkgs: Array<{ id: string; almacen_id: string; effective_status
   const repo = {
     getPackagesForBulk: async () => pkgs.map((p) => ({ ...p, organization_id: 'hit', tracking_number: null })),
     getClientDefaultRateTable: async () => defaultRateTableId,
+    getClientDefaultRateCard: async () => null,
     getClientLifecycle: async () => true,
-    getOrgRates: async () => [
+    getOrgRateCards: async () => [],
+      getOrgRates: async () => [
         { id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] },
         { id: 't2', name: 'Estándar', freightType: 'MAR', rows: [{ tier: 'REGULAR', price: 9, cost: 5, priceModel: 'weight' }] },
       ],

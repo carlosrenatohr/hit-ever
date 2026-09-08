@@ -41,6 +41,8 @@ export interface BillingClient {
   packageCount?: number
   /** Default rate table for this client (preselects pricing on their next invoice). */
   defaultRateId: string | null
+  /** Default rate card (v2 plan) for this client — takes precedence over defaultRateId. */
+  defaultRateCardId: string | null
 }
 
 export interface Payment {

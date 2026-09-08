@@ -8,7 +8,7 @@
 
 import type { FreightType } from '../../billing/domain/enums.js'
 import type { ConfigSession } from '../middleware/auth.js'
-import type { AgencyInfo, AgencyInfoPatch, AuditFilter, ChargeConcept, PaymentCatalogItem, RateTable, RateRow } from '../domain/types.js'
+import type { AgencyInfo, AgencyInfoPatch, AuditFilter, ChargeConcept, PaymentCatalogItem, RateCard, RateCardEntryInput, RateTable, RateRow } from '../domain/types.js'
 import type { ConfigRepository } from '../repo/config-repo.js'
 import type { Row } from '../repo/config-repo.js'
 
@@ -171,6 +171,91 @@ export class ConfigService {
     return this.repo.listAudit(org, filter)
   }
 
+  // ─── Rate cards v2 (plan -> version -> entries) ─────────────────────────────
+
+  async listRateCards(org: string): Promise<RateCard[]> {
+    return this.repo.listRateCards(org)
+  }
+
+  async createRateCard(org: string, name: string, priceModel: string, entries: RateCardEntryInput[], session: ConfigSession, requestId: string): Promise<RateCard> {
+    assertWeightOnly(priceModel)
+    assertSimplePair(entries)
+    const card = await this.repo.createRateCard({ organizationId: org, name, priceModel: 'weight', currency: 'USD', entries, by: session.userId })
+    await this.audit({
+      organizationId: org,
+      actorId: session.userId,
+      actorEmail: session.email,
+      actorType: 'user',
+      action: 'rate_card.create',
+      entityType: 'rate_card',
+      entityId: card.id,
+      requestId,
+      metadata: { name, price_model: 'weight', entries: entries.map((e) => ({ service_type: e.serviceType, name: e.name })) },
+    })
+    return card
+  }
+
+  async renameRateCard(org: string, id: string, name: string, session: ConfigSession, requestId: string): Promise<RateCard> {
+    const card = await this.requireRateCardInOrg(org, id)
+    await this.repo.updateRateCard(id, { name })
+    await this.audit({
+      organizationId: org,
+      actorId: session.userId,
+      actorEmail: session.email,
+      actorType: 'user',
+      action: 'rate_card.update',
+      entityType: 'rate_card',
+      entityId: id,
+      requestId,
+      metadata: { before: { name: card.name }, after: { name } },
+    })
+    return (await this.repo.getRateCard(id))!
+  }
+
+  async deleteRateCard(org: string, id: string, session: ConfigSession, requestId: string): Promise<void> {
+    await this.requireRateCardInOrg(org, id)
+    await this.repo.deleteRateCard(id)
+    await this.audit({
+      organizationId: org,
+      actorId: session.userId,
+      actorEmail: session.email,
+      actorType: 'user',
+      action: 'rate_card.delete',
+      entityType: 'rate_card',
+      entityId: id,
+      requestId,
+      metadata: {},
+    })
+  }
+
+  async replaceCardEntries(org: string, id: string, entries: RateCardEntryInput[], session: ConfigSession, requestId: string): Promise<RateCard> {
+    const card = await this.requireRateCardInOrg(org, id)
+    assertSimplePair(entries)
+    await this.repo.replaceCardEntries(id, entries)
+    await this.audit({
+      organizationId: org,
+      actorId: session.userId,
+      actorEmail: session.email,
+      actorType: 'user',
+      action: 'rate_card.entries.replace',
+      entityType: 'rate_card',
+      entityId: id,
+      requestId,
+      metadata: { entries: entries.map((e) => ({ service_type: e.serviceType, name: e.name, price: e.price, cost: e.cost })) },
+    })
+    return (await this.repo.getRateCard(id))!
+  }
+
+  /** Tenant check: the card must exist AND belong to the caller's org. */
+  private async requireRateCardInOrg(org: string, id: string): Promise<RateCard> {
+    const card = await this.repo.getRateCard(id)
+    if (!card) throw new Error('rate card not found')
+    if (card.organizationId !== org) {
+      throw new Error('not authorized for this organization')
+    }
+    return card
+  }
+
   // ─── Agency info (Config > Información) ──────────────────────────────────────
 
   /** Like branding, the profile is self-scoped: even admins only read their own. */
@@ -188,6 +273,11 @@ export class ConfigService {
     if (patch.address !== undefined) row.address = patch.address?.trim() || null
     if (patch.phone !== undefined) row.phone = patch.phone?.trim() || null
     if (patch.currency !== undefined) row.currency = patch.currency
+    if (patch.exchangeRateNioPerUsd !== undefined) {
+      row.exchange_rate_nio_per_usd = patch.exchangeRateNioPerUsd
+      row.exchange_rate_source = 'manual'
+      row.exchange_rate_updated_at = new Date().toISOString()
+    }
     await this.repo.updateAgency(session.agency, row)
     await this.audit({
       organizationId: session.agency,
@@ -199,8 +289,14 @@ export class ConfigService {
       entityId: session.agency,
       requestId,
       metadata: {
-        before: { ruc: before.ruc, address: before.address, phone: before.phone, currency: before.currency },
-        after: { ruc: row.ruc ?? before.ruc, address: row.address ?? before.address, phone: row.phone ?? before.phone, currency: row.currency ?? before.currency },
+        before: { ruc: before.ruc, address: before.address, phone: before.phone, currency: before.currency, exchangeRateNioPerUsd: before.exchangeRateNioPerUsd },
+        after: {
+          ruc: row.ruc ?? before.ruc,
+          address: row.address ?? before.address,
+          phone: row.phone ?? before.phone,
+          currency: row.currency ?? before.currency,
+          exchangeRateNioPerUsd: row.exchange_rate_nio_per_usd ?? before.exchangeRateNioPerUsd,
+        },
       },
     })
     return this.repo.getAgencyInfo(session.agency) as Promise<AgencyInfo>
@@ -303,4 +399,27 @@ export class ConfigService {
 
 function stripStorageKey(a: { slug: string; name: string; logoUrl: string | null; logoKey: string | null }) {
   return { slug: a.slug, name: a.name, logoUrl: a.logoUrl }
+}
+
+// ─── Rate card validation helpers ────────────────────────────────────────────
+
+/** Only weight is implemented; volume/fixed are blocked until their engine lands. */
+function assertWeightOnly(priceModel: string): void {
+  if (priceModel !== 'weight') throw new Error('price model under construction')
+}
+
+/** simple_pair: exactly two entries, one AIR and one MAR, with valid money fields. */
+function assertSimplePair(entries: RateCardEntryInput[]): void {
+  if (!Array.isArray(entries) || entries.length !== 2) {
+    throw new Error('a rate card needs exactly two prices: one Aéreo and one Marítimo')
+  }
+  const services = new Set(entries.map((e) => e.serviceType))
+  if (!services.has('AIR') || !services.has('MAR')) {
+    throw new Error('a rate card needs one Aéreo and one Marítimo price')
+  }
+  for (const e of entries) {
+    if (!e.name || !e.name.trim()) throw new Error('price name is required')
+    if (typeof e.price !== 'number' || !Number.isFinite(e.price) || e.price < 0) throw new Error('price must be a nonnegative number')
+    if (typeof e.cost !== 'number' || !Number.isFinite(e.cost) || e.cost < 0) throw new Error('cost must be a nonnegative number')
+  }
 }
