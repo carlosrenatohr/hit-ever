@@ -59,7 +59,7 @@ const ENTREGADO_PKG = { ...EN_DESTINO_PKG, id: 'pkg-2', almacen_id: 'g234567', e
 
 describe('POST /api/billing/invoices/bulk/preview', () => {
   it('prices invoiceable packages and returns one line per package', async () => {
-    stubAuthAndDb({ packages: [EN_DESTINO_PKG, ENTREGADO_PKG] })
+    const calls = stubAuthAndDb({ packages: [EN_DESTINO_PKG, ENTREGADO_PKG] })
     const res = await post('/api/billing/invoices/bulk/preview', { packageIds: ['pkg-1', 'pkg-2'] })
     expect(res.status).toBe(200)
     const body = await res.json()
@@ -67,6 +67,9 @@ describe('POST /api/billing/invoices/bulk/preview', () => {
     expect(body.data.lines).toHaveLength(2)
     expect(body.data.lines[0].unitPrice).toBe(7)
     expect(body.data.lines[0].total).toBe(14)
+    // Soft-deleted packages must never be eligible (bulk rows query excludes them).
+    const pkgCall = calls.find((c) => c.method === 'GET' && c.url.includes('/records/packages?'))
+    expect(pkgCall?.url).toContain('deleted_at=is.null')
   })
   it('422s when packages are not invoiceable', async () => {
     stubAuthAndDb({ packages: [{ ...EN_DESTINO_PKG, effective_status: 'en_transito' }] })

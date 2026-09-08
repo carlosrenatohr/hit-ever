@@ -559,17 +559,17 @@ export class InsforgeBillingRepo implements BillingRepository {
   async getPackagesForBulk(packageIds: string[], organizationId: string): Promise<PackageBulkRow[]> {
     if (packageIds.length === 0) return []
     const ids = packageIds.map((id) => encodeURIComponent(id)).join(',')
-    const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&select=id,almacen_id,tracking_number,effective_status,service_type,weight_lb,client_id,referencia_name,organization_id&limit=${packageIds.length}`
+    const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,weight_lb,client_id,referencia_name,organization_id&limit=${packageIds.length}`
     return this.get<PackageBulkRow>('packages', q)
   }
 
   async getPackagesForClient(clientId: string, organizationId: string): Promise<PackageBulkRow[]> {
-    const q = `client_id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=id,almacen_id,tracking_number,effective_status,service_type,weight_lb,client_id,referencia_name,organization_id&limit=1000`
+    const q = `client_id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,weight_lb,client_id,referencia_name,organization_id&limit=1000`
     return this.get<PackageBulkRow>('packages', q)
   }
 
   async packageBelongsToOrg(packageId: string, organizationId: string): Promise<boolean> {
-    const rows = await this.get<{ id: string }>('packages', `id=eq.${encodeURIComponent(packageId)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=id&limit=1`)
+    const rows = await this.get<{ id: string }>('packages', `id=eq.${encodeURIComponent(packageId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id&limit=1`)
     return rows.length > 0
   }
 
@@ -600,11 +600,12 @@ export class InsforgeBillingRepo implements BillingRepository {
   }
 
   async findPackageIdByToken(token: string, organizationId?: string): Promise<string | null> {
-    // Tenant scope: a package from another agency must never match.
+    // Tenant scope: a package from another agency must never match. Soft-deleted
+    // packages are out of every lookup (cannot be linked/invoiced).
     const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
-    const byAlmacen = await this.get<{ id: string }>('packages', `almacen_id=eq.${encodeURIComponent(token)}${orgFilter}&select=id&limit=1`)
+    const byAlmacen = await this.get<{ id: string }>('packages', `almacen_id=eq.${encodeURIComponent(token)}${orgFilter}&deleted_at=is.null&select=id&limit=1`)
     if (byAlmacen[0]) return byAlmacen[0].id
-    const byTracking = await this.get<{ id: string }>('packages', `tracking_number=eq.${encodeURIComponent(token)}${orgFilter}&select=id&limit=1`)
+    const byTracking = await this.get<{ id: string }>('packages', `tracking_number=eq.${encodeURIComponent(token)}${orgFilter}&deleted_at=is.null&select=id&limit=1`)
     return byTracking[0]?.id ?? null
   }
 
