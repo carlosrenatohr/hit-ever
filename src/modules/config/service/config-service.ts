@@ -341,6 +341,11 @@ export class ConfigService {
     await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'payment_method.update', entityType: 'payment_method', entityId: id, requestId, metadata: patch })
   }
 
+  async deletePaymentMethod(org: string, id: string, session: ConfigSession, requestId: string): Promise<void> {
+    await this.repo.deletePaymentMethod(org, id)
+    await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'payment_method.delete', entityType: 'payment_method', entityId: id, requestId, metadata: {} })
+  }
+
   async createPaymentBank(org: string, name: string, session: ConfigSession, requestId: string): Promise<PaymentCatalogItem> {
     const created = await this.repo.createPaymentBank(org, name)
     await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'payment_bank.create', entityType: 'payment_bank', entityId: created.id, requestId, metadata: { name } })
@@ -350,6 +355,11 @@ export class ConfigService {
   async updatePaymentBank(org: string, id: string, patch: { name?: string; active?: boolean }, session: ConfigSession, requestId: string): Promise<void> {
     await this.repo.updatePaymentBank(org, id, patch)
     await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'payment_bank.update', entityType: 'payment_bank', entityId: id, requestId, metadata: patch })
+  }
+
+  async deletePaymentBank(org: string, id: string, session: ConfigSession, requestId: string): Promise<void> {
+    await this.repo.deletePaymentBank(org, id)
+    await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'payment_bank.delete', entityType: 'payment_bank', entityId: id, requestId, metadata: {} })
   }
 
   // ─── Charge concepts (Config > Conceptos) ────────────────────────────────────
@@ -367,6 +377,14 @@ export class ConfigService {
   async updateChargeConcept(org: string, id: string, patch: { name?: string; active?: boolean; suggestedPrice?: number | null }, session: ConfigSession, requestId: string): Promise<void> {
     await this.repo.updateChargeConcept(org, id, patch)
     await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'charge_concept.update', entityType: 'charge_concept', entityId: id, requestId, metadata: patch })
+  }
+
+  async deleteChargeConcept(org: string, id: string, session: ConfigSession, requestId: string): Promise<void> {
+    if (await this.repo.isConceptInUse(id)) {
+      throw new Error('charge concept is in use and cannot be deleted')
+    }
+    await this.repo.deleteChargeConcept(org, id)
+    await this.audit({ organizationId: org, actorId: session.userId, actorEmail: session.email, actorType: 'user', action: 'charge_concept.delete', entityType: 'charge_concept', entityId: id, requestId, metadata: {} })
   }
 
   /**

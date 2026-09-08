@@ -24,6 +24,7 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   if (/not authorized|forbidden/i.test(msg)) return Res.err(c, 'FORBIDDEN', msg, 403)
   if (/under construction/i.test(msg)) return Res.err(c, 'PRICE_MODEL_UNDER_CONSTRUCTION', msg, 422)
   if (/once per month/i.test(msg)) return Res.err(c, 'NAME_CHANGE_COOLDOWN', msg, 409)
+  if (/in use/i.test(msg)) return Res.err(c, 'IN_USE', 'No se puede eliminar: el recurso está en uso.', 409)
   if (/duplicate|unique/i.test(msg)) return Res.err(c, 'CONFLICT', 'A resource with those values already exists.', 409)
   console.error('config error:', msg, 'requestId:', c.get('requestId') ?? null)
   return Res.err(c, 'CONFIG_ERROR', 'Unexpected error.', 500)
@@ -207,6 +208,27 @@ config.post(
 )
 
 /**
+ * DELETE /api/config/concepts/:id — remove a concept template. config:write.
+ * Rejected (409 IN_USE) if any invoice "other" line still references it.
+ */
+config.delete(
+  '/concepts/:id',
+  configAuth('config:write'),
+  zValidator('param', z.object({ id: z.string().min(1) }), (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_BODY', 'Invalid id.', 422)
+  }),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      await svc.deleteChargeConcept(c.get('configSession').agency, c.req.param('id'), c.get('configSession'), c.get('requestId'))
+      return Res.ok(c, { ok: true })
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/**
  * PATCH /api/config/payments/methods/:id — rename or toggle a method. config:write.
  */
 config.patch(
@@ -223,6 +245,24 @@ config.patch(
     const svc = new ConfigService(getConfigRepo(c.env))
     try {
       await svc.updatePaymentMethod(c.get('configSession').agency, c.req.param('id'), c.req.valid('json'), c.get('configSession'), c.get('requestId'))
+      return Res.ok(c, { ok: true })
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/** DELETE /api/config/payments/methods/:id — remove a method from the catalog. */
+config.delete(
+  '/payments/methods/:id',
+  configAuth('config:write'),
+  zValidator('param', z.object({ id: z.string().min(1) }), (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_BODY', 'Invalid id.', 422)
+  }),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      await svc.deletePaymentMethod(c.get('configSession').agency, c.req.param('id'), c.get('configSession'), c.get('requestId'))
       return Res.ok(c, { ok: true })
     } catch (e) {
       return fail(c, e)
@@ -266,6 +306,24 @@ config.patch(
     const svc = new ConfigService(getConfigRepo(c.env))
     try {
       await svc.updatePaymentBank(c.get('configSession').agency, c.req.param('id'), c.req.valid('json'), c.get('configSession'), c.get('requestId'))
+      return Res.ok(c, { ok: true })
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/** DELETE /api/config/payments/banks/:id — remove a bank from the catalog. */
+config.delete(
+  '/payments/banks/:id',
+  configAuth('config:write'),
+  zValidator('param', z.object({ id: z.string().min(1) }), (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_BODY', 'Invalid id.', 422)
+  }),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      await svc.deletePaymentBank(c.get('configSession').agency, c.req.param('id'), c.get('configSession'), c.get('requestId'))
       return Res.ok(c, { ok: true })
     } catch (e) {
       return fail(c, e)
