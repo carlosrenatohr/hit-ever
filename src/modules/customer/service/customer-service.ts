@@ -1,7 +1,7 @@
 import { normalizeClientName } from '../../billing/ingest/normalize/client.js'
 import type { BillingClient } from '../../billing/domain/types.js'
 import type { CustomerRepository } from '../repo/customer-repo.js'
-import type { CreateCustomerInput, CustomerListFilter, CustomerPage, UpdateCustomerInput } from '../domain/types.js'
+import type { CreateCustomerInput, CustomerDeletePreview, CustomerListFilter, CustomerPage, UpdateCustomerInput } from '../domain/types.js'
 
 function requireName(name: string): string {
   const trimmed = (name ?? '').trim()
@@ -25,7 +25,46 @@ export class CustomerService {
   }
 
   get(id: string, organizationId?: string): Promise<BillingClient | null> {
-    return this.repo.get(id, organizationId)
+    return this.repo.get(id, organizationId).then((c) => (c && !c.deletedAt ? c : null))
+  }
+
+  deletePreview(id: string, organizationId: string): Promise<CustomerDeletePreview | null> {
+    return this.repo.deletePreview(id, organizationId)
+  }
+
+  /** Soft delete (never physical). Audits client.delete with the impact counts. */
+  async delete(
+    id: string,
+    organizationId: string,
+    actor: CustomerActor,
+    requestId?: string,
+    reason?: string | null,
+  ): Promise<{ id: string; deleted: true }> {
+    const before = await this.repo.get(id, organizationId)
+    if (!before || before.deletedAt) throw new Error('Customer not found.')
+    const preview = await this.repo.deletePreview(id, organizationId)
+    const deleted = await this.repo.delete(id, organizationId, actor.userId, reason ?? null)
+    if (!deleted) throw new Error('Customer not found.')
+    await this.repo.insertAudit({
+      organizationId,
+      actorId: actor.userId,
+      actorEmail: actor.email,
+      actorType: 'user',
+      action: 'client.delete',
+      entityType: 'billing_client',
+      entityId: id,
+      requestId: requestId ?? null,
+      metadata: {
+        name: before.name,
+        casillero: before.casillero,
+        companyName: before.companyName,
+        packageCount: preview?.packageCount ?? 0,
+        invoiceCount: preview?.invoiceCount ?? 0,
+        reason: reason ?? null,
+        deletedAt: deleted.deletedAt ?? new Date().toISOString(),
+      },
+    })
+    return { id, deleted: true }
   }
 
   async create(input: CreateCustomerInput, organizationId: string, actor?: CustomerActor, requestId?: string): Promise<BillingClient> {
@@ -63,6 +102,7 @@ export class CustomerService {
 
   async update(id: string, input: UpdateCustomerInput, organizationId: string, actor?: CustomerActor, requestId?: string): Promise<BillingClient | null> {
     const before = actor ? await this.repo.get(id, organizationId) : undefined
+    if (before?.deletedAt) throw new Error('Customer not found.')
     const patch: Parameters<CustomerRepository['update']>[1] = {}
     if (input.name !== undefined) {
       const { display, key } = normalizeClientName(requireName(input.name))

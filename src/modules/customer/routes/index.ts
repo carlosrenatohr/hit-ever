@@ -62,6 +62,42 @@ customer.get('/clients/:id', async (c) => {
   return customer ? Res.ok(c, customer) : Res.err(c, 'NOT_FOUND', 'Customer not found.', 404)
 })
 
+/** GET /api/customer/clients/:id/delete-preview — impact summary for the delete dialog.
+ *  Counts + capped samples of the client's packages and invoices. Read-only. */
+customer.get('/clients/:id/delete-preview', billingAuth('clients:write'), async (c) => {
+  const preview = await new CustomerService(getCustomerRepo(c.env)).deletePreview(c.req.param('id'), c.get('billingSession').agency)
+  return preview ? Res.ok(c, preview) : Res.err(c, 'NOT_FOUND', 'Customer not found.', 404)
+})
+
+/** DELETE /api/customer/clients/:id — soft delete (never physical): sets deleted_at,
+ *  hides the client from operational reads, preserves packages/invoices links, audits. */
+customer.delete('/clients/:id', billingAuth('clients:write'), async (c) => {
+  try {
+    let reason: string | null = null
+    const ct = c.req.header('content-type') ?? ''
+    if (ct.includes('application/json')) {
+      const body = (await c.req.json().catch(() => null)) as { reason?: unknown } | null
+      if (body?.reason !== undefined) {
+        if (typeof body.reason !== 'string' || body.reason.length > 300) {
+          return Res.err(c, 'INVALID_BODY', 'reason must be a string up to 300 chars.', 422)
+        }
+        reason = body.reason.trim() || null
+      }
+    }
+    const requestId = c.req.header('x-request-id') ?? crypto.randomUUID()
+    const result = await new CustomerService(getCustomerRepo(c.env)).delete(
+      c.req.param('id'),
+      c.get('billingSession').agency,
+      actorOf(c),
+      requestId,
+      reason,
+    )
+    return Res.ok(c, result)
+  } catch (e) {
+    return fail(c, e)
+  }
+})
+
 const CUSTOMER_INPUT = z.object({
   name: z.string().min(1),
   casillero: z.string().nullish(),

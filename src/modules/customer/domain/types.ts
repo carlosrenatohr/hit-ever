@@ -48,6 +48,15 @@ export interface CustomerPage {
   count: number
 }
 
+/** Impact summary for the delete confirmation dialog. Samples capped at 5 per kind. */
+export interface CustomerDeletePreview {
+  client: Customer
+  packages: Array<{ guia: string | null; tracking: string | null }>
+  packageCount: number
+  invoices: Array<{ fiscalYear: number; invoiceNumber: number; status: string }>
+  invoiceCount: number
+}
+
 export interface CustomerRateDefaults {
   /** Default rate table for this client (preselects pricing on future invoices). */
   defaultRateTableId?: string | null
