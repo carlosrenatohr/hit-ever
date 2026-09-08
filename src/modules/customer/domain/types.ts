@@ -2,9 +2,15 @@ import type { BillingClient } from '../../billing/domain/types.js'
 
 export type Customer = BillingClient
 
+/** Lifecycle / review states exposed by the clients list filter. Combined with OR. */
+export type CustomerStatus = 'active' | 'inactive' | 'review'
+
 export interface CustomerListFilter {
   organizationId: string
   search?: string
+  /** Multi-state filter: active | inactive | review, OR'd together. Empty = all clients. */
+  statuses?: CustomerStatus[]
+  /** Legacy single flag (current panel checkbox); `statuses` takes precedence when set. */
   toReview?: boolean
   page?: number
   pageSize?: number
@@ -17,6 +23,12 @@ export interface CreateCustomerInput extends CustomerRateDefaults {
   email?: string | null
   phone?: string | null
   address?: string | null
+  /** Company / sub-agency the client belongs to. */
+  companyName?: string | null
+  /** Tax identifier (cédula / RUC). */
+  taxId?: string | null
+  /** Lifecycle state (defaults to active=true). */
+  active?: boolean
 }
 
 export interface UpdateCustomerInput extends CustomerRateDefaults {
@@ -26,6 +38,9 @@ export interface UpdateCustomerInput extends CustomerRateDefaults {
   email?: string | null
   phone?: string | null
   address?: string | null
+  companyName?: string | null
+  taxId?: string | null
+  active?: boolean
 }
 
 export interface CustomerPage {

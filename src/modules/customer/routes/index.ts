@@ -1,11 +1,13 @@
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
+import type { Context } from 'hono'
 import { z } from 'zod'
 import { Res } from '../../../lib/response.js'
 import { billingAuth, type BillingEnv } from '../../billing/middleware/auth.js'
 import { getCustomerRepo } from '../repo/customer-repo.js'
 import { getConfigRepo } from '../../config/repo/config-repo.js'
-import { CustomerService } from '../service/customer-service.js'
+import { CustomerService, type CustomerActor } from '../service/customer-service.js'
+import type { CustomerStatus } from '../domain/types.js'
 
 function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   const message = e instanceof Error ? e.message : 'Unexpected error.'
@@ -14,17 +16,44 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   return Res.err(c, 'CUSTOMER_ERROR', message, 500)
 }
 
+const CUSTOMER_STATUSES: CustomerStatus[] = ['active', 'inactive', 'review']
+
+/** Parses a comma-separated `status` query (active,inactive,review) into typed values. */
+function parseStatuses(raw: string | undefined): CustomerStatus[] | undefined {
+  if (!raw) return undefined
+  const statuses = raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s): s is CustomerStatus => (CUSTOMER_STATUSES as string[]).includes(s))
+  return statuses.length ? statuses : undefined
+}
+
+function actorOf(c: Context<BillingEnv>): CustomerActor {
+  const session = c.get('billingSession')
+  return { userId: session.userId, email: session.email }
+}
+
 const customer = new Hono<BillingEnv>()
 customer.use('*', billingAuth('clients:read'))
 
 customer.get(
   '/clients',
-  zValidator('query', z.object({ search: z.string().optional(), toReview: z.enum(['true', 'false']).optional(), page: z.coerce.number().int().positive().optional(), pageSize: z.coerce.number().int().positive().max(100).optional() })),
+  zValidator('query', z.object({ search: z.string().optional(), status: z.string().optional(), toReview: z.enum(['true', 'false']).optional(), page: z.coerce.number().int().positive().optional(), pageSize: z.coerce.number().int().positive().max(100).optional() })),
   async (c) => {
     const query = c.req.valid('query')
     // Tenant scope comes from the session, never from the query string.
     const svc = new CustomerService(getCustomerRepo(c.env))
-    return Res.ok(c, await svc.list({ ...query, toReview: query.toReview === undefined ? undefined : query.toReview === 'true', organizationId: c.get('billingSession').agency }))
+    return Res.ok(
+      c,
+      await svc.list({
+        search: query.search,
+        statuses: parseStatuses(query.status),
+        toReview: query.toReview === undefined ? undefined : query.toReview === 'true',
+        organizationId: c.get('billingSession').agency,
+        page: query.page,
+        pageSize: query.pageSize,
+      }),
+    )
   },
 )
 
@@ -40,6 +69,9 @@ const CUSTOMER_INPUT = z.object({
   email: z.string().email().nullish(),
   phone: z.string().max(40).nullish(),
   address: z.string().max(300).nullish(),
+  companyName: z.string().max(120).nullish(),
+  taxId: z.string().max(40).nullish(),
+  active: z.boolean().optional(),
   defaultRateTableId: z.string().uuid().nullish(),
 })
 
@@ -56,7 +88,8 @@ async function validateRateTable(env: never, agency: string, rateTableId: string
 customer.post('/clients', billingAuth('clients:write'), zValidator('json', CUSTOMER_INPUT), async (c) => {
   try {
     await validateRateTable(c.env, c.get('billingSession').agency, c.req.valid('json').defaultRateTableId)
-    return Res.ok(c, await new CustomerService(getCustomerRepo(c.env)).create(c.req.valid('json'), c.get('billingSession').agency), undefined, 201)
+    const requestId = c.req.header('x-request-id') ?? crypto.randomUUID()
+    return Res.ok(c, await new CustomerService(getCustomerRepo(c.env)).create(c.req.valid('json'), c.get('billingSession').agency, actorOf(c), requestId), undefined, 201)
   } catch (e) {
     return fail(c, e)
   }
@@ -65,7 +98,8 @@ customer.post('/clients', billingAuth('clients:write'), zValidator('json', CUSTO
 customer.patch('/clients/:id', billingAuth('clients:write'), zValidator('json', CUSTOMER_INPUT.partial()), async (c) => {
   try {
     await validateRateTable(c.env, c.get('billingSession').agency, c.req.valid('json').defaultRateTableId)
-    const result = await new CustomerService(getCustomerRepo(c.env)).update(c.req.param('id'), c.req.valid('json'), c.get('billingSession').agency)
+    const requestId = c.req.header('x-request-id') ?? crypto.randomUUID()
+    const result = await new CustomerService(getCustomerRepo(c.env)).update(c.req.param('id'), c.req.valid('json'), c.get('billingSession').agency, actorOf(c), requestId)
     return result ? Res.ok(c, result) : Res.err(c, 'NOT_FOUND', 'Customer not found.', 404)
   } catch (e) {
     return fail(c, e)

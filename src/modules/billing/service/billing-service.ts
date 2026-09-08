@@ -523,6 +523,11 @@ export class BillingService {
     const { display, key } = normalizeClientName(input.clientName)
     const clientId = await this.repo.upsertClient(display, key, organizationId)
     const defaultRateTableId = await this.repo.getClientDefaultRateTable(clientId)
+    // Deactivated clients can't be billed again (historical invoices stay intact).
+    const clientActive = await this.repo.getClientLifecycle(clientId)
+    if (clientActive === false) {
+      throw new Error('Client is deactivated — reactivate it before billing.')
+    }
 
     // Package links come from the per-line packageId (guided flow) or the
     // legacy packageIds array. Validate them together (org, invoiceable,
@@ -1128,6 +1133,13 @@ export class BillingService {
 
     // Get the client's default rate table (if we have a clientId).
     const defaultRateTableId = clientId ? await this.repo.getClientDefaultRateTable(clientId) : null
+    // Deactivated clients can't be billed again (historical invoices stay intact).
+    if (clientId) {
+      const clientActive = await this.repo.getClientLifecycle(clientId)
+      if (clientActive === false) {
+        throw new Error('Client is deactivated — reactivate it before billing.')
+      }
+    }
 
     // Price each line (one line per package, freight from service_type, tier = REGULAR).
     const lines: Array<{

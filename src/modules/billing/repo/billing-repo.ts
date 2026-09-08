@@ -173,6 +173,8 @@ export interface BillingRepository {
   getOrgRates(organizationId: string): Promise<OrgRateTable[]>
   /** The client's default rate table (billing_clients.default_rate_id), or null. */
   getClientDefaultRateTable(clientId: string): Promise<string | null>
+  /** The client's lifecycle state (active) by id; null if the client doesn't exist. */
+  getClientLifecycle(clientId: string): Promise<boolean | null>
   upsertClient(display: string, key: string, organizationId: string): Promise<string>
   // Import (idempotent upsert path):
   upsertInvoiceHeader(row: Row): Promise<string>
@@ -311,6 +313,11 @@ export class InsforgeBillingRepo implements BillingRepository {
   async getClientDefaultRateTable(clientId: string): Promise<string | null> {
     const rows = await this.get<{ default_rate_id: string | null }>('billing_clients', `id=eq.${encodeURIComponent(clientId)}&select=default_rate_id&limit=1`)
     return rows[0]?.default_rate_id ?? null
+  }
+
+  async getClientLifecycle(clientId: string): Promise<boolean | null> {
+    const rows = await this.get<{ active: boolean }>('billing_clients', `id=eq.${encodeURIComponent(clientId)}&select=active&limit=1`)
+    return rows[0] ? rows[0].active : null
   }
 
   async upsertClient(display: string, key: string, organizationId: string): Promise<string> {
