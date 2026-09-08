@@ -15,6 +15,7 @@
 
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export const BACKFILL_ORGS = ['hit', 'solo-guegue', 'suite']
 
@@ -248,7 +249,12 @@ async function main(): Promise<void> {
   if (!write) console.log('\nDry-run only. Re-run with --yes to write.')
 }
 
-main().catch((e) => {
-  console.error('backfill failed:', e instanceof Error ? e.message : e)
-  process.exit(1)
-})
+// Run only when executed directly (npx tsx ...), never when imported by tests —
+// the module is also the source of buildBackfillPlan for the unit tests.
+const entry = process.argv[1] ? resolve(process.argv[1]) : null
+if (entry && entry === fileURLToPath(import.meta.url)) {
+  main().catch((e) => {
+    console.error('backfill failed:', e instanceof Error ? e.message : e)
+    process.exit(1)
+  })
+}
