@@ -398,7 +398,7 @@ export class InsforgeConfigRepo implements ConfigRepository {
   async getAgencyInfo(slug: string): Promise<AgencyInfo | null> {
     const rows = await this.get<AgencyInfoRow>(
       'agencies',
-      `slug=eq.${encodeURIComponent(slug)}&select=slug,name,ruc,address,phone,currency,is_scrapable,exchange_rate_nio_per_usd,exchange_rate_source,exchange_rate_updated_at&limit=1`,
+      `slug=eq.${encodeURIComponent(slug)}&select=slug,name,ruc,address,phone,currency,is_scrapable,exchange_rate_nio_per_usd,exchange_rate_source,exchange_rate_updated_at,name_last_updated&limit=1`,
     )
     return rows[0] ? toAgencyInfo(rows[0]) : null
   }
@@ -510,6 +510,7 @@ interface AgencyInfoRow {
   exchange_rate_nio_per_usd: number | null
   exchange_rate_source: string
   exchange_rate_updated_at: string | null
+  name_last_updated: string | null
 }
 
 interface PaymentCatalogRow {
@@ -537,6 +538,7 @@ function toAgencyInfo(r: AgencyInfoRow): AgencyInfo {
     exchangeRateNioPerUsd: r.exchange_rate_nio_per_usd ?? null,
     exchangeRateSource: (r.exchange_rate_source ?? 'manual') as AgencyInfo['exchangeRateSource'],
     exchangeRateUpdatedAt: r.exchange_rate_updated_at ?? null,
+    nameLastUpdated: r.name_last_updated ?? null,
   }
 }
 

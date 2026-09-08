@@ -23,6 +23,7 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   if (/not found/i.test(msg)) return Res.err(c, 'NOT_FOUND', msg, 404)
   if (/not authorized|forbidden/i.test(msg)) return Res.err(c, 'FORBIDDEN', msg, 403)
   if (/under construction/i.test(msg)) return Res.err(c, 'PRICE_MODEL_UNDER_CONSTRUCTION', msg, 422)
+  if (/once per month/i.test(msg)) return Res.err(c, 'NAME_CHANGE_COOLDOWN', msg, 409)
   if (/duplicate|unique/i.test(msg)) return Res.err(c, 'CONFLICT', 'A resource with those values already exists.', 409)
   console.error('config error:', msg, 'requestId:', c.get('requestId') ?? null)
   return Res.err(c, 'CONFIG_ERROR', 'Unexpected error.', 500)
@@ -99,6 +100,7 @@ config.patch(
   zValidator(
     'json',
     z.object({
+      name: z.string().min(1).max(80).optional(),
       ruc: z.string().max(50).nullish(),
       address: z.string().max(300).nullish(),
       phone: z.string().max(40).nullish(),
