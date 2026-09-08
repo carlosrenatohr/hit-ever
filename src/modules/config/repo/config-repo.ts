@@ -111,12 +111,17 @@ export interface ConfigRepository {
   listChargeConcepts(organizationId: string): Promise<ChargeConcept[]>
   createChargeConcept(organizationId: string, name: string, suggestedPrice: number | null): Promise<ChargeConcept>
   updateChargeConcept(organizationId: string, id: string, patch: { name?: string; active?: boolean; suggestedPrice?: number | null }): Promise<void>
+  deleteChargeConcept(organizationId: string, id: string): Promise<void>
+  /** Whether an invoice "other" line references this concept (blocks deletion). */
+  isConceptInUse(conceptId: string): Promise<boolean>
   listPaymentMethods(organizationId: string): Promise<PaymentCatalogItem[]>
   createPaymentMethod(organizationId: string, name: string): Promise<PaymentCatalogItem>
   updatePaymentMethod(organizationId: string, id: string, patch: { name?: string; active?: boolean }): Promise<void>
+  deletePaymentMethod(organizationId: string, id: string): Promise<void>
   listPaymentBanks(organizationId: string): Promise<PaymentCatalogItem[]>
   createPaymentBank(organizationId: string, name: string): Promise<PaymentCatalogItem>
   updatePaymentBank(organizationId: string, id: string, patch: { name?: string; active?: boolean }): Promise<void>
+  deletePaymentBank(organizationId: string, id: string): Promise<void>
   listAudit(organizationId: string, filter: AuditFilter): Promise<{ rows: AuditLogEntry[]; count: number }>
   insertAudit(entry: {
     organizationId: string
@@ -419,6 +424,10 @@ export class InsforgeConfigRepo implements ConfigRepository {
     await this.patch('payment_methods', `id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}`, { ...patch, updated_at: new Date().toISOString() })
   }
 
+  async deletePaymentMethod(organizationId: string, id: string): Promise<void> {
+    await this.del('payment_methods', `id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}`)
+  }
+
   async listPaymentBanks(organizationId: string): Promise<PaymentCatalogItem[]> {
     const rows = await this.get<PaymentCatalogRow>('payment_banks', `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,active&order=name`)
     return rows
@@ -432,6 +441,10 @@ export class InsforgeConfigRepo implements ConfigRepository {
 
   async updatePaymentBank(organizationId: string, id: string, patch: { name?: string; active?: boolean }): Promise<void> {
     await this.patch('payment_banks', `id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}`, { ...patch, updated_at: new Date().toISOString() })
+  }
+
+  async deletePaymentBank(organizationId: string, id: string): Promise<void> {
+    await this.del('payment_banks', `id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}`)
   }
 
   async listChargeConcepts(organizationId: string): Promise<ChargeConcept[]> {
@@ -451,6 +464,15 @@ export class InsforgeConfigRepo implements ConfigRepository {
     if (patch.active !== undefined) row.active = patch.active
     if (patch.suggestedPrice !== undefined) row.suggested_price = patch.suggestedPrice
     await this.patch('charge_concepts', `id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}`, row)
+  }
+
+  async deleteChargeConcept(organizationId: string, id: string): Promise<void> {
+    await this.del('charge_concepts', `id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}`)
+  }
+
+  async isConceptInUse(conceptId: string): Promise<boolean> {
+    const rows = await this.get<{ id: string }>('invoice_line_items', `concept_id=eq.${encodeURIComponent(conceptId)}&select=id&limit=1`)
+    return rows.length > 0
   }
 }
 

@@ -755,3 +755,46 @@ describe('PATCH /api/config/info — agency name monthly rule', () => {
     expect(res.status).toBe(200)
   })
 })
+
+describe('DELETE payment methods / banks / concepts', () => {
+  it('deletes a payment method and audits', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: {} })
+    const res = await call('/api/config/payments/methods/m1', { Authorization: 'Bearer goodToken' }, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(postedAudits).toHaveLength(1)
+    expect(JSON.parse(postedAudits[0])[0].action).toBe('payment_method.delete')
+  })
+
+  it('deletes a bank and audits', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: {} })
+    const res = await call('/api/config/payments/banks/b1', { Authorization: 'Bearer goodToken' }, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(JSON.parse(postedAudits[0])[0].action).toBe('payment_bank.delete')
+  })
+
+  it('deletes a concept when unused and audits', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: {} })
+    const res = await call('/api/config/concepts/c1', { Authorization: 'Bearer goodToken' }, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(JSON.parse(postedAudits[0])[0].action).toBe('charge_concept.delete')
+  })
+
+  it('409 IN_USE when a concept is referenced by invoice lines', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { invoice_line_items: [{ id: 'li1', concept_id: 'c1' }] },
+    })
+    const res = await call('/api/config/concepts/c1', { Authorization: 'Bearer goodToken' }, { method: 'DELETE' })
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('IN_USE')
+    expect(postedAudits).toHaveLength(0)
+  })
+
+  it('403 for staff (config:write required)', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: staff }, tables: {} })
+    const res = await call('/api/config/payments/methods/m1', { Authorization: 'Bearer goodToken' }, { method: 'DELETE' })
+    expect(res.status).toBe(403)
+  })
+})
