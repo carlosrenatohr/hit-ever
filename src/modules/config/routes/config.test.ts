@@ -690,3 +690,68 @@ describe('PATCH /api/config/info — exchange rate', () => {
     expect(res.status).toBe(422)
   })
 })
+
+describe('PATCH /api/config/info — agency name monthly rule', () => {
+  const baseRow = {
+    slug: 'hit',
+    name: 'HIT Cargo',
+    ruc: null,
+    address: null,
+    phone: null,
+    currency: 'USD',
+    is_scrapable: true,
+    exchange_rate_nio_per_usd: 37,
+    exchange_rate_source: 'manual',
+    exchange_rate_updated_at: '2026-09-08T00:00:00.000Z',
+  }
+
+  it('allows the first name change and stamps name_last_updated', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { agencies: [{ ...baseRow, name_last_updated: null }] },
+    })
+    const res = await call(
+      '/api/config/info',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'PATCH', body: { name: 'HIT Cargo NIO' } },
+    )
+    expect(res.status).toBe(200)
+    expect(postedAudits).toHaveLength(1)
+    const audit = JSON.parse(postedAudits[0])[0] as { metadata: { after: Record<string, unknown> } }
+    expect(audit.metadata.after.name).toBe('HIT Cargo NIO')
+  })
+
+  it('rejects a second name change within 30 days with 409 NAME_CHANGE_COOLDOWN', async () => {
+    const fiveDaysAgo = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString()
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { agencies: [{ ...baseRow, name_last_updated: fiveDaysAgo }] },
+    })
+    const res = await call(
+      '/api/config/info',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'PATCH', body: { name: 'Otro Nombre' } },
+    )
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('NAME_CHANGE_COOLDOWN')
+    expect(postedAudits).toHaveLength(0)
+  })
+
+  it('allows a name change after 30 days', async () => {
+    const thirtyOneDaysAgo = new Date(Date.now() - 31 * 24 * 3600 * 1000).toISOString()
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { agencies: [{ ...baseRow, name_last_updated: thirtyOneDaysAgo }] },
+    })
+    const res = await call(
+      '/api/config/info',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'PATCH', body: { name: 'HIT Renombrada' } },
+    )
+    expect(res.status).toBe(200)
+  })
+})

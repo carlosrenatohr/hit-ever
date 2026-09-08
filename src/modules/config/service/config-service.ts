@@ -269,6 +269,19 @@ export class ConfigService {
     const before = await this.repo.getAgencyInfo(session.agency)
     if (!before) throw new Error('agency not found')
     const row: Row = {}
+    // Agency name may change once per month. First change always allowed;
+    // subsequent changes within 30 days of the last one are rejected.
+    if (patch.name !== undefined) {
+      const name = patch.name.trim()
+      if (name && name !== before.name) {
+        const last = before.nameLastUpdated ? new Date(before.nameLastUpdated).getTime() : null
+        if (last != null && Date.now() - last < 30 * 24 * 3600 * 1000) {
+          throw new Error('agency name can only be changed once per month')
+        }
+        row.name = name
+        row.name_last_updated = new Date().toISOString()
+      }
+    }
     if (patch.ruc !== undefined) row.ruc = patch.ruc?.trim() || null
     if (patch.address !== undefined) row.address = patch.address?.trim() || null
     if (patch.phone !== undefined) row.phone = patch.phone?.trim() || null
@@ -289,8 +302,16 @@ export class ConfigService {
       entityId: session.agency,
       requestId,
       metadata: {
-        before: { ruc: before.ruc, address: before.address, phone: before.phone, currency: before.currency, exchangeRateNioPerUsd: before.exchangeRateNioPerUsd },
+        before: {
+          name: before.name,
+          ruc: before.ruc,
+          address: before.address,
+          phone: before.phone,
+          currency: before.currency,
+          exchangeRateNioPerUsd: before.exchangeRateNioPerUsd,
+        },
         after: {
+          name: row.name ?? before.name,
           ruc: row.ruc ?? before.ruc,
           address: row.address ?? before.address,
           phone: row.phone ?? before.phone,

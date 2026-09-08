@@ -119,9 +119,13 @@ export interface AgencyInfo {
   exchangeRateNioPerUsd: number | null
   exchangeRateSource: 'manual' | 'automatic'
   exchangeRateUpdatedAt: string | null
+  /** When the display name was last changed — the name may change once per month. */
+  nameLastUpdated: string | null
 }
 
 export interface AgencyInfoPatch {
+  /** Agency display name — only changeable once per month (server-enforced). */
+  name?: string
   ruc?: string | null
   address?: string | null
   phone?: string | null
