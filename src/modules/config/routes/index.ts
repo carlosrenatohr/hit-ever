@@ -22,6 +22,7 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   const msg = e instanceof Error ? e.message : 'Unexpected error.'
   if (/not found/i.test(msg)) return Res.err(c, 'NOT_FOUND', msg, 404)
   if (/not authorized|forbidden/i.test(msg)) return Res.err(c, 'FORBIDDEN', msg, 403)
+  if (/under construction/i.test(msg)) return Res.err(c, 'PRICE_MODEL_UNDER_CONSTRUCTION', msg, 422)
   if (/duplicate|unique/i.test(msg)) return Res.err(c, 'CONFLICT', 'A resource with those values already exists.', 409)
   console.error('config error:', msg, 'requestId:', c.get('requestId') ?? null)
   return Res.err(c, 'CONFIG_ERROR', 'Unexpected error.', 500)
@@ -31,6 +32,14 @@ const RATE_ROW_SCHEMA = z.object({
   tier: z.string().min(1).max(40),
   price: z.number().nonnegative(),
   cost: z.number().nonnegative().nullable(),
+})
+
+/** Rate card v2 entry: one AIR/MAR price. unit is server-side 'lb' for now. */
+const RATE_CARD_ENTRY_SCHEMA = z.object({
+  serviceType: z.enum(FREIGHT_TYPES),
+  name: z.string().min(1).max(40),
+  price: z.number().nonnegative(),
+  cost: z.number().nonnegative(),
 })
 
 // Storage object keys under the branding bucket: letters, digits, / _ . - (the
@@ -94,6 +103,7 @@ config.patch(
       address: z.string().max(300).nullish(),
       phone: z.string().max(40).nullish(),
       currency: z.enum(['USD', 'NIO']).optional(),
+      exchangeRateNioPerUsd: z.number().positive().nullish(),
     }),
     (r, c) => {
       if (!r.success) return Res.err(c, 'INVALID_BODY', 'Invalid agency info payload.', 422)
@@ -470,6 +480,140 @@ config.post(
       const { guia, rateTableId } = c.req.valid('json')
       const packageId = await svc.overridePackageRate(org, guia, rateTableId ?? null, session, c.get('requestId'))
       return Res.ok(c, { packageId, guia, rateTableId: rateTableId ?? null })
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+// ─── Rate cards v2 (plan -> version -> entries) ──────────────────────────────
+
+/**
+ * GET /api/config/rates/v2 — the caller's org rate cards (each with the current
+ * published version and its AIR/MAR entries).
+ */
+config.get(
+  '/rates/v2',
+  zValidator('query', z.object({ organizationId: z.string().optional() }), (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_QUERY', 'Invalid query parameters.', 422)
+  }),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      const org = svc.resolveOrg(c.get('configSession'), c.req.valid('query').organizationId)
+      return Res.ok(c, { organizationId: org, cards: await svc.listRateCards(org) })
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/**
+ * POST /api/config/rates/v2 — create a rate card (plan + published version + the
+ * two AIR/MAR entries) for the caller's org. Only priceModel='weight' is
+ * accepted; volume/fixed return 422 PRICE_MODEL_UNDER_CONSTRUCTION.
+ */
+config.post(
+  '/rates/v2',
+  configAuth('rates:write'),
+  zValidator('query', ORG_QUERY, (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_QUERY', 'Invalid query parameters.', 422)
+  }),
+  zValidator(
+    'json',
+    z.object({
+      name: z.string().min(1).max(80),
+      priceModel: z.enum(['weight', 'volume', 'fixed']),
+      entries: z
+        .array(RATE_CARD_ENTRY_SCHEMA)
+        .length(2)
+        .refine((entries) => new Set(entries.map((e) => e.serviceType)).size === 2, 'Needs one Aéreo and one Marítimo price.'),
+    }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'name, priceModel and exactly two entries (AIR + MAR) are required.', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      const session = c.get('configSession')
+      const org = svc.resolveOrg(session, c.req.valid('query').organizationId)
+      const { name, priceModel, entries } = c.req.valid('json')
+      const card = await svc.createRateCard(org, name, priceModel, entries, session, c.get('requestId'))
+      return Res.ok(c, card, undefined, 201)
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/** PATCH /api/config/rates/v2/:id — rename a rate card. */
+config.patch(
+  '/rates/v2/:id',
+  configAuth('rates:write'),
+  zValidator('query', ORG_QUERY, (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_QUERY', 'Invalid query parameters.', 422)
+  }),
+  zValidator('json', z.object({ name: z.string().min(1).max(80) }), (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_BODY', 'name is required.', 422)
+  }),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      const session = c.get('configSession')
+      const org = svc.resolveOrg(session, c.req.valid('query').organizationId)
+      return Res.ok(c, await svc.renameRateCard(org, c.req.param('id'), c.req.valid('json').name, session, c.get('requestId')))
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/** DELETE /api/config/rates/v2/:id — delete a rate card (versions + entries cascade). */
+config.delete(
+  '/rates/v2/:id',
+  configAuth('rates:write'),
+  zValidator('query', ORG_QUERY, (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_QUERY', 'Invalid query parameters.', 422)
+  }),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      const session = c.get('configSession')
+      const org = svc.resolveOrg(session, c.req.valid('query').organizationId)
+      await svc.deleteRateCard(org, c.req.param('id'), session, c.get('requestId'))
+      return Res.ok(c, { deleted: true, id: c.req.param('id') })
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
+/** PUT /api/config/rates/v2/:id/entries — replace the AIR/MAR entries of the current published version. */
+config.put(
+  '/rates/v2/:id/entries',
+  configAuth('rates:write'),
+  zValidator('query', ORG_QUERY, (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_QUERY', 'Invalid query parameters.', 422)
+  }),
+  zValidator(
+    'json',
+    z.object({
+      entries: z
+        .array(RATE_CARD_ENTRY_SCHEMA)
+        .length(2)
+        .refine((entries) => new Set(entries.map((e) => e.serviceType)).size === 2, 'Needs one Aéreo and one Marítimo price.'),
+    }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'entries must be exactly two (AIR + MAR).', 422)
+    },
+  ),
+  async (c) => {
+    const svc = new ConfigService(getConfigRepo(c.env))
+    try {
+      const session = c.get('configSession')
+      const org = svc.resolveOrg(session, c.req.valid('query').organizationId)
+      return Res.ok(c, await svc.replaceCardEntries(org, c.req.param('id'), c.req.valid('json').entries, session, c.get('requestId')))
     } catch (e) {
       return fail(c, e)
     }

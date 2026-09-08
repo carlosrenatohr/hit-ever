@@ -9,7 +9,7 @@
 
 import type { CloudflareBindings } from '../../../types/index.js'
 import type { FreightType } from '../../billing/domain/enums.js'
-import type { ActorType, Agency, AgencyInfo, AuditFilter, AuditLogEntry, ChargeConcept, CurrencyCode, PaymentCatalogItem, RateTable, RateRow } from '../domain/types.js'
+import type { ActorType, Agency, AgencyInfo, AuditFilter, AuditLogEntry, ChargeConcept, CurrencyCode, PaymentCatalogItem, RateCard, RateCardEntryInput, RateCardStructure, RateCardVersion, RateTable, RateRow } from '../domain/types.js'
 
 // ─── DB row shapes (snake_case, as returned by PostgREST) ─────────────────────
 interface AgencyRow {
@@ -34,6 +34,36 @@ interface RateRowDb {
   price: number
   cost: number
   price_model: string
+}
+
+interface RateCardEntryDb {
+  id: string
+  service_type: string
+  name: string
+  unit: string
+  price: number
+  cost: number
+}
+
+interface RateCardVersionDb {
+  id: string
+  version: number
+  price_model: string
+  currency: string
+  status: string
+  created_at: string
+  updated_at: string
+  rate_card_entries: RateCardEntryDb[]
+}
+
+interface RateCardRow {
+  id: string
+  organization_id: string
+  name: string
+  structure: string
+  created_at: string
+  updated_at: string
+  rate_card_versions: RateCardVersionDb[]
 }
 
 // Alias for the domain type used by the config service.
@@ -67,6 +97,15 @@ export interface ConfigRepository {
   replaceRateRows(rateTableId: string, rows: RateRow[]): Promise<void>
   setClientDefaultRate(clientId: string, rateTableId: string | null): Promise<void>
   setPackageRateOverride(packageId: string, rateTableId: string | null, by: string | null): Promise<void>
+  // Rate cards v2 (plan -> version -> entries):
+  listRateCards(organizationId: string): Promise<RateCard[]>
+  getRateCard(id: string): Promise<RateCard | null>
+  createRateCard(input: { organizationId: string; name: string; priceModel: PriceModel; currency: string; entries: RateCardEntryInput[]; by: string | null }): Promise<RateCard>
+  updateRateCard(id: string, patch: Row): Promise<void>
+  deleteRateCard(id: string): Promise<void>
+  replaceCardEntries(rateCardId: string, entries: RateCardEntryInput[]): Promise<void>
+  setClientDefaultRateCard(clientId: string, rateCardId: string | null): Promise<void>
+  setPackageRateOverrideCard(packageId: string, rateCardId: string | null, by: string | null): Promise<void>
   findPackageIdByToken(token: string): Promise<string | null>
   getAgencyInfo(slug: string): Promise<AgencyInfo | null>
   listChargeConcepts(organizationId: string): Promise<ChargeConcept[]>
@@ -208,6 +247,101 @@ export class InsforgeConfigRepo implements ConfigRepository {
     })
   }
 
+  // ─── Rate cards v2 ───────────────────────────────────────────────────────────
+
+  private static readonly RATE_CARD_SELECT = `id,organization_id,name,structure,created_at,updated_at,rate_card_versions(order=version.desc,id,version,price_model,currency,status,created_at,updated_at,rate_card_entries(order=service_type.asc,id,service_type,name,unit,price,cost))`
+
+  async listRateCards(organizationId: string): Promise<RateCard[]> {
+    const rows = await this.get<RateCardRow>(
+      'rate_cards',
+      `organization_id=eq.${encodeURIComponent(organizationId)}&select=${InsforgeConfigRepo.RATE_CARD_SELECT}&order=name`,
+    )
+    return rows.map(toRateCard)
+  }
+
+  async getRateCard(id: string): Promise<RateCard | null> {
+    const rows = await this.get<RateCardRow>('rate_cards', `id=eq.${encodeURIComponent(id)}&select=${InsforgeConfigRepo.RATE_CARD_SELECT}&limit=1`)
+    return rows[0] ? toRateCard(rows[0]) : null
+  }
+
+  async createRateCard(input: {
+    organizationId: string
+    name: string
+    priceModel: PriceModel
+    currency: string
+    entries: RateCardEntryInput[]
+    by: string | null
+  }): Promise<RateCard> {
+    const card = await this.post<{ id: string }>('rate_cards', [{ organization_id: input.organizationId, name: input.name, created_by: input.by }], {
+      representation: true,
+    })
+    if (!card[0]) throw new Error('rate card was not created')
+    const version = await this.post<{ id: string }>(
+      'rate_card_versions',
+      [{ rate_card_id: card[0].id, price_model: input.priceModel, currency: input.currency, status: 'published', created_by: input.by }],
+      { representation: true },
+    )
+    if (!version[0]) throw new Error('rate card version was not created')
+    await this.post(
+      'rate_card_entries',
+      input.entries.map((e) => ({
+        rate_card_version_id: version[0].id,
+        service_type: e.serviceType,
+        name: e.name,
+        unit: 'lb',
+        price: e.price,
+        cost: e.cost,
+      })),
+    )
+    const created = await this.getRateCard(card[0].id)
+    if (!created) throw new Error('rate card was not created')
+    return created
+  }
+
+  async updateRateCard(id: string, patch: Row): Promise<void> {
+    await this.patch('rate_cards', `id=eq.${encodeURIComponent(id)}`, { ...patch, updated_at: new Date().toISOString() })
+  }
+
+  async deleteRateCard(id: string): Promise<void> {
+    await this.del('rate_cards', `id=eq.${encodeURIComponent(id)}`)
+  }
+
+  async replaceCardEntries(rateCardId: string, entries: RateCardEntryInput[]): Promise<void> {
+    const card = await this.getRateCard(rateCardId)
+    if (!card) throw new Error('rate card not found')
+    const versionId = card.currentVersion.id
+    if (entries.length === 0) {
+      await this.del('rate_card_entries', `rate_card_version_id=eq.${encodeURIComponent(versionId)}`)
+      return
+    }
+    await this.post(
+      'rate_card_entries',
+      entries.map((e) => ({
+        rate_card_version_id: versionId,
+        service_type: e.serviceType,
+        name: e.name,
+        unit: 'lb',
+        price: e.price,
+        cost: e.cost,
+      })),
+      { onConflict: 'rate_card_version_id,service_type' },
+    )
+    const keep = entries.map((e) => e.serviceType).join(',')
+    await this.del('rate_card_entries', `rate_card_version_id=eq.${encodeURIComponent(versionId)}&service_type=not.in.(${keep})`)
+  }
+
+  async setClientDefaultRateCard(clientId: string, rateCardId: string | null): Promise<void> {
+    await this.patch('billing_clients', `id=eq.${encodeURIComponent(clientId)}`, { default_rate_card_id: rateCardId })
+  }
+
+  async setPackageRateOverrideCard(packageId: string, rateCardId: string | null, by: string | null): Promise<void> {
+    await this.patch('packages', `id=eq.${encodeURIComponent(packageId)}`, {
+      rate_override_card_id: rateCardId,
+      rate_override_by: by,
+      rate_override_at: rateCardId ? new Date().toISOString() : null,
+    })
+  }
+
   async listAudit(organizationId: string, filter: AuditFilter): Promise<{ rows: AuditLogEntry[]; count: number }> {
     const q: string[] = [`organization_id=eq.${encodeURIComponent(organizationId)}`]
     if (filter.action) q.push(`action=eq.${encodeURIComponent(filter.action)}`)
@@ -262,7 +396,10 @@ export class InsforgeConfigRepo implements ConfigRepository {
   }
 
   async getAgencyInfo(slug: string): Promise<AgencyInfo | null> {
-    const rows = await this.get<AgencyInfoRow>('agencies', `slug=eq.${encodeURIComponent(slug)}&select=slug,name,ruc,address,phone,currency,is_scrapable&limit=1`)
+    const rows = await this.get<AgencyInfoRow>(
+      'agencies',
+      `slug=eq.${encodeURIComponent(slug)}&select=slug,name,ruc,address,phone,currency,is_scrapable,exchange_rate_nio_per_usd,exchange_rate_source,exchange_rate_updated_at&limit=1`,
+    )
     return rows[0] ? toAgencyInfo(rows[0]) : null
   }
 
@@ -329,6 +466,34 @@ function toRateTable(r: RateTableRow): RateTable {
   }
 }
 
+function toRateCard(r: RateCardRow): RateCard {
+  const versions: RateCardVersion[] = (r.rate_card_versions ?? []).map((v) => ({
+    id: v.id,
+    version: v.version,
+    priceModel: v.price_model as PriceModel,
+    currency: v.currency as CurrencyCode,
+    status: v.status as RateCardVersion['status'],
+    entries: (v.rate_card_entries ?? []).map((e) => ({
+      id: e.id,
+      serviceType: e.service_type as FreightType,
+      name: e.name,
+      unit: e.unit as RateCardVersion['entries'][number]['unit'],
+      price: e.price,
+      cost: e.cost,
+    })),
+  }))
+  const current = versions.find((v) => v.status === 'published') ?? versions[0]
+  return {
+    id: r.id,
+    organizationId: r.organization_id,
+    name: r.name,
+    structure: (r.structure ?? 'simple_pair') as RateCardStructure,
+    currentVersion: current ?? { id: '', version: 0, priceModel: 'weight', currency: 'USD', status: 'published', entries: [] },
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }
+}
+
 // ─── Agency info + payment catalogs (InsForge adapter) ───────────────────────
 interface AgencyInfoRow {
   slug: string
@@ -338,6 +503,9 @@ interface AgencyInfoRow {
   phone: string | null
   currency: CurrencyCode
   is_scrapable: boolean
+  exchange_rate_nio_per_usd: number | null
+  exchange_rate_source: string
+  exchange_rate_updated_at: string | null
 }
 
 interface PaymentCatalogRow {
@@ -354,7 +522,18 @@ interface ChargeConceptRow {
 }
 
 function toAgencyInfo(r: AgencyInfoRow): AgencyInfo {
-  return { slug: r.slug, name: r.name, ruc: r.ruc ?? null, address: r.address ?? null, phone: r.phone ?? null, currency: r.currency, isScrapable: r.is_scrapable }
+  return {
+    slug: r.slug,
+    name: r.name,
+    ruc: r.ruc ?? null,
+    address: r.address ?? null,
+    phone: r.phone ?? null,
+    currency: r.currency,
+    isScrapable: r.is_scrapable,
+    exchangeRateNioPerUsd: r.exchange_rate_nio_per_usd ?? null,
+    exchangeRateSource: (r.exchange_rate_source ?? 'manual') as AgencyInfo['exchangeRateSource'],
+    exchangeRateUpdatedAt: r.exchange_rate_updated_at ?? null,
+  }
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────

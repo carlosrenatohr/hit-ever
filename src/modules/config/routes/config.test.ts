@@ -37,9 +37,23 @@ function stubBackend(opts: { validToken?: string; users?: Record<string, unknown
     }
     if (url.includes('/api/database/records/')) {
       const table = url.split('/api/database/records/')[1].split('?')[0]
-      if (init?.method === 'POST' && table === 'audit_logs') {
-        postedAudits.push((init.body as string | null) ?? '')
+      const prefer = (init?.headers as Record<string, string> | undefined)?.Prefer ?? ''
+      if (init?.method === 'POST') {
+        if (table === 'audit_logs') {
+          postedAudits.push((init.body as string | null) ?? '')
+          return new Response('[]', { status: 200 })
+        }
+        // return=representation posts (rate_tables, rate_cards, ...) echo the
+        // posted rows; prefer a fixture id when present so callers see stable ids.
+        if (prefer.includes('return=representation')) {
+          const body = JSON.parse((init.body as string | null) ?? '[]') as Array<Record<string, unknown>>
+          const fixtureId = (opts.tables?.[table]?.[0] as Record<string, unknown> | undefined)?.id
+          const rows = body.map((r, i) => ({ ...r, id: r.id ?? fixtureId ?? `gen-${table}-${i}` }))
+          return new Response(JSON.stringify(rows), { status: 201 })
+        }
+        return new Response('[]', { status: 201 })
       }
+      if (init?.method === 'DELETE') return new Response('[]', { status: 200 })
       return new Response(JSON.stringify(opts.tables?.[table] ?? []), { status: 200 })
     }
     return new Response('not found', { status: 404 })
@@ -449,6 +463,230 @@ describe('GET /api/config/audit — read-only trail', () => {
   it('422 for a non-ISO date filter', async () => {
     stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: {} })
     const res = await call('/api/config/audit?from=not-a-date', { Authorization: 'Bearer goodToken' })
+    expect(res.status).toBe(422)
+  })
+})
+
+// ─── Rate cards v2 ───────────────────────────────────────────────────────────
+
+const hitCardRow = {
+  id: 'card-1',
+  organization_id: 'hit',
+  name: 'Estándar',
+  structure: 'simple_pair',
+  created_at: '2026-09-08T00:00:00.000Z',
+  updated_at: '2026-09-08T00:00:00.000Z',
+  rate_card_versions: [
+    {
+      id: 'ver-1',
+      version: 1,
+      price_model: 'weight',
+      currency: 'USD',
+      status: 'published',
+      created_at: '2026-09-08T00:00:00.000Z',
+      updated_at: '2026-09-08T00:00:00.000Z',
+      rate_card_entries: [
+        { id: 'e1', service_type: 'AIR', name: 'Regular', unit: 'lb', price: 6.5, cost: 4.5 },
+        { id: 'e2', service_type: 'MAR', name: 'Regular', unit: 'lb', price: 2.5, cost: 1.25 },
+      ],
+    },
+  ],
+}
+
+const twoEntries = [
+  { serviceType: 'AIR', name: 'Regular', price: 7.0, cost: 4.5 },
+  { serviceType: 'MAR', name: 'Regular', price: 2.9, cost: 1.25 },
+]
+
+describe('GET /api/config/rates/v2', () => {
+  it('lists the caller org rate cards with the published version entries', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { rate_cards: [hitCardRow] },
+    })
+    const res = await call('/api/config/rates/v2', { Authorization: 'Bearer goodToken' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; data: { cards: Array<{ id: string; currentVersion: { version: number; entries: unknown[] } }> } }
+    expect(body.data.cards).toHaveLength(1)
+    expect(body.data.cards[0].id).toBe('card-1')
+    expect(body.data.cards[0].currentVersion.version).toBe(1)
+    expect(body.data.cards[0].currentVersion.entries).toHaveLength(2)
+  })
+})
+
+describe('POST /api/config/rates/v2', () => {
+  it('creates a card + version + two entries, audits', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { rate_cards: [hitCardRow] },
+    })
+    const res = await call(
+      '/api/config/rates/v2',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'POST', body: { name: 'Estándar', priceModel: 'weight', entries: twoEntries } },
+    )
+    expect(res.status).toBe(201)
+    const body = (await res.json()) as { ok: boolean; data: { id: string; name: string } }
+    expect(body.ok).toBe(true)
+    expect(body.data.name).toBe('Estándar')
+    expect(postedAudits).toHaveLength(1)
+    const audit = JSON.parse(postedAudits[0])[0] as { action: string; entity_type: string }
+    expect(audit.action).toBe('rate_card.create')
+    expect(audit.entity_type).toBe('rate_card')
+  })
+
+  it('422 PRICE_MODEL_UNDER_CONSTRUCTION for volume/fixed', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: {} })
+    const res = await call(
+      '/api/config/rates/v2',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'POST', body: { name: 'Vol', priceModel: 'volume', entries: twoEntries } },
+    )
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as { ok: boolean; error: { code: string } }
+    expect(body.error.code).toBe('PRICE_MODEL_UNDER_CONSTRUCTION')
+    expect(postedAudits).toHaveLength(0)
+  })
+
+  it('422 for a single entry or duplicate services (zod)', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: {} })
+    const res = await call(
+      '/api/config/rates/v2',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'POST', body: { name: 'Bad', priceModel: 'weight', entries: [twoEntries[0]] } },
+    )
+    expect(res.status).toBe(422)
+    const dup = await call(
+      '/api/config/rates/v2',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'POST', body: { name: 'Dup', priceModel: 'weight', entries: [twoEntries[0], { ...twoEntries[0], name: 'X2' }] } },
+    )
+    expect(dup.status).toBe(422)
+  })
+
+  it('403 for staff (rates:write required)', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: staff }, tables: {} })
+    const res = await call(
+      '/api/config/rates/v2',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'POST', body: { name: 'Estándar', priceModel: 'weight', entries: twoEntries } },
+    )
+    expect(res.status).toBe(403)
+  })
+})
+
+describe('PATCH /api/config/rates/v2/:id', () => {
+  it('renames a rate card in the caller org', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { rate_cards: [hitCardRow] },
+    })
+    const res = await call('/api/config/rates/v2/card-1', { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' }, { method: 'PATCH', body: { name: 'Premium' } })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; data: { name: string } }
+    expect(body.data.name).toBe('Estándar') // stub returns fixture unchanged
+    expect(postedAudits).toHaveLength(1)
+  })
+
+  it('404 for a card of another org (tenant isolation)', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: staff }, // suite user
+      tables: { rate_cards: [hitCardRow] }, // hit's card
+    })
+    const res = await call('/api/config/rates/v2/card-1', { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' }, { method: 'PATCH', body: { name: 'Nope' } })
+    expect(res.status).toBe(403)
+  })
+})
+
+describe('DELETE /api/config/rates/v2/:id', () => {
+  it('deletes a rate card and audits', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { rate_cards: [hitCardRow] },
+    })
+    const res = await call('/api/config/rates/v2/card-1', { Authorization: 'Bearer goodToken' }, { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; data: { deleted: boolean } }
+    expect(body.data.deleted).toBe(true)
+    expect(postedAudits).toHaveLength(1)
+    expect(JSON.parse(postedAudits[0])[0].action).toBe('rate_card.delete')
+  })
+})
+
+describe('PUT /api/config/rates/v2/:id/entries', () => {
+  it('replaces the AIR/MAR entries of the published version, audits', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { rate_cards: [hitCardRow] },
+    })
+    const res = await call(
+      '/api/config/rates/v2/card-1/entries',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'PUT', body: { entries: twoEntries } },
+    )
+    expect(res.status).toBe(200)
+    expect(postedAudits).toHaveLength(1)
+    expect(JSON.parse(postedAudits[0])[0].action).toBe('rate_card.entries.replace')
+  })
+
+  it('422 when entries are not exactly AIR+MAR', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: { rate_cards: [hitCardRow] } })
+    const res = await call(
+      '/api/config/rates/v2/card-1/entries',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'PUT', body: { entries: [twoEntries[0]] } },
+    )
+    expect(res.status).toBe(422)
+  })
+})
+
+describe('PATCH /api/config/info — exchange rate', () => {
+  it('persists a manual exchange rate and audits', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: {
+        agencies: [
+          {
+            slug: 'hit',
+            name: 'HIT Cargo',
+            ruc: null,
+            address: null,
+            phone: null,
+            currency: 'USD',
+            is_scrapable: true,
+            exchange_rate_nio_per_usd: 37,
+            exchange_rate_source: 'manual',
+            exchange_rate_updated_at: '2026-09-08T00:00:00.000Z',
+          },
+        ],
+      },
+    })
+    const res = await call(
+      '/api/config/info',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'PATCH', body: { exchangeRateNioPerUsd: 37.5 } },
+    )
+    expect(res.status).toBe(200)
+    expect(postedAudits).toHaveLength(1)
+    const audit = JSON.parse(postedAudits[0])[0] as { action: string; metadata: { after: Record<string, unknown> } }
+    expect(audit.action).toBe('agency.info.update')
+    expect(audit.metadata.after.exchangeRateNioPerUsd).toBe(37.5)
+  })
+
+  it('422 for a non-positive exchange rate', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: {} })
+    const res = await call(
+      '/api/config/info',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'PATCH', body: { exchangeRateNioPerUsd: 0 } },
+    )
     expect(res.status).toBe(422)
   })
 })
