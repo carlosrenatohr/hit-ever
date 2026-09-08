@@ -127,7 +127,7 @@ describe('aggregateYear', () => {
 })
 
 describe('createInvoice — package links', () => {
-  function repoForPackages(belongs: boolean) {
+  function repoForPackages(belongs: boolean, clientActive = true) {
     const bundle: InvoiceBundle = {
       header: {
         id: 'i1', invoice_number: 1, fiscal_year: 2026, client_id: null, client_name_raw: 'Ana',
@@ -147,6 +147,7 @@ describe('createInvoice — package links', () => {
       getCatalog: async () => [],
       upsertClient: async () => 'c1',
       getClientDefaultRateTable: async () => null,
+      getClientLifecycle: async () => clientActive,
       getActivePackageLink: async () => null,
       getPackagesForBulk: async (ids: string[]) =>
         belongs
@@ -188,6 +189,14 @@ describe('createInvoice — package links', () => {
     expect(row.package_id).toBe('pkg-1')
     expect(row.package_guia).toBe('G-pkg-1')
     expect(row.package_tracking).toBe('T-pkg-1')
+  })
+
+  it('rejects invoicing for a deactivated client', async () => {
+    const { repo } = repoForPackages(true, false)
+    const svc = new BillingService(repo)
+    await expect(
+      svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }] }, 'tester', 'solo-guegue'),
+    ).rejects.toThrow(/deactivated/)
   })
 })
 
@@ -356,6 +365,7 @@ describe('createInvoice — other charges', () => {
       getCatalog: async () => [],
       upsertClient: async () => 'c1',
       getClientDefaultRateTable: async () => null,
+      getClientLifecycle: async () => true,
       conceptBelongsToOrg: async () => conceptInOrg,
       getChargeConcept: async () => ({ id: 'cc1', name: 'Delivery' }),
       nextInvoiceNumber: async () => 1,
@@ -495,6 +505,7 @@ describe('createInvoice — initial lock state', () => {
       getCatalog: async () => [],
       upsertClient: async () => 'c1',
       getClientDefaultRateTable: async () => null,
+      getClientLifecycle: async () => true,
       nextInvoiceNumber: async () => 1,
       createInvoiceHeader,
       insertLineItems: async () => {},
@@ -543,6 +554,7 @@ function bulkRepo(pkgs: Array<{ id: string; almacen_id: string; effective_status
   const repo = {
     getPackagesForBulk: async () => pkgs.map((p) => ({ ...p, organization_id: 'hit', tracking_number: null })),
     getClientDefaultRateTable: async () => defaultRateTableId,
+    getClientLifecycle: async () => true,
     getOrgRates: async () => [
         { id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] },
         { id: 't2', name: 'Estándar', freightType: 'MAR', rows: [{ tier: 'REGULAR', price: 9, cost: 5, priceModel: 'weight' }] },

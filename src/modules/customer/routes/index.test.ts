@@ -12,7 +12,10 @@ function stubAuth(role = 'staff', agency = 'hit') {
       return auth === 'Bearer goodToken' ? new Response(JSON.stringify({ user: { id: 'u1', email: 'u1@test' } }), { status: 200 }) : new Response('unauthorized', { status: 401 })
     }
     if (url.includes('/api/database/records/app_users')) return new Response(JSON.stringify([{ role, active: true, agency }]), { status: 200 })
-    if (url.includes('/api/database/records/billing_clients')) return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false }]), { status: 200, headers: { 'content-range': '0-0/1' } })
+    if (url.includes('/api/database/records/billing_clients')) {
+      return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false, company_name: null, tax_id: null, active: true, default_rate_id: null, packages: [{ count: 2 }] }]), { status: 200, headers: { 'content-range': '0-0/1' } })
+    }
+    if (url.includes('/api/database/records/audit_logs')) return new Response(null, { status: 201 })
     return new Response('not found', { status: 404 })
   })
 }
@@ -24,7 +27,9 @@ describe('Customer routes', () => {
     stubAuth('staff')
     const res = await worker.fetch(new Request('https://t.test/api/customer/clients', { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
     expect(res.status).toBe(200)
-    expect((await res.json() as { data: { rows: unknown[] } }).data.rows).toHaveLength(1)
+    const body = (await res.json() as { data: { rows: Array<{ packageCount: number; active: boolean }> } }).data
+    expect(body.rows).toHaveLength(1)
+    expect(body.rows[0]).toMatchObject({ active: true, packageCount: 2 })
   })
 
   it('scopes the client list to the session agency (tenant isolation)', async () => {
@@ -44,6 +49,24 @@ describe('Customer routes', () => {
     })
     await worker.fetch(new Request('https://t.test/api/customer/clients', { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
     expect(clientsUrl).toContain('organization_id=eq.solo-guegue')
+  })
+
+  it('filters by comma-separated statuses with OR semantics', async () => {
+    let clientsUrl = ''
+    vi.stubGlobal('fetch', async (input: Request | string, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.url
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization ?? ''
+      if (url.includes('/api/auth/sessions/current')) return auth === 'Bearer goodToken' ? new Response(JSON.stringify({ user: { id: 'u1', email: 'u1@test' } }), { status: 200 }) : new Response('unauthorized', { status: 401 })
+      if (url.includes('/api/database/records/app_users')) return new Response(JSON.stringify([{ role: 'staff', active: true, agency: 'hit' }]), { status: 200 })
+      if (url.includes('/api/database/records/billing_clients')) {
+        clientsUrl = url
+        return new Response(JSON.stringify([]), { status: 200, headers: { 'content-range': '*/0' } })
+      }
+      return new Response('not found', { status: 404 })
+    })
+    const res = await worker.fetch(new Request('https://t.test/api/customer/clients?status=active,review', { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
+    expect(res.status).toBe(200)
+    expect(clientsUrl).toContain('or=(active.eq.true,to_review.eq.true)')
   })
 
   it('denies staff writes while allowing billing roles to write', async () => {
