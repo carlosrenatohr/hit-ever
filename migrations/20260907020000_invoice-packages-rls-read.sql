@@ -7,6 +7,11 @@
 -- detecting already-invoiced packages in the UI (client-side pre-validation).
 -- The Worker uses admin key (bypasses RLS) and was unaffected.
 
+-- Idempotent: this migration was applied out-of-band (tracker missed it), so
+-- `migrations up --all` re-runs it. Drop-then-create matches the policy pattern
+-- in 20260905010000 and makes the chain resumable.
+DROP POLICY IF EXISTS staff_read_org_invoice_packages ON public.invoice_packages;
+
 CREATE POLICY staff_read_org_invoice_packages ON public.invoice_packages
   FOR SELECT
   TO authenticated
