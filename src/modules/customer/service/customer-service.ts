@@ -43,6 +43,7 @@ export class CustomerService {
       taxId: input.taxId?.trim() || null,
       active: input.active ?? true,
       defaultRateId: input.defaultRateTableId ?? null,
+      defaultRateCardId: input.defaultRateCardId ?? null,
     })
     if (actor) {
       await this.repo.insertAudit({
@@ -77,6 +78,7 @@ export class CustomerService {
     if (input.taxId !== undefined) patch.taxId = input.taxId?.trim() || null
     if (input.active !== undefined) patch.active = input.active
     if (input.defaultRateTableId !== undefined) patch.defaultRateId = input.defaultRateTableId
+    if (input.defaultRateCardId !== undefined) patch.defaultRateCardId = input.defaultRateCardId
     const updated = await this.repo.update(id, patch, organizationId)
     if (actor && before && updated) {
       const action =

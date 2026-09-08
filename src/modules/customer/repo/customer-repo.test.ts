@@ -8,7 +8,7 @@ describe('InsforgeCustomerRepo', () => {
     let requested = ''
     vi.stubGlobal('fetch', async (input: Request | string) => {
       requested = typeof input === 'string' ? input : input.url
-      return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: 'A1', to_review: true, email: 'a@t.com', phone: null, address: null, company_name: 'Ana S.A.', tax_id: 'J123', active: true, default_rate_id: null, packages: [{ count: 3 }] }]), {
+      return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: 'A1', to_review: true, email: 'a@t.com', phone: null, address: null, company_name: 'Ana S.A.', tax_id: 'J123', active: true, default_rate_id: null, default_rate_card_id: null, packages: [{ count: 3 }] }]), {
         status: 200,
         headers: { 'content-range': '0-0/1' },
       })
@@ -24,7 +24,7 @@ describe('InsforgeCustomerRepo', () => {
       rows: [
         {
           id: 'c1', name: 'Ana', nameNormalized: 'ana', casillero: 'A1', toReview: true, email: 'a@t.com', phone: null, address: null,
-          companyName: 'Ana S.A.', taxId: 'J123', active: true, packageCount: 3, defaultRateId: null,
+          companyName: 'Ana S.A.', taxId: 'J123', active: true, packageCount: 3, defaultRateId: null, defaultRateCardId: null,
         },
       ],
       count: 1,
@@ -48,12 +48,12 @@ describe('InsforgeCustomerRepo', () => {
     let body = ''
     vi.stubGlobal('fetch', async (_input: Request | string, init?: RequestInit) => {
       body = String(init?.body ?? '')
-      return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false, email: null, phone: null, address: null, company_name: null, tax_id: null, active: true, default_rate_id: null }]), { status: 201 })
+      return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false, email: null, phone: null, address: null, company_name: null, tax_id: null, active: true, default_rate_id: null, default_rate_card_id: null }]), { status: 201 })
     })
 
-    const result = await new InsforgeCustomerRepo('https://db.test', 'key').create({ organizationId: 'hit', name: 'Ana', nameNormalized: 'ana', casillero: null, toReview: false, email: null, phone: null, address: null, companyName: null, taxId: null, active: true, defaultRateId: null })
+    const result = await new InsforgeCustomerRepo('https://db.test', 'key').create({ organizationId: 'hit', name: 'Ana', nameNormalized: 'ana', casillero: null, toReview: false, email: null, phone: null, address: null, companyName: null, taxId: null, active: true, defaultRateId: null, defaultRateCardId: null })
 
-    expect(JSON.parse(body)).toEqual([{ organization_id: 'hit', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false, email: null, phone: null, address: null, company_name: null, tax_id: null, active: true, default_rate_id: null }])
+    expect(JSON.parse(body)).toEqual([{ organization_id: 'hit', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false, email: null, phone: null, address: null, company_name: null, tax_id: null, active: true, default_rate_id: null, default_rate_card_id: null }])
     expect(result.id).toBe('c1')
   })
 

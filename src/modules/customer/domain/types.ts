@@ -51,4 +51,6 @@ export interface CustomerPage {
 export interface CustomerRateDefaults {
   /** Default rate table for this client (preselects pricing on future invoices). */
   defaultRateTableId?: string | null
+  /** Default rate card (v2 plan) — takes precedence over defaultRateTableId. */
+  defaultRateCardId?: string | null
 }

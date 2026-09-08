@@ -73,6 +73,7 @@ const CUSTOMER_INPUT = z.object({
   taxId: z.string().max(40).nullish(),
   active: z.boolean().optional(),
   defaultRateTableId: z.string().uuid().nullish(),
+  defaultRateCardId: z.string().uuid().nullish(),
 })
 
 /** The default rate table must exist within the caller's agency — a foreign id
@@ -85,11 +86,22 @@ async function validateRateTable(env: never, agency: string, rateTableId: string
   }
 }
 
+/** The default rate card (v2 plan) must belong to the caller's agency. */
+async function validateRateCard(env: never, agency: string, rateCardId: string | null | undefined) {
+  if (!rateCardId) return
+  const card = await getConfigRepo(env).getRateCard(rateCardId)
+  if (!card || card.organizationId !== agency) {
+    throw new Error('rate card not found in your agency')
+  }
+}
+
 customer.post('/clients', billingAuth('clients:write'), zValidator('json', CUSTOMER_INPUT), async (c) => {
   try {
-    await validateRateTable(c.env, c.get('billingSession').agency, c.req.valid('json').defaultRateTableId)
+    const input = c.req.valid('json')
+    await validateRateTable(c.env, c.get('billingSession').agency, input.defaultRateTableId)
+    await validateRateCard(c.env, c.get('billingSession').agency, input.defaultRateCardId)
     const requestId = c.req.header('x-request-id') ?? crypto.randomUUID()
-    return Res.ok(c, await new CustomerService(getCustomerRepo(c.env)).create(c.req.valid('json'), c.get('billingSession').agency, actorOf(c), requestId), undefined, 201)
+    return Res.ok(c, await new CustomerService(getCustomerRepo(c.env)).create(input, c.get('billingSession').agency, actorOf(c), requestId), undefined, 201)
   } catch (e) {
     return fail(c, e)
   }
@@ -97,9 +109,11 @@ customer.post('/clients', billingAuth('clients:write'), zValidator('json', CUSTO
 
 customer.patch('/clients/:id', billingAuth('clients:write'), zValidator('json', CUSTOMER_INPUT.partial()), async (c) => {
   try {
-    await validateRateTable(c.env, c.get('billingSession').agency, c.req.valid('json').defaultRateTableId)
+    const input = c.req.valid('json')
+    await validateRateTable(c.env, c.get('billingSession').agency, input.defaultRateTableId)
+    await validateRateCard(c.env, c.get('billingSession').agency, input.defaultRateCardId)
     const requestId = c.req.header('x-request-id') ?? crypto.randomUUID()
-    const result = await new CustomerService(getCustomerRepo(c.env)).update(c.req.param('id'), c.req.valid('json'), c.get('billingSession').agency, actorOf(c), requestId)
+    const result = await new CustomerService(getCustomerRepo(c.env)).update(c.req.param('id'), input, c.get('billingSession').agency, actorOf(c), requestId)
     return result ? Res.ok(c, result) : Res.err(c, 'NOT_FOUND', 'Customer not found.', 404)
   } catch (e) {
     return fail(c, e)

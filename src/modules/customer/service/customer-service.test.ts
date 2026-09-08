@@ -4,7 +4,7 @@ import type { CustomerRepository } from '../repo/customer-repo.js'
 import { CustomerService } from './customer-service.js'
 
 function client(over: Partial<BillingClient> = {}): BillingClient {
-  return { id: 'c1', name: 'Ana Maria', nameNormalized: 'ana maria', casillero: null, toReview: false, email: null, phone: null, address: null, companyName: null, taxId: null, active: true, packageCount: 0, ...over }
+  return { id: 'c1', name: 'Ana Maria', nameNormalized: 'ana maria', casillero: null, toReview: false, email: null, phone: null, address: null, companyName: null, taxId: null, active: true, packageCount: 0, defaultRateId: null, defaultRateCardId: null, ...over }
 }
 
 function repo(over: Partial<CustomerRepository> = {}): CustomerRepository {
@@ -31,6 +31,7 @@ describe('CustomerService', () => {
       taxId: 'J123',
       active: true,
       defaultRateId: null,
+      defaultRateCardId: null,
     })
   })
 
