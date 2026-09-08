@@ -164,16 +164,18 @@ export class InsforgeClient implements TrackingRepository {
   }
 
   async getOpenAlmacenIds(providerId: string, limit: number): Promise<string[]> {
-    const rows = await this.get<{ almacen_id: string }>(
+    const rows = await this.get<{ almacen_id: string; client_id: string | null; billing_clients: { active: boolean } | null }>(
       'packages',
       // Order by scraped_at ASC (least-recently-scraped first), NOT last_event_at: with a capped
       // batch, last_event ordering refreshes the same front subset every tick and STARVES packages
       // with a newer last_event — they never get revisited (observed 2026-07-18: guia 945354 stayed
       // frozen while others refreshed). scraped_at rotates round-robin so every open package is
       // reached within a few ticks.
-      `provider_id=eq.${encodeURIComponent(providerId)}&effective_status=neq.entregado&select=almacen_id&order=scraped_at.asc&limit=${limit}`,
+      `provider_id=eq.${encodeURIComponent(providerId)}&effective_status=neq.entregado&select=almacen_id,client_id,billing_clients(active)&order=scraped_at.asc&limit=${limit}`,
     )
-    return rows.map((r) => r.almacen_id)
+    // Deactivated clients are out of dashboard range — don't spend refresh budget on them
+    // (they come back on reactivation). Packages without a billing client stay refreshable.
+    return rows.filter((r) => r.client_id == null || r.billing_clients?.active !== false).map((r) => r.almacen_id)
   }
 
   // ─── Ingestion (B3) ──────────────────────────────────────────────────────────
