@@ -8,39 +8,68 @@
 import { computeAmounts, computeAmountsByModel, inferTier, quoteLine, type LineAmounts } from '../domain/calc.js'
 import type { FreightType, PriceTier } from '../domain/enums.js'
 import type { CatalogEntry } from '../domain/types.js'
-import type { BillingRepository, OrgRateTable } from '../repo/billing-repo.js'
+import type { BillingRepository, OrgRateCard, OrgRateTable } from '../repo/billing-repo.js'
 import type { PriceModel } from '../domain/calc.js'
 
 export interface Quote extends LineAmounts {
   freightType: FreightType
   tier: PriceTier
   quantityLbs: number
+  /** Where the price came from — recorded on the invoice line (provenance). */
+  pricingSource: 'rate_card' | 'legacy' | 'catalog'
+  rateCardId?: string | null
+  rateCardVersionId?: string | null
+  rateCardEntryId?: string | null
+}
+
+export interface ResolvedRate {
+  price: number
+  cost: number
+  priceModel: string
+  pricingSource: 'rate_card' | 'legacy'
+  rateCardId?: string | null
+  rateCardVersionId?: string | null
+  rateCardEntryId?: string | null
 }
 
 /**
  * Tier-resolution order for an org quote:
- *   1. The client's default rate table (when the quote has one) — its tier row wins.
- *   2. Any of the org's rate tables for that freight type that offers the tier.
- *   3. The legacy global pricing_catalog (REGULAR/ESPECIAL/VIP/MADRES/DARIO only).
- * Returns null when no source prices the tier for that freight — callers reject
- * the line instead of guessing a price.
+ *   1. The explicit rate card (per-line or client default) — its service entry wins.
+ *   2. Any of the org's rate cards that offers the service (AIR/MAR).
+ *   3. Legacy rate_tables by tier (only unmigrated orgs should still have them).
+ * Returns null when no source prices the line — callers reject it instead of
+ * guessing a price (migrated orgs never fall back to the global catalog).
  */
 export function resolveOrgRate(
-  tables: OrgRateTable[],
+  cards: OrgRateCard[],
+  legacyTables: OrgRateTable[],
   freightType: FreightType,
   tier: string,
-  defaultRateTableId?: string | null,
-): { price: number; cost: number; priceModel: string } | null {
+  defaultRateId?: string | null,
+): ResolvedRate | null {
+  const entryFor = (c: OrgRateCard) => c.entries.find((e) => e.serviceType === freightType && e.price != null)
   const tierRow = (t: OrgRateTable) => t.rows.find((r) => r.tier === tier && r.price != null)
-  if (defaultRateTableId) {
-    const t = tables.find((x) => x.id === defaultRateTableId && x.freightType === freightType)
-    const row = t ? tierRow(t) : undefined
-    if (row) return { price: row.price, cost: row.cost ?? 0, priceModel: row.priceModel ?? 'weight' }
+
+  if (defaultRateId) {
+    const card = cards.find((c) => c.id === defaultRateId)
+    if (card) {
+      const entry = entryFor(card)
+      if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id }
+    } else {
+      // Legacy default (billing_clients.default_rate_id) for an unmigrated org.
+      const t = legacyTables.find((x) => x.id === defaultRateId && x.freightType === freightType)
+      const row = t ? tierRow(t) : undefined
+      if (row) return { price: row.price, cost: row.cost ?? 0, priceModel: row.priceModel ?? 'weight', pricingSource: 'legacy' }
+    }
   }
-  for (const t of tables) {
+  for (const card of cards) {
+    const entry = entryFor(card)
+    if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id }
+  }
+  for (const t of legacyTables) {
     if (t.freightType !== freightType) continue
     const row = tierRow(t)
-    if (row) return { price: row.price, cost: row.cost ?? 0, priceModel: row.priceModel ?? 'weight' }
+    if (row) return { price: row.price, cost: row.cost ?? 0, priceModel: row.priceModel ?? 'weight', pricingSource: 'legacy' }
   }
   return null
 }
@@ -68,26 +97,40 @@ export class CatalogService {
     if (!entry) return null
     const amounts = quoteLine(entry, tier, quantityLbs)
     if (!amounts) return null
-    return { freightType, tier, quantityLbs, ...amounts }
+    return { freightType, tier, quantityLbs, pricingSource: 'catalog', rateCardId: null, rateCardVersionId: null, rateCardEntryId: null, ...amounts }
   }
 
   /**
-   * Org-aware quote: the per-tenant rate tables are the pricing source; the legacy
-   * global catalog is the fallback. Null = tier not offered for this org/freight.
+   * Org-aware quote. The per-tenant rate cards are the pricing source for
+   * migrated orgs; legacy rate_tables and the global catalog remain only as a
+   * fallback for unmigrated orgs (no cards). A migrated org with an unresolved
+   * line returns null (caller errors) — never a silent catalog price.
    */
   async quoteOrg(
     organizationId: string,
     freightType: FreightType,
     tier: string,
     quantityLbs: number,
-    defaultRateTableId?: string | null,
+    defaultRateId?: string | null,
   ): Promise<Quote | null> {
-    const tables = await this.repo.getOrgRates(organizationId)
-    const rate = resolveOrgRate(tables, freightType, tier, defaultRateTableId)
+    const [cards, legacy] = await Promise.all([this.repo.getOrgRateCards(organizationId), this.repo.getOrgRates(organizationId)])
+    const rate = resolveOrgRate(cards, legacy, freightType, tier, defaultRateId)
     if (rate) {
-      return { freightType, tier, quantityLbs, ...computeAmountsByModel(quantityLbs, rate.price, rate.cost, (rate.priceModel ?? 'weight') as PriceModel) }
+      const amounts = computeAmountsByModel(quantityLbs, rate.price, rate.cost, (rate.priceModel ?? 'weight') as PriceModel)
+      return {
+        freightType,
+        tier,
+        quantityLbs,
+        pricingSource: rate.pricingSource,
+        rateCardId: rate.rateCardId ?? null,
+        rateCardVersionId: rate.rateCardVersionId ?? null,
+        rateCardEntryId: rate.rateCardEntryId ?? null,
+        ...amounts,
+      }
     }
-    // Legacy fallback: only the global catalog's fixed tiers.
+    // Migrated org (has cards): a missing price is an error, not a fallback.
+    if (cards.length > 0) return null
+    // Unmigrated org: only the legacy global catalog's fixed tiers.
     return this.quote(freightType, tier, quantityLbs)
   }
 

@@ -249,7 +249,7 @@ export class InsforgeConfigRepo implements ConfigRepository {
 
   // ─── Rate cards v2 ───────────────────────────────────────────────────────────
 
-  private static readonly RATE_CARD_SELECT = `id,organization_id,name,structure,created_at,updated_at,rate_card_versions(order=version.desc,id,version,price_model,currency,status,created_at,updated_at,rate_card_entries(order=service_type.asc,id,service_type,name,unit,price,cost))`
+  private static readonly RATE_CARD_SELECT = `id,organization_id,name,structure,created_at,updated_at,rate_card_versions(id,version,price_model,currency,status,created_at,updated_at,rate_card_entries(id,service_type,name,unit,price,cost))`
 
   async listRateCards(organizationId: string): Promise<RateCard[]> {
     const rows = await this.get<RateCardRow>(
@@ -467,21 +467,25 @@ function toRateTable(r: RateTableRow): RateTable {
 }
 
 function toRateCard(r: RateCardRow): RateCard {
-  const versions: RateCardVersion[] = (r.rate_card_versions ?? []).map((v) => ({
-    id: v.id,
-    version: v.version,
-    priceModel: v.price_model as PriceModel,
-    currency: v.currency as CurrencyCode,
-    status: v.status as RateCardVersion['status'],
-    entries: (v.rate_card_entries ?? []).map((e) => ({
-      id: e.id,
-      serviceType: e.service_type as FreightType,
-      name: e.name,
-      unit: e.unit as RateCardVersion['entries'][number]['unit'],
-      price: e.price,
-      cost: e.cost,
-    })),
-  }))
+  const versions: RateCardVersion[] = (r.rate_card_versions ?? [])
+    .map((v) => ({
+      id: v.id,
+      version: v.version,
+      priceModel: v.price_model as PriceModel,
+      currency: v.currency as CurrencyCode,
+      status: v.status as RateCardVersion['status'],
+      entries: (v.rate_card_entries ?? [])
+        .sort((a, b) => (a.service_type < b.service_type ? -1 : 1))
+        .map((e) => ({
+          id: e.id,
+          serviceType: e.service_type as FreightType,
+          name: e.name,
+          unit: e.unit as RateCardVersion['entries'][number]['unit'],
+          price: e.price,
+          cost: e.cost,
+        })),
+    }))
+    .sort((a, b) => b.version - a.version)
   const current = versions.find((v) => v.status === 'published') ?? versions[0]
   return {
     id: r.id,

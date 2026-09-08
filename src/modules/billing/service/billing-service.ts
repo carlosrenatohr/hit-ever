@@ -10,8 +10,6 @@ import { CatalogService } from '../catalog/catalog.js'
 import { margin, round2 } from '../domain/calc.js'
 import type { Currency, FreightType, InvoiceStatus, PaymentBank, PaymentMethod, PriceTier } from '../domain/enums.js'
 import { SERVICE_TYPE_TO_FREIGHT } from '../domain/enums.js'
-import { computeAmountsByModel } from '../domain/calc.js'
-import type { PriceModel } from '../domain/calc.js'
 import { normalizeClientName } from '../ingest/normalize/client.js'
 import type { BillingRepository, ExceptionsPayload, InvoiceBundle } from '../repo/billing-repo.js'
 
@@ -519,10 +517,11 @@ export class BillingService {
     const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10)
     const fiscalYear = new Date(issueDate).getUTCFullYear()
 
-    // Resolve the client first: its default rate table drives per-tenant pricing.
+    // Resolve the client first: its default rate drives per-tenant pricing
+    // (rate card for migrated orgs, legacy table fallback).
     const { display, key } = normalizeClientName(input.clientName)
     const clientId = await this.repo.upsertClient(display, key, organizationId)
-    const defaultRateTableId = await this.repo.getClientDefaultRateTable(clientId)
+    const defaultRateTableId = clientId ? (await this.repo.getClientDefaultRateCard(clientId)) ?? (await this.repo.getClientDefaultRateTable(clientId)) : null
     // Deactivated clients can't be billed again (historical invoices stay intact).
     const clientActive = await this.repo.getClientLifecycle(clientId)
     if (clientActive === false) {
@@ -563,6 +562,14 @@ export class BillingService {
         package_guia: info?.guia ?? null,
         package_tracking: info?.tracking ?? null,
         organization_id: organizationId,
+        // Pricing provenance (snapshot — never recalculated from the current tariff).
+        rate_card_id: q.rateCardId ?? null,
+        rate_card_version_id: q.rateCardVersionId ?? null,
+        rate_card_entry_id: q.rateCardEntryId ?? null,
+        base_unit_price: q.unitPrice,
+        discount_amount: 0,
+        surcharge_amount: 0,
+        pricing_source: q.pricingSource,
       })
     }
     // "Other" charges: admin-set amounts (never quoted). Each may reference a
@@ -680,7 +687,7 @@ export class BillingService {
     if (input.lines) {
       if (input.lines.length === 0) throw new Error('An invoice needs at least one line.')
       const clientId = b.header.client_id
-      const defaultRateTableId = clientId ? await this.repo.getClientDefaultRateTable(clientId) : null
+      const defaultRateTableId = clientId ? (await this.repo.getClientDefaultRateCard(clientId)) ?? (await this.repo.getClientDefaultRateTable(clientId)) : null
       // Validate any per-line packages against this invoice (org, invoiceable,
       // client match, active-link) and resolve their guía/tracking snapshots.
       linePkgIds = input.lines.filter((l) => l.packageId).map((l) => l.packageId as string)
@@ -710,6 +717,13 @@ export class BillingService {
           package_guia: info?.guia ?? null,
           package_tracking: info?.tracking ?? null,
           organization_id: organizationId,
+          rate_card_id: q.rateCardId ?? null,
+          rate_card_version_id: q.rateCardVersionId ?? null,
+          rate_card_entry_id: q.rateCardEntryId ?? null,
+          base_unit_price: q.unitPrice,
+          discount_amount: 0,
+          surcharge_amount: 0,
+          pricing_source: q.pricingSource,
         })
       }
     }
@@ -1131,8 +1145,8 @@ export class BillingService {
       throw new Error('Packages have no client assigned — assign a client first.')
     }
 
-    // Get the client's default rate table (if we have a clientId).
-    const defaultRateTableId = clientId ? await this.repo.getClientDefaultRateTable(clientId) : null
+    // Get the client's default rate (card for migrated orgs, legacy table fallback).
+    const defaultRateTableId = clientId ? (await this.repo.getClientDefaultRateCard(clientId)) ?? (await this.repo.getClientDefaultRateTable(clientId)) : null
     // Deactivated clients can't be billed again (historical invoices stay intact).
     if (clientId) {
       const clientActive = await this.repo.getClientLifecycle(clientId)
@@ -1146,16 +1160,14 @@ export class BillingService {
       packageId: string; guia: string; tracking: string | null; serviceType: string | null
       freightType: FreightType; weightLb: number | null; tier: string
       unitPrice: number; total: number; freightCost: number; profit: number
+      rateCardId: string | null; rateCardVersionId: string | null; rateCardEntryId: string | null
+      pricingSource: string
     }> = []
     for (const p of pkgs) {
       const freightType = SERVICE_TYPE_TO_FREIGHT[p.service_type ?? ''] ?? 'AIR'
       const weightLb = p.weight_lb ?? 1 // minimum 1 lb for pricing
-    const tables = await this.repo.getOrgRates(organizationId)
-    const q = await this.catalog.quoteOrg(organizationId, freightType, 'REGULAR', weightLb, defaultRateTableId)
-    // Resolve priceModel from the rate table row (weight by default).
-    const rateRow = tables.find((t) => t.freightType === freightType)?.rows.find((r) => r.tier === 'REGULAR')
-    const priceModel: PriceModel = (rateRow?.priceModel ?? 'weight') as PriceModel
-    lines.push({
+      const q = await this.catalog.quoteOrg(organizationId, freightType, 'REGULAR', weightLb, defaultRateTableId)
+      lines.push({
         packageId: p.id,
         guia: p.almacen_id,
         tracking: p.tracking_number,
@@ -1167,7 +1179,10 @@ export class BillingService {
         total: q ? round2(q.total) : 0,
         freightCost: q ? round2(q.freightCost) : 0,
         profit: q ? round2(q.profit) : 0,
-        priceModel,
+        rateCardId: q?.rateCardId ?? null,
+        rateCardVersionId: q?.rateCardVersionId ?? null,
+        rateCardEntryId: q?.rateCardEntryId ?? null,
+        pricingSource: q?.pricingSource ?? 'catalog',
       })
     }
 
@@ -1217,6 +1232,13 @@ export class BillingService {
       package_guia: l.guia,
       package_tracking: l.tracking,
       organization_id: organizationId,
+      rate_card_id: l.rateCardId,
+      rate_card_version_id: l.rateCardVersionId,
+      rate_card_entry_id: l.rateCardEntryId,
+      base_unit_price: l.unitPrice,
+      discount_amount: 0,
+      surcharge_amount: 0,
+      pricing_source: l.pricingSource,
     }))
 
     const total = round2(lineRows.reduce((s, r) => s + r.total, 0))

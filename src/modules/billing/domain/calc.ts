@@ -50,13 +50,20 @@ export function computeAmounts(quantityLbs: number, unitPrice: number, cost: num
 // Price model: weight (lbs × price), volume (ft³ × price), fixed (flat per package).
 export type PriceModel = 'weight' | 'volume' | 'fixed'
 
-/** Compute line amounts respecting the price model of the rate row. */
+/**
+ * Compute line amounts respecting the price model of the rate row. Only
+ * 'weight' is implemented (quantity × price); volume/fixed are explicitly
+ * rejected — never silently treated as weight.
+ */
 export function computeAmountsByModel(
   quantity: number,
   unitPrice: number,
   cost: number,
   priceModel: PriceModel = 'weight',
 ): LineAmounts {
+  if (priceModel !== 'weight') {
+    throw new Error(`Price model "${priceModel}" is not implemented yet.`)
+  }
   const total = round2(quantity * unitPrice)
   // freight_cost scales with weight regardless of how the customer is billed.
   const freightCost = round2(quantity * cost)

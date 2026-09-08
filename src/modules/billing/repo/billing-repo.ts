@@ -139,6 +139,16 @@ export interface OrgRateTable {
   rows: { tier: string; price: number; cost: number | null; priceModel: string }[]
 }
 
+/** One org rate card with its published version and AIR/MAR entries (v2 model). */
+export interface OrgRateCard {
+  id: string
+  name: string
+  priceModel: string
+  currency: string
+  versionId: string
+  entries: { id: string; serviceType: FreightType; name: string; unit: string; price: number; cost: number | null }[]
+}
+
 /** Row returned by getPackagesForBulk — the subset of package fields needed to price + link. */
 export interface PackageBulkRow {
   id: string
@@ -169,10 +179,14 @@ export interface ExceptionsPayload {
 // ─── Port ───────────────────────────────────────────────────────────────────
 export interface BillingRepository {
   getCatalog(): Promise<CatalogEntry[]>
-  /** Org rate tables + rows — the per-tenant pricing source (legacy catalog is the fallback). */
+  /** Org rate tables + rows — the legacy pricing source (migrated orgs use cards). */
   getOrgRates(organizationId: string): Promise<OrgRateTable[]>
+  /** Org rate cards (plan -> published version -> AIR/MAR entries) — the v2 pricing source. */
+  getOrgRateCards(organizationId: string): Promise<OrgRateCard[]>
   /** The client's default rate table (billing_clients.default_rate_id), or null. */
   getClientDefaultRateTable(clientId: string): Promise<string | null>
+  /** The client's default rate card (billing_clients.default_rate_card_id), or null. */
+  getClientDefaultRateCard(clientId: string): Promise<string | null>
   /** The client's lifecycle state (active) by id; null if the client doesn't exist. */
   getClientLifecycle(clientId: string): Promise<boolean | null>
   upsertClient(display: string, key: string, organizationId: string): Promise<string>
@@ -310,9 +324,51 @@ export class InsforgeBillingRepo implements BillingRepository {
     }))
   }
 
+  async getOrgRateCards(organizationId: string): Promise<OrgRateCard[]> {
+    type VersionDb = {
+      id: string
+      version: number
+      price_model: string
+      currency: string
+      status: string
+      rate_card_entries: { id: string; service_type: string; name: string; unit: string; price: number; cost: number | null }[]
+    }
+    type CardDb = { id: string; name: string; structure: string; rate_card_versions: VersionDb[] }
+    const rows = await this.get<CardDb>(
+      'rate_cards',
+      `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,structure,rate_card_versions(id,version,price_model,currency,status,rate_card_entries(id,service_type,name,unit,price,cost))`,
+    )
+    return rows.map((r) => {
+      const versions = (r.rate_card_versions ?? []).sort((a, b) => b.version - a.version)
+      const v = versions.find((x) => x.status === 'published') ?? versions[0]
+      return {
+        id: r.id,
+        name: r.name,
+        priceModel: v?.price_model ?? 'weight',
+        currency: v?.currency ?? 'USD',
+        versionId: v?.id ?? '',
+        entries: (v?.rate_card_entries ?? [])
+          .sort((a, b) => (a.service_type < b.service_type ? -1 : 1))
+          .map((e) => ({
+            id: e.id,
+            serviceType: e.service_type as FreightType,
+            name: e.name,
+            unit: e.unit,
+            price: e.price,
+            cost: e.cost,
+          })),
+      }
+    })
+  }
+
   async getClientDefaultRateTable(clientId: string): Promise<string | null> {
     const rows = await this.get<{ default_rate_id: string | null }>('billing_clients', `id=eq.${encodeURIComponent(clientId)}&select=default_rate_id&limit=1`)
     return rows[0]?.default_rate_id ?? null
+  }
+
+  async getClientDefaultRateCard(clientId: string): Promise<string | null> {
+    const rows = await this.get<{ default_rate_card_id: string | null }>('billing_clients', `id=eq.${encodeURIComponent(clientId)}&select=default_rate_card_id&limit=1`)
+    return rows[0]?.default_rate_card_id ?? null
   }
 
   async getClientLifecycle(clientId: string): Promise<boolean | null> {
