@@ -148,13 +148,13 @@ export class InsforgeClient implements TrackingRepository {
   async getPackageByGuia(guia: string): Promise<PackageRecord | null> {
     // almacen_id is NOT unique on its own (uniqueness is provider_id+almacen_id, and Everest/GC
     // warehouse numbers can collide). Order by most-recently-scraped so the lookup is deterministic
-    // instead of returning an arbitrary provider's row.
-    const rows = await this.get<DbPackageRow>('packages', `almacen_id=eq.${encodeURIComponent(guia)}&order=scraped_at.desc&limit=1`)
+    // instead of returning an arbitrary provider's row. Soft-deleted packages are out of public track.
+    const rows = await this.get<DbPackageRow>('packages', `almacen_id=eq.${encodeURIComponent(guia)}&deleted_at=is.null&order=scraped_at.desc&limit=1`)
     return rows[0] ? rowToPackage(rows[0]) : null
   }
 
   async getPackageByTracking(tracking: string): Promise<PackageRecord | null> {
-    const rows = await this.get<DbPackageRow>('packages', `tracking_number=eq.${encodeURIComponent(tracking)}&limit=1`)
+    const rows = await this.get<DbPackageRow>('packages', `tracking_number=eq.${encodeURIComponent(tracking)}&deleted_at=is.null&limit=1`)
     return rows[0] ? rowToPackage(rows[0]) : null
   }
 
@@ -171,10 +171,11 @@ export class InsforgeClient implements TrackingRepository {
       // with a newer last_event — they never get revisited (observed 2026-07-18: guia 945354 stayed
       // frozen while others refreshed). scraped_at rotates round-robin so every open package is
       // reached within a few ticks.
-      `provider_id=eq.${encodeURIComponent(providerId)}&effective_status=neq.entregado&select=almacen_id,client_id,billing_clients(active)&order=scraped_at.asc&limit=${limit}`,
+      `provider_id=eq.${encodeURIComponent(providerId)}&effective_status=neq.entregado&deleted_at=is.null&select=almacen_id,client_id,billing_clients(active)&order=scraped_at.asc&limit=${limit}`,
     )
     // Deactivated clients are out of dashboard range — don't spend refresh budget on them
     // (they come back on reactivation). Packages without a billing client stay refreshable.
+    // Soft-deleted packages are terminal: never refreshed again.
     return rows.filter((r) => r.client_id == null || r.billing_clients?.active !== false).map((r) => r.almacen_id)
   }
 

@@ -113,7 +113,7 @@ describe('E2E — guided invoice lifecycle', () => {
 
 describe('E2E — unbilled packages by client', () => {
   it('lists eligible and ineligible packages with reasons for the guided flow', async () => {
-    stubBackend({ packages: [ANA_PKG, { ...ANA_PKG, id: 'pkg-2', almacen_id: 'g654321' }], activeLinks: { 'pkg-2': 'inv-9' } })
+    const calls = stubBackend({ packages: [ANA_PKG, { ...ANA_PKG, id: 'pkg-2', almacen_id: 'g654321' }], activeLinks: { 'pkg-2': 'inv-9' } })
     const res = await authed('/api/billing/clients/c-ana/unbilled-packages')
     expect(res.status).toBe(200)
     const body = (await res.json()) as { data: { packages: Array<{ guia: string; eligible: boolean; reason: string | null }> } }
@@ -121,5 +121,8 @@ describe('E2E — unbilled packages by client', () => {
       { guia: 'g123456', eligible: true, reason: null },
       { guia: 'g654321', eligible: false, reason: 'Ya facturado' },
     ])
+    // Soft-deleted packages must never appear in the unbilled list.
+    const pkgCall = calls.find((c) => c.method === 'GET' && c.url.includes('/records/packages?'))
+    expect(pkgCall?.url).toContain('deleted_at=is.null')
   })
 })
