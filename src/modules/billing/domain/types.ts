@@ -37,6 +37,8 @@ export interface BillingClient {
   taxId?: string | null
   /** Lifecycle state — false = deactivated (packages hidden from dashboards until reactivated). */
   active?: boolean
+  /** Soft delete timestamp — non-null = removed from operational reads (never physical). */
+  deletedAt?: string | null
   /** Total packages related to this client (derived from packages.client_id). */
   packageCount?: number
   /** Default rate table for this client (preselects pricing on their next invoice). */

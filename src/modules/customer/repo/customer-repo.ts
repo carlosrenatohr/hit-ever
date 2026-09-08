@@ -1,6 +1,6 @@
 import type { CloudflareBindings } from '../../../types/index.js'
 import type { BillingClient } from '../../billing/domain/types.js'
-import type { CreateCustomerInput, CustomerListFilter, CustomerPage, UpdateCustomerInput } from '../domain/types.js'
+import type { CreateCustomerInput, CustomerDeletePreview, CustomerListFilter, CustomerPage, UpdateCustomerInput } from '../domain/types.js'
 
 interface BillingClientDbRow {
   id: string
@@ -14,6 +14,7 @@ interface BillingClientDbRow {
   company_name: string | null
   tax_id: string | null
   active: boolean
+  deleted_at: string | null
   default_rate_id: string | null
   default_rate_card_id: string | null
   /** PostgREST aggregate embed — packages(count) → [{ count }] (derived, never stored). */
@@ -69,6 +70,10 @@ export interface CustomerRepository {
     },
     organizationId?: string,
   ): Promise<BillingClient | null>
+  /** Soft delete: PATCH deleted_at/by/reason scoped to the org. Returns the row or null. */
+  delete(id: string, organizationId: string, deletedBy: string, reason: string | null): Promise<BillingClient | null>
+  /** Impact summary (packages + invoices, capped samples) for the delete confirmation. */
+  deletePreview(id: string, organizationId: string): Promise<CustomerDeletePreview | null>
   insertAudit(entry: CustomerAuditEntry): Promise<void>
 }
 
@@ -85,6 +90,7 @@ function toDomain(row: BillingClientDbRow): BillingClient {
     companyName: row.company_name ?? null,
     taxId: row.tax_id ?? null,
     active: row.active,
+    deletedAt: row.deleted_at ?? null,
     packageCount: row.packages?.[0]?.count ?? 0,
     defaultRateId: row.default_rate_id ?? null,
     defaultRateCardId: row.default_rate_card_id ?? null,
@@ -92,7 +98,7 @@ function toDomain(row: BillingClientDbRow): BillingClient {
 }
 
 const CLIENT_COLS =
-  'id,name,name_normalized,casillero,to_review,email,phone,address,company_name,tax_id,active,default_rate_id,default_rate_card_id,packages(count)'
+  'id,name,name_normalized,casillero,to_review,email,phone,address,company_name,tax_id,active,deleted_at,default_rate_id,default_rate_card_id,packages(count)'
 
 function statusPredicate(status: string): string {
   if (status === 'active') return 'active.eq.true'
@@ -110,16 +116,24 @@ export class InsforgeCustomerRepo implements CustomerRepository {
   }
 
   private async fetchRows<T>(query: string): Promise<T[]> {
-    const res = await fetch(`${this.base}/billing_clients?${query}`, { headers: this.headers })
-    if (!res.ok) throw new Error(`InsForge GET billing_clients → ${res.status}`)
-    return (await res.json()) as T[]
+    return this.fetchRowsFrom<T>('billing_clients', query)
   }
 
   private async fetchRowsWithCount<T>(query: string): Promise<{ rows: T[]; count: number }> {
-    const res = await fetch(`${this.base}/billing_clients?${query}`, {
+    return this.fetchRowsWithCountFrom<T>('billing_clients', query)
+  }
+
+  private async fetchRowsFrom<T>(table: string, query: string): Promise<T[]> {
+    const res = await fetch(`${this.base}/${table}?${query}`, { headers: this.headers })
+    if (!res.ok) throw new Error(`InsForge GET ${table} → ${res.status}`)
+    return (await res.json()) as T[]
+  }
+
+  private async fetchRowsWithCountFrom<T>(table: string, query: string): Promise<{ rows: T[]; count: number }> {
+    const res = await fetch(`${this.base}/${table}?${query}`, {
       headers: { ...this.headers, Prefer: 'count=exact' },
     })
-    if (!res.ok) throw new Error(`InsForge GET billing_clients → ${res.status}`)
+    if (!res.ok) throw new Error(`InsForge GET ${table} → ${res.status}`)
     const rows = (await res.json()) as T[]
     const range = res.headers.get('content-range') ?? ''
     return { rows, count: Number(range.split('/')[1]) || rows.length }
@@ -163,6 +177,8 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     const pageSize = Math.min(100, Math.max(1, filter.pageSize ?? 25))
     const parts = [`select=${CLIENT_COLS}`, 'order=name.asc']
     parts.push(`organization_id=eq.${encodeURIComponent(filter.organizationId)}`)
+    // Soft-deleted clients are out of every operational read by default.
+    parts.push('deleted_at=is.null')
     if (filter.search) {
       const search = filter.search.replace(/[(),*]/g, '')
       parts.push(`name=ilike.*${encodeURIComponent(search)}*`)
@@ -181,6 +197,37 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
     const rows = await this.fetchRows<BillingClientDbRow>(`id=eq.${encodeURIComponent(id)}${orgFilter}&select=${CLIENT_COLS}&limit=1`)
     return rows[0] ? toDomain(rows[0]) : null
+  }
+
+  async delete(id: string, organizationId: string, deletedBy: string, reason: string | null): Promise<BillingClient | null> {
+    const updated = await this.patch(
+      id,
+      { deleted_at: new Date().toISOString(), deleted_by: deletedBy, delete_reason: reason, updated_at: new Date().toISOString() },
+      organizationId,
+    )
+    return updated ? toDomain(updated) : null
+  }
+
+  async deletePreview(id: string, organizationId: string): Promise<CustomerDeletePreview | null> {
+    const client = await this.get(id, organizationId)
+    if (!client) return null
+    const [pkgs, invs] = await Promise.all([
+      this.fetchRowsWithCountFrom<{ almacen_id: string | null; tracking_number: string | null }>(
+        'packages',
+        `client_id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=almacen_id,tracking_number&limit=5&order=scraped_at.desc`,
+      ),
+      this.fetchRowsWithCountFrom<{ fiscal_year: number; invoice_number: number; status: string }>(
+        'invoices',
+        `client_id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=fiscal_year,invoice_number,status&limit=5&order=fiscal_year.desc,invoice_number.desc`,
+      ),
+    ])
+    return {
+      client,
+      packages: pkgs.rows.map((p) => ({ guia: p.almacen_id, tracking: p.tracking_number })),
+      packageCount: pkgs.count,
+      invoices: invs.rows.map((i) => ({ fiscalYear: i.fiscal_year, invoiceNumber: i.invoice_number, status: i.status })),
+      invoiceCount: invs.count,
+    }
   }
 
   async create(input: {

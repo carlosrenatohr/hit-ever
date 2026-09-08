@@ -70,4 +70,43 @@ describe('CustomerService', () => {
     const call = insertAudit.mock.calls[0][0] as { metadata: { changes: Record<string, { before: unknown; after: unknown }> } }
     expect(call.metadata.changes.active).toEqual({ before: true, after: false })
   })
+
+  it('soft-deletes a client and audits client.delete with impact counts', async () => {
+    const before = client({ deletedAt: null })
+    const deleted = client({ deletedAt: '2026-09-08T22:00:00Z' })
+    const del = vi.fn(async () => deleted)
+    const insertAudit = vi.fn(async () => {})
+    const service = new CustomerService(
+      repo({
+        get: vi.fn(async () => before),
+        delete: del,
+        deletePreview: vi.fn(async () => ({ client: before, packages: [{ guia: '926791', tracking: 'TRK1' }], packageCount: 1, invoices: [], invoiceCount: 2 })),
+        insertAudit,
+      }),
+    )
+
+    const out = await service.delete('c1', 'hit', { userId: 'u1', email: 'a@t.com' }, 'req-1', 'cierre')
+
+    expect(out).toEqual({ id: 'c1', deleted: true })
+    expect(del).toHaveBeenCalledWith('c1', 'hit', 'u1', 'cierre')
+    expect(insertAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'client.delete', actorId: 'u1', requestId: 'req-1', entityId: 'c1' }))
+    const meta = (insertAudit.mock.calls[0][0] as { metadata: Record<string, unknown> }).metadata
+    expect(meta).toMatchObject({ packageCount: 1, invoiceCount: 2, reason: 'cierre', name: 'Ana Maria' })
+  })
+
+  it('rejects a double delete as not found and does not touch the repo delete', async () => {
+    const del = vi.fn()
+    const service = new CustomerService(
+      repo({ get: vi.fn(async () => client({ deletedAt: '2026-09-08T22:00:00Z' })), delete: del, insertAudit: vi.fn(async () => {}) }),
+    )
+
+    await expect(service.delete('c1', 'hit', { userId: 'u1', email: 'a@t.com' })).rejects.toThrow('Customer not found.')
+    expect(del).not.toHaveBeenCalled()
+  })
+
+  it('hides a deleted client from get', async () => {
+    const service = new CustomerService(repo({ get: vi.fn(async () => client({ deletedAt: '2026-09-08T22:00:00Z' })) }))
+
+    await expect(service.get('c1', 'hit')).resolves.toBeNull()
+  })
 })

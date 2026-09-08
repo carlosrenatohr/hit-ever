@@ -24,7 +24,7 @@ describe('InsforgeCustomerRepo', () => {
       rows: [
         {
           id: 'c1', name: 'Ana', nameNormalized: 'ana', casillero: 'A1', toReview: true, email: 'a@t.com', phone: null, address: null,
-          companyName: 'Ana S.A.', taxId: 'J123', active: true, packageCount: 3, defaultRateId: null, defaultRateCardId: null,
+          companyName: 'Ana S.A.', taxId: 'J123', active: true, deletedAt: null, packageCount: 3, defaultRateId: null, defaultRateCardId: null,
         },
       ],
       count: 1,
@@ -70,5 +70,53 @@ describe('InsforgeCustomerRepo', () => {
     })
 
     expect(JSON.parse(body)).toEqual([{ organization_id: 'hit', actor_id: 'u1', actor_email: 'a@t.com', actor_type: 'user', action: 'client.deactivate', entity_type: 'billing_client', entity_id: 'c1', request_id: 'r1', metadata: { changes: {} } }])
+  })
+
+  it('soft-deletes a client org-scoped and maps deletedAt', async () => {
+    let url = ''
+    let body = ''
+    vi.stubGlobal('fetch', async (input: Request | string, init?: RequestInit) => {
+      url = typeof input === 'string' ? input : input.url
+      body = String(init?.body ?? '')
+      return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false, email: null, phone: null, address: null, company_name: null, tax_id: null, active: true, deleted_at: '2026-09-08T22:00:00Z', default_rate_id: null, default_rate_card_id: null }]), { status: 200 })
+    })
+
+    const result = await new InsforgeCustomerRepo('https://db.test', 'key').delete('c1', 'hit', 'u1', 'cierre')
+
+    expect(url).toContain('/api/database/records/billing_clients?id=eq.c1')
+    expect(url).toContain('organization_id=eq.hit')
+    expect(JSON.parse(body)).toMatchObject({ deleted_by: 'u1', delete_reason: 'cierre' })
+    expect(typeof JSON.parse(body).deleted_at).toBe('string')
+    expect(result?.deletedAt).toBe('2026-09-08T22:00:00Z')
+  })
+
+  it('builds a delete preview with package and invoice counts + capped samples', async () => {
+    const requested: string[] = []
+    vi.stubGlobal('fetch', async (input: Request | string) => {
+      const url = typeof input === 'string' ? input : input.url
+      requested.push(url)
+      if (url.includes('/api/database/records/billing_clients')) {
+        return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false, email: null, phone: null, address: null, company_name: null, tax_id: null, active: true, deleted_at: null, default_rate_id: null, default_rate_card_id: null }]), { status: 200 })
+      }
+      if (url.includes('/api/database/records/packages')) {
+        return new Response(JSON.stringify([{ almacen_id: '926791', tracking_number: 'TRK1' }]), { status: 200, headers: { 'content-range': '0-0/3' } })
+      }
+      if (url.includes('/api/database/records/invoices')) {
+        return new Response(JSON.stringify([{ fiscal_year: 2026, invoice_number: 104, status: 'PAID' }]), { status: 200, headers: { 'content-range': '0-0/2' } })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    const result = await new InsforgeCustomerRepo('https://db.test', 'key').deletePreview('c1', 'hit')
+
+    expect(result).toMatchObject({
+      client: expect.objectContaining({ id: 'c1' }),
+      packages: [{ guia: '926791', tracking: 'TRK1' }],
+      packageCount: 3,
+      invoices: [{ fiscalYear: 2026, invoiceNumber: 104, status: 'PAID' }],
+      invoiceCount: 2,
+    })
+    expect(requested.find((u) => u.includes('/records/packages'))).toContain('client_id=eq.c1')
+    expect(requested.find((u) => u.includes('/records/invoices'))).toContain('organization_id=eq.hit')
   })
 })
