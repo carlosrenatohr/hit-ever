@@ -202,6 +202,20 @@ export class InsforgeClient implements TrackingRepository {
     return rows[0]?.is_scrapable ?? true
   }
 
+  /** Latest scraped_at per ACTIVE provider (health freshness). One subrequest per provider, limit=1. */
+  async getLastScrapeByProvider(): Promise<Record<string, string | null>> {
+    const providers = await this.getActiveProviders()
+    const out: Record<string, string | null> = {}
+    for (const p of providers) {
+      const rows = await this.get<{ scraped_at: string }>(
+        'packages',
+        `provider_id=eq.${encodeURIComponent(p.id)}&deleted_at=is.null&select=scraped_at&order=scraped_at.desc&limit=1`,
+      )
+      out[p.code] = rows[0]?.scraped_at ?? null
+    }
+    return out
+  }
+
   /** Upsert a package (conflict on provider_id, almacen_id). Returns its id. */
   async upsertPackage(pkg: Record<string, unknown>): Promise<string | null> {
     const rows = await this.upsertPackages([pkg])

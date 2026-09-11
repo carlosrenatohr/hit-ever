@@ -87,20 +87,36 @@ GET https://hit-ever-scraper.nativerse.workers.dev/admin/health
 curl -s "https://hit-ever-scraper.nativerse.workers.dev/admin/health?pretty=1"
 ```
 
-**Respuesta esperada (200)**
+**Respuesta esperada (200 — ingesta fresca)**
 
 ```json
 {
   "ok": true,
   "data": {
     "service": "hit-ever-scraper",
-    "version": "1.1.0",
+    "version": "1.3.0",
     "status": "operational",
-    "timestamp": "2026-06-15T12:00:00.000Z",
-    "environment": "configured"
+    "freshness": {
+      "everest": { "last_scrape": "2026-09-11T12:16:12.260Z", "hours_stale": 0.1 },
+      "global_connection": { "last_scrape": "2026-09-11T17:26:23.559Z", "hours_stale": 0.0 }
+    },
+    "stale_providers": [],
+    "timestamp": "2026-09-11T18:00:00.000Z"
   }
 }
 ```
+
+**Respuesta esperada (503 — ingesta congelada).** Cuando un proveedor activo lleva más de
+`?stale_after` horas sin escribir (default `6`), el endpoint devuelve `503 STALE_INGESTION`:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" "https://hit-ever-scraper.nativerse.workers.dev/admin/health?stale_after=6"
+# → 503 cuando hay algún proveedor con >6h de atraso; 200 si todo está al día
+```
+
+El `503` es la señal que consume un monitor externo gratuito (UptimeRobot / Better Stack,
+cada 5 min, alerta por email) para convertir un apagón de ingesta en una notificación.
+`?stale_after=N` (1-72h) permite ajustar el umbral o simular la alerta.
 
 **Qué prueba:** que el Worker arrancó con sus variables de entorno. El campo
 `environment` será `"configured"` si `EVEREST_BASE_URL` está presente, o
