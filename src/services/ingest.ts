@@ -25,13 +25,27 @@ const UA =
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
 // Per-provider credentials (in Cloudflare Secrets, never in the DB).
+// Logs loudly instead of failing silently: a missing secret used to mean the provider
+// was skipped with zero trace (observed 2026-09-11 — nobody noticed 17 days of a dead
+// GC/Everest ingest). Returns null = caller skips the provider.
 function credsFor(code: string, env: CloudflareBindings): { user: string; pass: string } | null {
   switch (code) {
-    case 'everest':
+    case 'everest': {
+      if (!env.EVEREST_USERNAME || !env.EVEREST_PASSWORD) {
+        console.error('[ingest] everest: EVEREST_USERNAME/EVEREST_PASSWORD secrets missing — provider skipped')
+        return null
+      }
       return { user: env.EVEREST_USERNAME, pass: env.EVEREST_PASSWORD }
-    case 'global_connection':
-      return env.GC_USERNAME && env.GC_PASSWORD ? { user: env.GC_USERNAME, pass: env.GC_PASSWORD } : null
+    }
+    case 'global_connection': {
+      if (!env.GC_USERNAME || !env.GC_PASSWORD) {
+        console.error('[ingest] global_connection: GC_USERNAME/GC_PASSWORD secrets missing — provider skipped')
+        return null
+      }
+      return { user: env.GC_USERNAME, pass: env.GC_PASSWORD }
+    }
     default:
+      console.error(`[ingest] ${code}: unknown provider code — no credentials mapping`)
       return null
   }
 }

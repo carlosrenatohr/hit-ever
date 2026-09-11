@@ -2,6 +2,7 @@ import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { getRepository } from '../lib/repository.js'
+import { assessIngestionFreshness } from '../lib/health.js'
 import { Res } from '../lib/response.js'
 import { intParam, timingSafeEqual } from '../lib/security.js'
 import { IngestService } from '../services/ingest.js'
@@ -33,15 +34,36 @@ admin.use('/packages/*', adminAuth)
 admin.use('/ingest', adminAuth)
 admin.use('/refresh-open', adminAuth)
 
-/** GET /admin/health */
-admin.get('/health', (c) => {
-  return Res.ok(c, {
-    service: 'hit-ever-scraper',
-    version: '1.1.0',
-    status: 'operational',
-    timestamp: new Date().toISOString(),
-    environment: c.env.EVEREST_BASE_URL ? 'configured' : 'missing-env',
-  })
+/** GET /admin/health — liveness + ingestion freshness for external free monitors.
+ *  Returns 503 when an active provider hasn't written in > stale_after hours (default 6),
+ *  so UptimeRobot/Better Stack turns an ingestion outage into an email alert. */
+admin.get('/health', async (c) => {
+  const staleAfterHours = intParam(c.req.query('stale_after'), 6, 1, 72)
+  try {
+    const last = await getRepository(c.env).getLastScrapeByProvider()
+    const assessment = assessIngestionFreshness(last, staleAfterHours)
+    const body = {
+      service: 'hit-ever-scraper',
+      version: '1.3.0',
+      status: assessment.stale ? 'degraded' : 'operational',
+      freshness: assessment.freshness,
+      stale_providers: assessment.staleProviders,
+      timestamp: new Date().toISOString(),
+    }
+    if (assessment.stale) {
+      return Res.err(
+        c,
+        'STALE_INGESTION',
+        `Ingestion stale for provider(s): ${assessment.staleProviders.join(', ')}`,
+        503,
+        { freshness: assessment.freshness, stale_providers: assessment.staleProviders },
+      )
+    }
+    return Res.ok(c, body)
+  } catch (error) {
+    console.error('health check failed', error)
+    return Res.err(c, 'INGESTION_HEALTH_ERROR', 'Failed to check ingestion freshness.', 503)
+  }
 })
 
 /** POST /admin/session/refresh — body { secret } (legacy, Everest session) */

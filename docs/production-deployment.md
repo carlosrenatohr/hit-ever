@@ -225,7 +225,9 @@ Repo: `hit-cargo-web-v-1.2` (Astro 6 + Preact). Build: `pnpm build` → `dist`.
   In the dashboard or via the MCP, filter `$metadata.service = hit-ever-scraper`, `level = error`.
   Watch for: ingest results `{everest:N, global_connection:M}` where `-1` = a failed provider (open
   the matching error log), `Too many subrequests`, and login failures (`did not reach the agent area`).
-- **Health:** `GET /admin/health` → service + env sanity.
+- **Health:** `GET /admin/health` → service + ingestion freshness. `200` = every active provider
+  wrote within the last `stale_after` hours (default 6); `503 STALE_INGESTION` = an outage worth
+  alerting on. Point a free external monitor (UptimeRobot/Better Stack, 5-min interval, email) at it.
 - **Data freshness (no logs needed):** check `scraped_at` advancing per provider:
   `GET {INSFORGE}/api/database/records/packages?select=almacen_id,scraped_at&order=scraped_at.desc&limit=5`.
   After a cron tick, the relevant provider's `scraped_at` should move to ~the tick time.
