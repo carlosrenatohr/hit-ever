@@ -5,6 +5,65 @@ Registro de problemas conocidos del worker y su causa raíz, para no re-investig
 
 ---
 
+## 2026-09-11 · Guía 220643 (y 7 más) nunca llegaron a la BD — hueco de ingesta 16-ago → 02-sep
+
+**Síntoma.** La guía GC 220643 (DANIEL VILCHEZ, casillero 1538, recibida en MIA el 19-ago) no
+existía en `packages`. Alarma del cliente/ops: "si pasó con una, ¿cuántas más faltan?".
+
+**Diagnóstico (verificado con datos, no asumido).**
+- `providers`/`provider_agencies` correctos; el routing GC→hit funciona. El sistema SÍ estaba
+  ingiriendo (GC last_scrape minutos antes) pero con volumen diario de 1-16 writes cuando el
+  diseño permite ~180/día (página de 15 filas × 12 ticks diarios).
+- Query de writes/día mostró un hueco casi total **16-ago → 02-sep** en AMBOS proveedores
+  (GC: 11 el 16-ago, 2 el 25, 2 el 26, 0 hasta el 02-sep; Everest: 3 el 19-ago, 1 el 26-ago).
+- La causa exacta de ese hueco ya no es auditable: la retención de logs de CF es de 7 días y el
+  hook de Observability devolvía errores internos. El patrón es idéntico al incidente
+  **2026-07-18 de abajo** (límite de 50 subrequests del plan Free + login backoff), que fue
+  "mitigado" bajando batches, no curado.
+- Mecánica de la pérdida: el list-walk solo ve **página 1 (15 filas)** con **ventana de 7 días**
+  (`INGEST_WINDOW_DAYS`). Un paquete que llega durante un apagón y recibe >15 llegadas después,
+  sale de la página 1; cuando sale de la ventana de 7 días es inalcanzable para siempre por el
+  cron rutinario (solo el email trigger o un refresh manual lo rescatan).
+
+**Auditoría exacta (backfill + diff) — el método para contar lo perdido:**
+El `almacen_id` NO sirve para contar faltantes directamente: el espacio de IDs es compartido
+entre TODOS los clientes de Global Connection (huecos de miles = casilleros ajenos). El contador
+exacto es **recorrer el listado `whs.asp` hacia atrás y diff contra la BD**:
+```
+POST /admin/ingest?provider=<code>&offset=<0,15,30,...>&days=45
+```
+(página de 15 filas por invocación; ~21 subrequests, cabe en el plan Free). Se detiene cuando
+`count:0` dos veces seguidas = se pasó del límite de la ventana. Diff de `almacen_id` antes/después
+= faltantes exactos. Resultado de la auditoría del 11-sep (45 días):
+- **GC:** 49 paquetes en 45 días; **3 faltantes** → 220643 (VILCHEZ), 218961 (DAVID DURAN,
+  19-ago), 220665 (STEPFANIE, 03-sep).
+- **Everest:** 19 paquetes en 45 días; **5 faltantes** → 977641 y 977761 (26-ago, dentro del
+  hueco) + 976004/976258/976262 (10-sep, overflow de página 1).
+- **Total: 8 guías perdidas en ~4 semanas. Todas recuperadas el 11-sep vía backfill.**
+
+**Lección de riesgo.** El volumen real (~50 paquetes/45d entre ambos) es bajo, por eso la pérdida
+fue pequeña pese a 17 días de ingesta moribunda. Pero es **ley de overflow**: con >15 llegadas
+entre walks exitosos (lo que pasará al escalar clientes), la pérdida crece linealmente.
+
+**Fixes.**
+1. **Inmediato (aplicado 11-sep):** backfill completo de 45 días, ambos proveedores. Repetir esta
+   auditoría (walk + diff) tras cualquier apagón detectado.
+2. **Estructural recomendado:** Workers Paid ($5/mes) → 10.000 subrequests/invocación, mata la
+   clase entera de fallos del incidente 2026-07-18 y permite walks profundos en una invocación.
+3. **Alternativa gratuita:** cron de deep-walk rotativo (1 página extra por invocación, offsets
+   15/30/45 en horarios muertos) + detector de huecos (ver abajo). Suficiente con el volumen
+   actual, insuficiente si el volumen crece >15 llegadas/2h.
+4. **Detección (pendiente de implementar):** `GET /admin/health` debe reflejar frescura real
+   (max `scraped_at` por proveedor vs now; >6h de atraso → 503) para que un monitor externo
+   gratuito (UptimeRobot/Better Stack free) alerte. Opcional: watermark de `max(almacen_id)`
+   por proveedor como tripwire barato de "el walk no corrió".
+
+**Regla para no re-investigar.** Guía faltante puntual → `POST /admin/packages/<GUIA>/refresh`.
+Sospecha de paquetes perdidos por apagón → auditoría walk+diff de arriba. Write rate en el piso
+por días → asumir subrequests/backoff, no "la BD está rota"; revisar Observability de CF primero.
+
+---
+
 ## 2026-08-05 · Paquete sin libraje y "el re-scrape no lo llenó" (endpoint equivocado)
 
 **Síntoma.** Dos guías en tránsito (955165, 961438) muestran "peso sin dato" en el panel.
