@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { resolveProviderOrg, toPackageRow } from './ingest.js'
+import { resolveProviderOrg, toPackageRow, nextDeepWalkOffset, DEEP_WALK_STEP, DEEP_WALK_MAX_OFFSET } from './ingest.js'
 import type { ListRow, DetailData } from '../lib/cargotrack.js'
 
 const BASE_URL = 'https://everest.cargotrack.net'
@@ -127,5 +127,21 @@ describe('resolveProviderOrg (junction routing)', () => {
       { agencySlug: 'b', casilleroFilter: null },
       { agencySlug: 'c', casilleroFilter: null },
     ], '999')).toBeNull()
+  })
+})
+
+describe('nextDeepWalkOffset (rotating anti-overflow walk)', () => {
+  it('starts at the first page beyond page 1 when no state exists', () => {
+    expect(nextDeepWalkOffset(null)).toBe(DEEP_WALK_STEP)
+  })
+
+  it('advances by the step until the cap', () => {
+    expect(nextDeepWalkOffset(15)).toBe(30)
+    expect(nextDeepWalkOffset(30)).toBe(45)
+    expect(nextDeepWalkOffset(45)).toBe(60)
+  })
+
+  it('wraps back to the first step at the cap', () => {
+    expect(nextDeepWalkOffset(DEEP_WALK_MAX_OFFSET)).toBe(DEEP_WALK_STEP)
   })
 })

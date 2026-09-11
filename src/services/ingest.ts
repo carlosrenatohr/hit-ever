@@ -19,6 +19,22 @@ const SESSION_TTL_SEC = 2 * 60 // Cargotrack sessions die in ~2-3 min; cache no 
 const LOGIN_BACKOFF_SEC = 15 * 60 // after a genuine login failure, wait before trying again
 const INGEST_WINDOW_DAYS = 7 // only ingest packages received within this window
 const THROTTLE_MS = 900 // base delay between detail fetches (keep the footprint low)
+
+// ─── Daily deep-walk (anti-overflow) ──────────────────────────────────────────
+// The routine list-walk only ingests PAGE 1 (15 rows). When >15 packages arrive between
+// successful runs, the overflow rows scroll past page 1 and, once outside the 7-day window,
+// are lost forever (observed 2026-09-11: 220643 fell in the Aug 16 → Sep 2 gap). The deep
+// walk revisits one page BEYOND page 1 per daily invocation, rotating offsets 15→60, so a
+// backlog of up to 60 rows is always swept within 4 days. Pure rotation for testability.
+export const DEEP_WALK_STEP = 15
+export const DEEP_WALK_MAX_OFFSET = 60
+export const DEEP_WALK_WINDOW_DAYS = 10
+
+export function nextDeepWalkOffset(current: number | null): number {
+  if (current == null) return DEEP_WALK_STEP
+  if (current >= DEEP_WALK_MAX_OFFSET) return DEEP_WALK_STEP
+  return current + DEEP_WALK_STEP
+}
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
 
@@ -506,6 +522,27 @@ export class IngestService {
 
     const rows = parseAlmacenList(await client.fetchListPage(offset))
     return this.ingestRows(p, client, rows, windowDays)
+  }
+
+  /**
+   * Daily deep-walk (anti-overflow): ingests ONE list page BEYOND page 1 with a rotating
+   * offset (15 → 30 → 45 → 60 → 15), swept in Upstash per provider. One page per invocation
+   * to stay under the free-plan 50-subrequest limit. Catches packages that overflowed page 1
+   * between successful cron runs and would otherwise be lost once outside the 7-day window.
+   */
+  async deepWalk(providerCode = 'global_connection'): Promise<{ offset: number; next: number; count: number } | null> {
+    if (!this.env.UPSTASH_REDIS_URL || !this.env.UPSTASH_REDIS_TOKEN) {
+      console.error(`[cron] deep-walk (${providerCode}) skipped: UPSTASH_REDIS_URL/TOKEN missing`)
+      return null
+    }
+    const redis = new UpstashRedisClient(this.env.UPSTASH_REDIS_URL, this.env.UPSTASH_REDIS_TOKEN)
+    const key = `ct:deepwalk_offset:${providerCode}`
+    const offset = (await redis.get<number>(key)) ?? DEEP_WALK_STEP
+    const next = nextDeepWalkOffset(offset)
+    const count = await this.ingestPage(providerCode, offset, DEEP_WALK_WINDOW_DAYS)
+    await redis.set(key, next)
+    console.log(`[cron] ${providerCode} deep-walk: offset ${offset} → ingested ${count}, next ${next}`)
+    return { offset, next, count }
   }
 
   async ingestAllAtOffset(offset: number, windowDays = INGEST_WINDOW_DAYS): Promise<Record<string, number>> {

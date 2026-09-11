@@ -471,6 +471,34 @@ el resto de la DB. Útil para rellenar campos que el código nuevo extrae del de
 paquete atascado sin esperar al cron. Tras esto, verificar vía `/track` (1.3) o en el
 panel (que lee InsForge directo).
 
+### 1.4.4 Deep-walk diario — barrido anti-overflow más allá de la página 1
+
+**Qué es.** El cron rutinario solo ingesta la **página 1** (15 filas más recientes) de
+`whs.asp`. Si llegan más de 15 paquetes entre corridas exitosas, el excedente sale de la
+página 1 y, al salir de la ventana de 7 días, **se pierde para siempre** (fue el caso de la
+guía 220643 en el hueco 16-ago→02-sep). El deep-walk barre UNA página más allá por día, con
+offset rotativo guardado en Upstash (`ct:deepwalk_offset:global_connection`): 15→30→45→60→15,
+ventana de 10 días. Así un backlog de hasta 60 filas se recorre en 4 días, bajo el límite de
+50 subrequests por invocación.
+
+**Trigger:** cron `0 4 * * *` (diario 04:00 UTC), invoca `IngestService.deepWalk()`.
+
+**Prueba manual del mecanismo** (sin esperar al cron): los offsets 15/30/45/60 se pueden
+recorrer a mano con el modo chunked (1.4.2):
+
+```bash
+for OFF in 15 30 45 60; do
+  curl -s -X POST -H "Authorization: Bearer <ADMIN_SECRET>" \
+    "https://hit-ever-scraper.nativerse.workers.dev/admin/ingest?provider=global_connection&offset=$OFF&days=10"
+  sleep 2
+done
+```
+
+**Qué esperar:** cada página devuelve un `count` (0..15). `count > 0` en offsets ≥ 15 =
+hay paquetes que el cron de página 1 no habría alcanzado; si salen `count:0` seguidos en
+offsets altos, el backlog está limpio. El estado rotativo (`next`) se lee en Upstash bajo
+`ct:deepwalk_offset:global_connection`.
+
 ### 1.4.4 `POST /staff/packages/:guia/refresh` — re-scrape desde el panel (JWT de usuario)
 
 Mismo trabajo que 1.4.3, pero **auth por sesión del panel en vez de `ADMIN_SECRET`**:

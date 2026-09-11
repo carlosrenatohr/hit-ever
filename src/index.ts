@@ -134,6 +134,12 @@ export default {
       case '30 */2 * * *':
         job = svc.ingestProvider('global_connection', 1)
         break
+      // Daily deep-walk: sweeps one list page beyond page 1 (rotating offset 15→60) to catch
+      // packages that overflowed page 1 between routine runs — the exact failure that lost
+      // guía 220643 during the Aug 16 → Sep 2 gap. See IngestService.deepWalk.
+      case '0 4 * * *':
+        job = svc.deepWalk('global_connection')
+        break
       // Batch of 6, NOT 8: the Workers Free plan caps external subrequests at 50/invocation, and
       // persist() costs ~4 per package (fetch detail + upsert package + events + notes) plus login/
       // session (~5) and Upstash reads. At 8, every tick blew past 50 and failed almost every package
