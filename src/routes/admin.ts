@@ -34,10 +34,11 @@ admin.use('/packages/*', adminAuth)
 admin.use('/ingest', adminAuth)
 admin.use('/refresh-open', adminAuth)
 
-/** GET /admin/health — liveness + ingestion freshness for external free monitors.
- *  Returns 503 when an active provider hasn't written in > stale_after hours (default 6),
- *  so UptimeRobot/Better Stack turns an ingestion outage into an email alert. */
-admin.get('/health', async (c) => {
+/** Health handler shared by /admin (root, forgiving for misconfigured monitors) and /admin/health.
+ *  Returns 503 when an active provider hasn't written in > stale_after hours (default 6), so
+ *  UptimeRobot/Better Stack turns an ingestion outage into an email alert. The root route exists
+ *  because a monitor pointed at `.../admin/` (no /health) used to get a 404 false alarm. */
+async function healthHandler(c: any) {
   const staleAfterHours = intParam(c.req.query('stale_after'), 6, 1, 72)
   try {
     const last = await getRepository(c.env).getLastScrapeByProvider()
@@ -64,7 +65,10 @@ admin.get('/health', async (c) => {
     console.error('health check failed', error)
     return Res.err(c, 'INGESTION_HEALTH_ERROR', 'Failed to check ingestion freshness.', 503)
   }
-})
+}
+
+admin.get('/', healthHandler)
+admin.get('/health', healthHandler)
 
 /** POST /admin/session/refresh — body { secret } (legacy, Everest session) */
 admin.post(

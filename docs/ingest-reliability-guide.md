@@ -41,6 +41,8 @@ El único paso que no se puede automatizar sin código extra es la **alerta exte
 1. Crear cuenta en **UptimeRobot** (o Better Stack) — free tier.
 2. Nuevo monitor **HTTP(S)**:
    - URL: `https://hit-ever-scraper.nativerse.workers.dev/admin/health`
+     (también funciona `.../admin/` — la raíz responde el mismo health desde v1.4.2; sirve si
+     un monitor mal configurado apunta a la base).
    - Intervalo: **5 minutos**.
    - Alertas: cuando el monitor esté **DOWN** (el endpoint devuelve `503` cuando la ingesta está
      congelada → UptimeRobot lo marca down).
@@ -80,9 +82,14 @@ npx -y @insforge/cli db query \
 
 | Síntoma | Causa probable | Acción |
 |---|---|---|
-| `/admin/health` → 503 | Proveedor >6h sin escribir | Ver logs del Worker; si falla login (`did not reach the agent area`), revisar credenciales Cargotrack |
+| `/admin/health` → 503 | Proveedor >6h sin escribir | **Control automático:** `ADMIN_SECRET=<s> pnpm tsx scripts/ops-ingest-health.ts` (chequea y auto-recupera el proveedor atrasado; `--dry-run` para simular). O ver logs del Worker |
 | Health 200 pero `scraped_at` no avanza | Cron no dispara / cuenta de crons al límite | Ver `wrangler deploy` reciente; la cuenta free tiene **5 crons máximo** |
 | Paquetes viejos que faltan | Overflow de página 1 durante un apagón | **Auditoría walk+diff** (sección 4) + backfill |
+
+> **`scripts/ops-ingest-health.ts`** es la herramienta de control de fallos del lado de ops: un
+> solo comando que consulta `/admin/health`, y si hay un proveedor atrasado dispara
+> `refresh-open` + `ingest` (página 0) para recuperarlo, re-chequea y reporta. Exit code `1`
+> si sigue atrasado (sirve para un cron local). Lee `ADMIN_SECRET` de env o `.dev.vars`.
 
 ---
 
