@@ -1,7 +1,8 @@
 import { normalizeClientName } from '../../billing/ingest/normalize/client.js'
 import type { BillingClient } from '../../billing/domain/types.js'
 import type { CustomerRepository } from '../repo/customer-repo.js'
-import type { CreateCustomerInput, CustomerDeletePreview, CustomerListFilter, CustomerPage, UpdateCustomerInput } from '../domain/types.js'
+import type { AuditFilter } from '../../config/domain/types.js'
+import type { CreateCustomerInput, CustomerAggregateStats, CustomerDeletePreview, CustomerEventsPage, CustomerListFilter, CustomerPage, UpdateCustomerInput } from '../domain/types.js'
 
 function requireName(name: string): string {
   const trimmed = (name ?? '').trim()
@@ -22,6 +23,14 @@ export class CustomerService {
 
   list(filter: CustomerListFilter): Promise<CustomerPage> {
     return this.repo.list(filter)
+  }
+
+  aggregateStats(organizationId: string, from?: string, to?: string): Promise<CustomerAggregateStats> {
+    return this.repo.aggregateStats(organizationId, from, to)
+  }
+
+  listEvents(clientId: string, organizationId: string, filter: AuditFilter): Promise<CustomerEventsPage> {
+    return this.repo.listEvents(organizationId, clientId, filter)
   }
 
   get(id: string, organizationId?: string): Promise<BillingClient | null> {

@@ -12,6 +12,7 @@ function stubAuth(role = 'staff', agency = 'hit') {
       return auth === 'Bearer goodToken' ? new Response(JSON.stringify({ user: { id: 'u1', email: 'u1@test' } }), { status: 200 }) : new Response('unauthorized', { status: 401 })
     }
     if (url.includes('/api/database/records/app_users')) return new Response(JSON.stringify([{ role, active: true, agency }]), { status: 200 })
+    if (url.includes('/rpc/customer_weight_stats')) return new Response(JSON.stringify({}), { status: 200 })
     if (url.includes('/api/database/records/billing_clients')) {
       return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false, company_name: null, tax_id: null, active: true, default_rate_id: null, packages: [{ count: 2 }] }]), { status: 200, headers: { 'content-range': '0-0/1' } })
     }
@@ -41,6 +42,7 @@ describe('Customer routes', () => {
         return auth === 'Bearer goodToken' ? new Response(JSON.stringify({ user: { id: 'u1', email: 'u1@test' } }), { status: 200 }) : new Response('unauthorized', { status: 401 })
       }
       if (url.includes('/api/database/records/app_users')) return new Response(JSON.stringify([{ role: 'staff', active: true, agency: 'solo-guegue' }]), { status: 200 })
+      if (url.includes('/rpc/customer_weight_stats')) return new Response(JSON.stringify({}), { status: 200 })
       if (url.includes('/api/database/records/billing_clients')) {
         clientsUrl = url
         return new Response(JSON.stringify([]), { status: 200, headers: { 'content-range': '*/0' } })
@@ -58,6 +60,7 @@ describe('Customer routes', () => {
       const auth = (init?.headers as Record<string, string> | undefined)?.Authorization ?? ''
       if (url.includes('/api/auth/sessions/current')) return auth === 'Bearer goodToken' ? new Response(JSON.stringify({ user: { id: 'u1', email: 'u1@test' } }), { status: 200 }) : new Response('unauthorized', { status: 401 })
       if (url.includes('/api/database/records/app_users')) return new Response(JSON.stringify([{ role: 'staff', active: true, agency: 'hit' }]), { status: 200 })
+      if (url.includes('/rpc/customer_weight_stats')) return new Response(JSON.stringify({}), { status: 200 })
       if (url.includes('/api/database/records/billing_clients')) {
         clientsUrl = url
         return new Response(JSON.stringify([]), { status: 200, headers: { 'content-range': '*/0' } })
@@ -140,5 +143,49 @@ describe('Customer routes', () => {
 
     const res = await worker.fetch(new Request('https://t.test/api/customer/clients/nope/delete-preview', { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
     expect(res.status).toBe(404)
+  })
+
+  it('returns KPI aggregate stats scoped to the session agency', async () => {
+    let statsUrl = ''
+    vi.stubGlobal('fetch', async (input: Request | string, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.url
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization ?? ''
+      if (url.includes('/api/auth/sessions/current')) return auth === 'Bearer goodToken' ? new Response(JSON.stringify({ user: { id: 'u1', email: 'u1@test' } }), { status: 200 }) : new Response('unauthorized', { status: 401 })
+      if (url.includes('/api/database/records/app_users')) return new Response(JSON.stringify([{ role: 'staff', active: true, agency: 'hit' }]), { status: 200 })
+      if (url.includes('/rpc/customer_aggregate_stats')) {
+        statsUrl = url
+        return new Response(JSON.stringify({ totalWeightLb: 100, weightMaritimo: 60, weightAereo: 40, packageCountTotal: 12, packageCountMaritimo: 7, packageCountAereo: 5, topMaritimo: { clientId: 'c1', name: 'Ana', weightLb: 50 }, topAereo: null }), { status: 200 })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    const res = await worker.fetch(new Request('https://t.test/api/customer/stats?from=2026-09-01&to=2026-09-30', { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
+    expect(res.status).toBe(200)
+    expect(statsUrl).toContain('/rpc/customer_aggregate_stats')
+    const body = (await res.json() as { data: { totalWeightLb: number; topAereo: unknown } }).data
+    expect(body).toMatchObject({ totalWeightLb: 100, topAereo: null })
+  })
+
+  it('returns the event timeline for a client scoped to the agency', async () => {
+    let eventsUrl = ''
+    vi.stubGlobal('fetch', async (input: Request | string, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.url
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization ?? ''
+      if (url.includes('/api/auth/sessions/current')) return auth === 'Bearer goodToken' ? new Response(JSON.stringify({ user: { id: 'u1', email: 'u1@test' } }), { status: 200 }) : new Response('unauthorized', { status: 401 })
+      if (url.includes('/api/database/records/app_users')) return new Response(JSON.stringify([{ role: 'staff', active: true, agency: 'hit' }]), { status: 200 })
+      if (url.includes('/records/audit_logs')) {
+        eventsUrl = url
+        return new Response(JSON.stringify([{ id: 1, organization_id: 'hit', actor_id: 'u1', actor_email: 'a@t.com', actor_type: 'user', action: 'client.update', entity_type: 'billing_client', entity_id: 'c1', request_id: 'r1', metadata: {}, created_at: '2026-09-10T00:00:00Z' }]), { status: 200, headers: { 'content-range': '0-0/1' } })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    const res = await worker.fetch(new Request('https://t.test/api/customer/clients/c1/events', { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
+    expect(res.status).toBe(200)
+    expect(eventsUrl).toContain('entity_id=eq.c1')
+    expect(eventsUrl).toContain('organization_id=eq.hit')
+    const body = (await res.json() as { data: { rows: Array<{ action: string }>; count: number } }).data
+    expect(body.rows[0]).toMatchObject({ action: 'client.update' })
+    expect(body.count).toBe(1)
   })
 })

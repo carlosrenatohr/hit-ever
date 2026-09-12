@@ -4,10 +4,14 @@ import { InsforgeCustomerRepo } from './customer-repo.js'
 afterEach(() => vi.unstubAllGlobals())
 
 describe('InsforgeCustomerRepo', () => {
-  it('lists and maps billing_clients rows with lifecycle fields and package count', async () => {
-    let requested = ''
+  it('lists and maps billing_clients rows with lifecycle fields, package count and weight stats', async () => {
+    const requested: string[] = []
     vi.stubGlobal('fetch', async (input: Request | string) => {
-      requested = typeof input === 'string' ? input : input.url
+      const url = typeof input === 'string' ? input : input.url
+      requested.push(url)
+      if (url.includes('/rpc/customer_weight_stats')) {
+        return new Response(JSON.stringify({ c1: { weightMaritimo: 10, weightAereo: 5, countMaritimo: 2, countAereo: 1 } }), { status: 200 })
+      }
       return new Response(JSON.stringify([{ id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: 'A1', to_review: true, email: 'a@t.com', phone: null, address: null, company_name: 'Ana S.A.', tax_id: 'J123', active: true, default_rate_id: null, default_rate_card_id: null, packages: [{ count: 3 }] }]), {
         status: 200,
         headers: { 'content-range': '0-0/1' },
@@ -16,15 +20,17 @@ describe('InsforgeCustomerRepo', () => {
 
     const result = await new InsforgeCustomerRepo('https://db.test', 'key').list({ organizationId: 'hit', search: 'Ana', page: 1, pageSize: 25 })
 
-    expect(requested).toContain('/api/database/records/billing_clients?')
-    expect(requested).toContain('organization_id=eq.hit')
-    expect(requested).toContain('name=ilike.*Ana*')
-    expect(requested).toContain('packages(count)')
+    expect(requested[0]).toContain('/api/database/records/billing_clients?')
+    expect(requested[0]).toContain('organization_id=eq.hit')
+    expect(requested[0]).toContain('name=ilike.*Ana*')
+    expect(requested[0]).toContain('packages(count)')
+    expect(requested[1]).toContain('/rpc/customer_weight_stats')
     expect(result).toEqual({
       rows: [
         {
           id: 'c1', name: 'Ana', nameNormalized: 'ana', casillero: 'A1', toReview: true, email: 'a@t.com', phone: null, address: null,
           companyName: 'Ana S.A.', taxId: 'J123', active: true, deletedAt: null, packageCount: 3, defaultRateId: null, defaultRateCardId: null,
+          weightMaritimo: 10, weightAereo: 5, countMaritimo: 2, countAereo: 1,
         },
       ],
       count: 1,
@@ -32,16 +38,80 @@ describe('InsforgeCustomerRepo', () => {
   })
 
   it('builds an OR status filter and drops the legacy toReview flag when statuses are set', async () => {
-    let requested = ''
+    const requested: string[] = []
     vi.stubGlobal('fetch', async (input: Request | string) => {
-      requested = typeof input === 'string' ? input : input.url
+      const url = typeof input === 'string' ? input : input.url
+      requested.push(url)
+      if (url.includes('/rpc/customer_weight_stats')) {
+        return new Response(JSON.stringify({}), { status: 200 })
+      }
       return new Response(JSON.stringify([]), { status: 200, headers: { 'content-range': '*/0' } })
     })
 
     await new InsforgeCustomerRepo('https://db.test', 'key').list({ organizationId: 'hit', statuses: ['active', 'review'], toReview: true })
 
-    expect(requested).toContain('or=(active.eq.true,to_review.eq.true)')
-    expect(requested).not.toContain('to_review=eq')
+    expect(requested[0]).toContain('or=(active.eq.true,to_review.eq.true)')
+    expect(requested[0]).not.toContain('to_review=eq')
+  })
+
+  it('returns zeroed weight stats for clients missing from the RPC map', async () => {
+    vi.stubGlobal('fetch', async (input: Request | string) => {
+      const url = typeof input === 'string' ? input : input.url
+      if (url.includes('/rpc/customer_weight_stats')) {
+        return new Response(JSON.stringify({}), { status: 200 })
+      }
+      return new Response(JSON.stringify([{ id: 'c9', name: 'Zoe', name_normalized: 'zoe', casillero: null, to_review: false, email: null, phone: null, address: null, company_name: null, tax_id: null, active: true, default_rate_id: null, default_rate_card_id: null }]), {
+        status: 200,
+        headers: { 'content-range': '0-0/1' },
+      })
+    })
+
+    const result = await new InsforgeCustomerRepo('https://db.test', 'key').list({ organizationId: 'hit', page: 1, pageSize: 25 })
+
+    expect(result.rows[0]).toMatchObject({ id: 'c9', weightMaritimo: 0, weightAereo: 0, countMaritimo: 0, countAereo: 0 })
+  })
+
+  it('calls the aggregate stats RPC and normalizes defaults', async () => {
+    vi.stubGlobal('fetch', async (input: Request | string) => {
+      const url = typeof input === 'string' ? input : input.url
+      if (url.includes('/rpc/customer_aggregate_stats')) {
+        return new Response(JSON.stringify({
+          totalWeightLb: 100, weightMaritimo: 60, weightAereo: 40,
+          packageCountTotal: 12, packageCountMaritimo: 7, packageCountAereo: 5,
+          topMaritimo: { clientId: 'c1', name: 'Ana', weightLb: 50 },
+          topAereo: null,
+        }), { status: 200 })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    const result = await new InsforgeCustomerRepo('https://db.test', 'key').aggregateStats('hit', '2026-09-01', '2026-09-30')
+
+    expect(result).toEqual({
+      totalWeightLb: 100, weightMaritimo: 60, weightAereo: 40,
+      packageCountTotal: 12, packageCountMaritimo: 7, packageCountAereo: 5,
+      topMaritimo: { clientId: 'c1', name: 'Ana', weightLb: 50 },
+      topAereo: null,
+    })
+  })
+
+  it('lists a client event timeline from audit_logs entity-scoped', async () => {
+    const requested: string[] = []
+    vi.stubGlobal('fetch', async (input: Request | string) => {
+      const url = typeof input === 'string' ? input : input.url
+      requested.push(url)
+      return new Response(JSON.stringify([{ id: 1, organization_id: 'hit', actor_id: 'u1', actor_email: 'a@t.com', actor_type: 'user', action: 'client.update', entity_type: 'billing_client', entity_id: 'c1', request_id: 'r1', metadata: { changes: {} }, created_at: '2026-09-10T00:00:00Z' }]), {
+        status: 200,
+        headers: { 'content-range': '0-0/1' },
+      })
+    })
+
+    const result = await new InsforgeCustomerRepo('https://db.test', 'key').listEvents('hit', 'c1', { page: 1, pageSize: 25 })
+
+    expect(requested[0]).toContain('/api/database/records/audit_logs?')
+    expect(requested[0]).toContain('entity_id=eq.c1')
+    expect(result.rows[0]).toMatchObject({ action: 'client.update', entityId: 'c1', createdAt: '2026-09-10T00:00:00Z' })
+    expect(result.count).toBe(1)
   })
 
   it('creates a billing_clients row using the canonical snake_case columns', async () => {

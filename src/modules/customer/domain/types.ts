@@ -1,6 +1,30 @@
 import type { BillingClient } from '../../billing/domain/types.js'
+import type { AuditLogEntry } from '../../config/domain/types.js'
 
 export type Customer = BillingClient
+
+/** Weight/package aggregates by service for a client (derived from packages). */
+export interface CustomerWeightStats {
+  weightMaritimo: number
+  weightAereo: number
+  countMaritimo: number
+  countAereo: number
+}
+
+/** A client row enriched with its weight aggregates for the list view. */
+export interface CustomerWithStats extends Customer, CustomerWeightStats {}
+
+/** KPI-card aggregates for the whole agency within a date range. */
+export interface CustomerAggregateStats {
+  totalWeightLb: number
+  weightMaritimo: number
+  weightAereo: number
+  packageCountTotal: number
+  packageCountMaritimo: number
+  packageCountAereo: number
+  topMaritimo: { clientId: string; name: string; weightLb: number } | null
+  topAereo: { clientId: string; name: string; weightLb: number } | null
+}
 
 /** Lifecycle / review states exposed by the clients list filter. Combined with OR. */
 export type CustomerStatus = 'active' | 'inactive' | 'review'
@@ -12,6 +36,9 @@ export interface CustomerListFilter {
   statuses?: CustomerStatus[]
   /** Legacy single flag (current panel checkbox); `statuses` takes precedence when set. */
   toReview?: boolean
+  /** Reception-date range (received_at), same semantics as dashboard_stats. */
+  from?: string
+  to?: string
   page?: number
   pageSize?: number
 }
@@ -44,7 +71,13 @@ export interface UpdateCustomerInput extends CustomerRateDefaults {
 }
 
 export interface CustomerPage {
-  rows: Customer[]
+  rows: CustomerWithStats[]
+  count: number
+}
+
+/** Event timeline for a client (from audit_logs). */
+export interface CustomerEventsPage {
+  rows: AuditLogEntry[]
   count: number
 }
 
