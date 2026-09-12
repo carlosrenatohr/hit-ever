@@ -481,7 +481,10 @@ offset rotativo guardado en Upstash (`ct:deepwalk_offset:global_connection`): 15
 ventana de 10 días. Así un backlog de hasta 60 filas se recorre en 4 días, bajo el límite de
 50 subrequests por invocación.
 
-**Trigger:** cron `0 4 * * *` (diario 04:00 UTC), invoca `IngestService.deepWalk()`.
+**Trigger:** reutiliza el slot de GC `30 */2 * * *` (no hay cron extra disponible: el plan Free
+de Workers limita a **5 cron triggers por cuenta** y la cuenta ya los usa). En el tick de las
+**04:30 UTC** el slot hace `IngestService.deepWalk()` en lugar del list-walk de página 1 (que
+igual corre a las 02:30 y 06:30); el resto de los ticks siguen con página 1.
 
 **Prueba manual del mecanismo** (sin esperar al cron): los offsets 15/30/45/60 se pueden
 recorrer a mano con el modo chunked (1.4.2):

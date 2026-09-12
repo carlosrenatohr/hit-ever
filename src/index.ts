@@ -132,13 +132,13 @@ export default {
         job = svc.ingestProvider('everest', 1)
         break
       case '30 */2 * * *':
-        job = svc.ingestProvider('global_connection', 1)
-        break
-      // Daily deep-walk: sweeps one list page beyond page 1 (rotating offset 15→60) to catch
-      // packages that overflowed page 1 between routine runs — the exact failure that lost
-      // guía 220643 during the Aug 16 → Sep 2 gap. See IngestService.deepWalk.
-      case '0 4 * * *':
-        job = svc.deepWalk('global_connection')
+        // GC slot. Normally the routine page-1 list-walk. Once a day (04:30 UTC) it does the
+        // deep-walk instead: sweeps ONE list page beyond page 1 (rotating offset 15→60) to catch
+        // packages that overflowed page 1 between routine runs — the exact failure that lost guía
+        // 220643 during the Aug 16 → Sep 2 gap. Reuses this slot (no extra cron trigger) because
+        // Workers Free caps cron triggers at 5 per ACCOUNT. Page-1 coverage only skips that single
+        // tick (covered at 02:30 and 06:30). See IngestService.deepWalk.
+        job = new Date().getUTCHours() === 4 ? svc.deepWalk('global_connection') : svc.ingestProvider('global_connection', 1)
         break
       // Batch of 6, NOT 8: the Workers Free plan caps external subrequests at 50/invocation, and
       // persist() costs ~4 per package (fetch detail + upsert package + events + notes) plus login/
