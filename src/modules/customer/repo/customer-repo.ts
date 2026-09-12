@@ -1,6 +1,7 @@
 import type { CloudflareBindings } from '../../../types/index.js'
 import type { BillingClient } from '../../billing/domain/types.js'
-import type { CreateCustomerInput, CustomerDeletePreview, CustomerListFilter, CustomerPage, UpdateCustomerInput } from '../domain/types.js'
+import type { AuditFilter, AuditLogEntry } from '../../config/domain/types.js'
+import type { CreateCustomerInput, CustomerAggregateStats, CustomerDeletePreview, CustomerEventsPage, CustomerListFilter, CustomerPage, CustomerWeightStats, CustomerWithStats, UpdateCustomerInput } from '../domain/types.js'
 
 interface BillingClientDbRow {
   id: string
@@ -21,6 +22,21 @@ interface BillingClientDbRow {
   packages?: { count: number }[]
 }
 
+/** audit_logs row as PostgREST returns it (snake_case). */
+interface AuditRow {
+  id: number
+  organization_id: string
+  actor_id: string | null
+  actor_email: string | null
+  actor_type: string
+  action: string
+  entity_type: string
+  entity_id: string | null
+  request_id: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+}
+
 /** Actor context for audit entries written on customer mutations. */
 export interface CustomerAuditEntry {
   organizationId: string
@@ -37,6 +53,12 @@ export interface CustomerAuditEntry {
 export interface CustomerRepository {
   list(filter: CustomerListFilter): Promise<CustomerPage>
   get(id: string, organizationId?: string): Promise<BillingClient | null>
+  /** Per-client weight/package aggregates by service within a date range. */
+  weightStats(organizationId: string, from?: string, to?: string): Promise<Record<string, CustomerWeightStats>>
+  /** Agency-level KPI aggregates (totals + top clients by weight per service). */
+  aggregateStats(organizationId: string, from?: string, to?: string): Promise<CustomerAggregateStats>
+  /** Event timeline for a single client (audit_logs, entity-scoped). */
+  listEvents(organizationId: string, clientId: string, filter: AuditFilter): Promise<CustomerEventsPage>
   create(input: {
     organizationId: string
     name: string
@@ -97,6 +119,13 @@ function toDomain(row: BillingClientDbRow): BillingClient {
   }
 }
 
+const ZERO_STATS: CustomerWeightStats = { weightMaritimo: 0, weightAereo: 0, countMaritimo: 0, countAereo: 0 }
+
+/** Merges a client with its weight aggregates, defaulting to zero when absent. */
+function withStats(client: BillingClient, stats?: CustomerWeightStats): CustomerWithStats {
+  return { ...client, ...(stats ?? ZERO_STATS) }
+}
+
 const CLIENT_COLS =
   'id,name,name_normalized,casillero,to_review,email,phone,address,company_name,tax_id,active,deleted_at,default_rate_id,default_rate_card_id,packages(count)'
 
@@ -150,6 +179,16 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     return rows[0]
   }
 
+  private async callRpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
+    const res = await fetch(`${this.base.replace(/records\/?$/, '')}/rpc/${fn}`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify(args),
+    })
+    if (!res.ok) throw new Error(`InsForge RPC ${fn} → ${res.status}: ${(await res.text()).slice(0, 300)}`)
+    return (await res.json()) as T
+  }
+
   private async patch(id: string, row: Record<string, unknown>, organizationId?: string): Promise<BillingClientDbRow | null> {
     // Tenant scope on writes: the org filter makes a cross-tenant PATCH a no-op.
     const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
@@ -190,7 +229,63 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     }
     parts.push(`limit=${pageSize}`, `offset=${(page - 1) * pageSize}`)
     const { rows, count } = await this.fetchRowsWithCount<BillingClientDbRow>(parts.join('&'))
-    return { rows: rows.map(toDomain), count }
+    // One RPC call for the whole agency's weight aggregates — never N calls per client.
+    const stats = await this.weightStats(filter.organizationId, filter.from, filter.to)
+    return { rows: rows.map((r) => withStats(toDomain(r), stats[r.id])), count }
+  }
+
+  async weightStats(organizationId: string, from?: string, to?: string): Promise<Record<string, CustomerWeightStats>> {
+    return this.callRpc<Record<string, CustomerWeightStats>>('customer_weight_stats', {
+      p_org: organizationId,
+      p_from: from ?? null,
+      p_to: to ?? null,
+    })
+  }
+
+  async aggregateStats(organizationId: string, from?: string, to?: string): Promise<CustomerAggregateStats> {
+    const out = await this.callRpc<CustomerAggregateStats>('customer_aggregate_stats', {
+      p_org: organizationId,
+      p_from: from ?? null,
+      p_to: to ?? null,
+    })
+    return {
+      totalWeightLb: out.totalWeightLb ?? 0,
+      weightMaritimo: out.weightMaritimo ?? 0,
+      weightAereo: out.weightAereo ?? 0,
+      packageCountTotal: out.packageCountTotal ?? 0,
+      packageCountMaritimo: out.packageCountMaritimo ?? 0,
+      packageCountAereo: out.packageCountAereo ?? 0,
+      topMaritimo: out.topMaritimo ?? null,
+      topAereo: out.topAereo ?? null,
+    }
+  }
+
+  async listEvents(organizationId: string, clientId: string, filter: AuditFilter): Promise<CustomerEventsPage> {
+    const q: string[] = [`organization_id=eq.${encodeURIComponent(organizationId)}`, `entity_id=eq.${encodeURIComponent(clientId)}`]
+    if (filter.action) q.push(`action=eq.${encodeURIComponent(filter.action)}`)
+    if (filter.from) q.push(`created_at=gte.${encodeURIComponent(filter.from)}`)
+    if (filter.to) q.push(`created_at=lte.${encodeURIComponent(filter.to)}`)
+    const pageSize = Math.min(filter.pageSize ?? 50, 200)
+    const offset = Math.min(((filter.page ?? 1) - 1) * pageSize, 10_000)
+    q.push(`select=id,organization_id,actor_id,actor_email,actor_type,action,entity_type,entity_id,request_id,metadata,created_at`)
+    q.push(`order=created_at.desc&limit=${pageSize}&offset=${offset}`)
+    const { rows, count } = await this.fetchRowsWithCountFrom<AuditRow>('audit_logs', q.join('&'))
+    return {
+      rows: rows.map((r): AuditLogEntry => ({
+        id: r.id,
+        organizationId: r.organization_id,
+        actorId: r.actor_id,
+        actorEmail: r.actor_email,
+        actorType: r.actor_type,
+        action: r.action,
+        entityType: r.entity_type,
+        entityId: r.entity_id,
+        requestId: r.request_id,
+        metadata: r.metadata ?? {},
+        createdAt: r.created_at,
+      })),
+      count,
+    }
   }
 
   async get(id: string, organizationId?: string): Promise<BillingClient | null> {

@@ -33,12 +33,18 @@ function actorOf(c: Context<BillingEnv>): CustomerActor {
   return { userId: session.userId, email: session.email }
 }
 
+/** ISO date param shared by the range filters (same shape as config /audit). */
+const DATE_QUERY = {
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}/, 'from must be an ISO date.').optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}/, 'to must be an ISO date.').optional(),
+}
+
 const customer = new Hono<BillingEnv>()
 customer.use('*', billingAuth('clients:read'))
 
 customer.get(
   '/clients',
-  zValidator('query', z.object({ search: z.string().optional(), status: z.string().optional(), toReview: z.enum(['true', 'false']).optional(), page: z.coerce.number().int().positive().optional(), pageSize: z.coerce.number().int().positive().max(100).optional() })),
+  zValidator('query', z.object({ search: z.string().optional(), status: z.string().optional(), toReview: z.enum(['true', 'false']).optional(), ...DATE_QUERY, page: z.coerce.number().int().positive().optional(), pageSize: z.coerce.number().int().positive().max(100).optional() })),
   async (c) => {
     const query = c.req.valid('query')
     // Tenant scope comes from the session, never from the query string.
@@ -50,6 +56,8 @@ customer.get(
         statuses: parseStatuses(query.status),
         toReview: query.toReview === undefined ? undefined : query.toReview === 'true',
         organizationId: c.get('billingSession').agency,
+        from: query.from,
+        to: query.to,
         page: query.page,
         pageSize: query.pageSize,
       }),
@@ -61,6 +69,29 @@ customer.get('/clients/:id', async (c) => {
   const customer = await new CustomerService(getCustomerRepo(c.env)).get(c.req.param('id'), c.get('billingSession').agency)
   return customer ? Res.ok(c, customer) : Res.err(c, 'NOT_FOUND', 'Customer not found.', 404)
 })
+
+/** GET /api/customer/stats — KPI aggregates (weights + package counts + top clients). */
+customer.get(
+  '/stats',
+  zValidator('query', z.object({ ...DATE_QUERY })),
+  async (c) => {
+    const { from, to } = c.req.valid('query')
+    const svc = new CustomerService(getCustomerRepo(c.env))
+    return Res.ok(c, await svc.aggregateStats(c.get('billingSession').agency, from, to))
+  },
+)
+
+/** GET /api/customer/clients/:id/events — per-client event timeline (audit_logs). */
+customer.get(
+  '/clients/:id/events',
+  zValidator('query', z.object({ page: z.coerce.number().int().positive().optional(), pageSize: z.coerce.number().int().positive().max(200).optional() })),
+  async (c) => {
+    const { page, pageSize } = c.req.valid('query')
+    const svc = new CustomerService(getCustomerRepo(c.env))
+    const events = await svc.listEvents(c.req.param('id'), c.get('billingSession').agency, { page, pageSize })
+    return Res.ok(c, events)
+  },
+)
 
 /** GET /api/customer/clients/:id/delete-preview — impact summary for the delete dialog.
  *  Counts + capped samples of the client's packages and invoices. Read-only. */
