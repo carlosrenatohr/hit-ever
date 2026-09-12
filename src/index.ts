@@ -10,7 +10,7 @@ import { configRouter } from './modules/config/routes/index.js'
 import { publicReceiptRouter } from './modules/billing/routes/public.js'
 import { customerRouter } from './modules/customer/routes/index.js'
 import { Res } from './lib/response.js'
-import { adminRouter } from './routes/admin.js'
+import { adminRouter, healthHandler } from './routes/admin.js'
 import { hooksRouter } from './routes/hooks.js'
 import { photoRouter } from './routes/photo.js'
 import { staffRouter } from './routes/staff.js'
@@ -86,6 +86,9 @@ app.get('/', (c) =>
 // Mount sub-routers
 app.route('/track', trackRouter)
 app.route('/admin', adminRouter)
+// Trailing-slash variant: Hono doesn't normalize `/admin` vs `/admin/` on a mounted router, and a
+// monitor pointed at the base URL with a slash used to 404. Serve the same health payload here.
+app.get('/admin/', healthHandler)
 app.route('/staff', staffRouter)
 app.route('/hooks', hooksRouter)
 app.route('/api/billing', billingRouter)
