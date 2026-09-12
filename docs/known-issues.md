@@ -3,6 +3,11 @@
 Registro de problemas conocidos del worker y su causa raíz, para no re-investigar. Formato: síntoma
 → diagnóstico → causa → fix. Añadir arriba los más recientes.
 
+> **Guía operativa:** para el estado actual de la ingesta, verificación de salud, auditoría de
+> guías perdidas y qué debe configurar el dueño (alerta externa), ver
+> [`ingest-reliability-guide.md`](ingest-reliability-guide.md). Decisión de arquitectura:
+> [ADR-012](../../docs/adr/012.md).
+
 ---
 
 ## 2026-09-11 · Guía 220643 (y 7 más) nunca llegaron a la BD — hueco de ingesta 16-ago → 02-sep
