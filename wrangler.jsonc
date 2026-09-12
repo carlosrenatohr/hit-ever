@@ -28,7 +28,7 @@
   // The scheduled handler branches on event.cron. Near-real-time freshness comes from the
   // email trigger (→ /hooks); frequency trades freshness against Cargotrack re-logins.
   "triggers": {
-    "crons": ["0 */2 * * *", "30 */2 * * *", "15 */6 * * *", "45 */6 * * *", "0 4 * * *"]
+    "crons": ["0 */2 * * *", "30 */2 * * *", "15 */6 * * *", "45 */6 * * *"]
   }
   // ─── Future: Cloudflare Browser Rendering ─────────────────────────────────
   // Uncomment once Browser Rendering API is enabled in your CF account.
