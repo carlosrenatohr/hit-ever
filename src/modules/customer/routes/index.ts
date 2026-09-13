@@ -73,11 +73,13 @@ customer.get('/clients/:id', async (c) => {
 /** GET /api/customer/stats — KPI aggregates (weights + package counts + top clients). */
 customer.get(
   '/stats',
-  zValidator('query', z.object({ ...DATE_QUERY })),
+  zValidator('query', z.object({ ...DATE_QUERY, status: z.string().optional() })),
   async (c) => {
-    const { from, to } = c.req.valid('query')
+    const { from, to, status } = c.req.valid('query')
+    const statuses = parseStatuses(status)
+    const primary = statuses?.[0] ?? null
     const svc = new CustomerService(getCustomerRepo(c.env))
-    return Res.ok(c, await svc.aggregateStats(c.get('billingSession').agency, from, to))
+    return Res.ok(c, await svc.aggregateStats(c.get('billingSession').agency, from, to, primary))
   },
 )
 

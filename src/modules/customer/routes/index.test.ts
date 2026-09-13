@@ -166,6 +166,31 @@ describe('Customer routes', () => {
     expect(body).toMatchObject({ totalWeightLb: 100, topAereo: null })
   })
 
+  it('passes status filter to aggregate stats RPC', async () => {
+    let statsUrl = ''
+    let statsBody = ''
+    vi.stubGlobal('fetch', async (input: Request | string, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.url
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization ?? ''
+      if (url.includes('/api/auth/sessions/current')) {
+        return auth === 'Bearer goodToken' ? new Response(JSON.stringify({ user: { id: 'u1', email: 'u1@test' } }), { status: 200 }) : new Response('unauthorized', { status: 401 })
+      }
+      if (url.includes('/api/database/records/app_users')) return new Response(JSON.stringify([{ role: 'staff', active: true, agency: 'hit' }]), { status: 200 })
+      if (url.includes('/rpc/customer_aggregate_stats')) {
+        statsUrl = url
+        statsBody = String(init?.body ?? '')
+        return new Response(JSON.stringify({ totalWeightLb: 0, weightMaritimo: 0, weightAereo: 0, packageCountTotal: 0, packageCountMaritimo: 0, packageCountAereo: 0, topMaritimo: null, topAereo: null }), { status: 200 })
+      }
+      return new Response('not found', { status: 404 })
+    })
+
+    const res = await worker.fetch(new Request('https://t.test/api/customer/stats?from=2026-09-01&to=2026-09-30&status=inactive', { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
+    expect(res.status).toBe(200)
+    expect(statsUrl).toContain('/rpc/customer_aggregate_stats')
+    const parsed = JSON.parse(statsBody)
+    expect(parsed.p_status).toBe('inactive')
+  })
+
   it('returns the event timeline for a client scoped to the agency', async () => {
     let eventsUrl = ''
     vi.stubGlobal('fetch', async (input: Request | string, init?: RequestInit) => {
