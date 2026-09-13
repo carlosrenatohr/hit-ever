@@ -1,7 +1,7 @@
 import type { CloudflareBindings } from '../../../types/index.js'
 import type { BillingClient } from '../../billing/domain/types.js'
 import type { AuditFilter, AuditLogEntry } from '../../config/domain/types.js'
-import type { CreateCustomerInput, CustomerAggregateStats, CustomerDeletePreview, CustomerEventsPage, CustomerListFilter, CustomerPage, CustomerWeightStats, CustomerWithStats, UpdateCustomerInput } from '../domain/types.js'
+import type { CreateCustomerInput, CustomerAggregateStats, CustomerDeletePreview, CustomerEventsPage, CustomerListFilter, CustomerPage, CustomerStatus, CustomerWeightStats, CustomerWithStats, UpdateCustomerInput } from '../domain/types.js'
 
 interface BillingClientDbRow {
   id: string
@@ -56,7 +56,7 @@ export interface CustomerRepository {
   /** Per-client weight/package aggregates by service within a date range. */
   weightStats(organizationId: string, from?: string, to?: string): Promise<Record<string, CustomerWeightStats>>
   /** Agency-level KPI aggregates (totals + top clients by weight per service). */
-  aggregateStats(organizationId: string, from?: string, to?: string): Promise<CustomerAggregateStats>
+  aggregateStats(organizationId: string, from?: string, to?: string, status?: CustomerStatus | null): Promise<CustomerAggregateStats>
   /** Event timeline for a single client (audit_logs, entity-scoped). */
   listEvents(organizationId: string, clientId: string, filter: AuditFilter): Promise<CustomerEventsPage>
   create(input: {
@@ -242,11 +242,12 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     })
   }
 
-  async aggregateStats(organizationId: string, from?: string, to?: string): Promise<CustomerAggregateStats> {
+  async aggregateStats(organizationId: string, from?: string, to?: string, status?: CustomerStatus | null): Promise<CustomerAggregateStats> {
     const out = await this.callRpc<CustomerAggregateStats>('customer_aggregate_stats', {
       p_org: organizationId,
       p_from: from ?? null,
       p_to: to ?? null,
+      p_status: status ?? null,
     })
     return {
       totalWeightLb: out.totalWeightLb ?? 0,
