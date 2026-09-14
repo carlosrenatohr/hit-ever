@@ -80,6 +80,8 @@ describe('InsforgeCustomerRepo', () => {
           packageCountTotal: 12, packageCountMaritimo: 7, packageCountAereo: 5,
           topMaritimo: { clientId: 'c1', name: 'Ana', weightLb: 50 },
           topAereo: null,
+          topBillingMaritimo: { clientId: 'c1', name: 'Ana', weightLb: 30 },
+          topBillingAereo: null,
         }), { status: 200 })
       }
       return new Response('not found', { status: 404 })
@@ -92,6 +94,8 @@ describe('InsforgeCustomerRepo', () => {
       packageCountTotal: 12, packageCountMaritimo: 7, packageCountAereo: 5,
       topMaritimo: { clientId: 'c1', name: 'Ana', weightLb: 50 },
       topAereo: null,
+      topBillingMaritimo: { clientId: 'c1', name: 'Ana', weightLb: 30 },
+      topBillingAereo: null,
     })
   })
 

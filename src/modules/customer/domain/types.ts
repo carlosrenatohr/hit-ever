@@ -24,6 +24,8 @@ export interface CustomerAggregateStats {
   packageCountAereo: number
   topMaritimo: { clientId: string; name: string; weightLb: number } | null
   topAereo: { clientId: string; name: string; weightLb: number } | null
+  topBillingMaritimo: { clientId: string; name: string; weightLb: number } | null
+  topBillingAereo: { clientId: string; name: string; weightLb: number } | null
 }
 
 /** Lifecycle / review states exposed by the clients list filter. Combined with OR. */

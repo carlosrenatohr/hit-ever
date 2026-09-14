@@ -258,6 +258,8 @@ export class InsforgeCustomerRepo implements CustomerRepository {
       packageCountAereo: out.packageCountAereo ?? 0,
       topMaritimo: out.topMaritimo ?? null,
       topAereo: out.topAereo ?? null,
+      topBillingMaritimo: out.topBillingMaritimo ?? null,
+      topBillingAereo: out.topBillingAereo ?? null,
     }
   }
 
