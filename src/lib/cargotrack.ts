@@ -25,6 +25,17 @@ function stripTags(s: string): string {
     .trim()
 }
 
+/** Parse a Cargotrack date string (MM/DD/YYYY or M/D/YYYY) + optional time to milliseconds. */
+function eventDateMs(date?: string, time?: string): number {
+  if (!date) return 0
+  const parts = date.split('/')
+  if (parts.length !== 3) return 0
+  const [m, d, y] = parts.map(Number)
+  const iso = `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T${time ?? '00:00:00'}`
+  const ms = new Date(iso).getTime()
+  return Number.isFinite(ms) ? ms : 0
+}
+
 // ─── List (Warehouse view) ────────────────────────────────────────────────────
 export interface ListRow {
   almacenId: string
@@ -188,6 +199,8 @@ export function parseDetail(html: string): DetailData {
       description,
     })
   }
+  // Ensure chronological order (oldest → newest) — GC serves events newest-first in its HTML.
+  events.sort((a, b) => eventDateMs(a.date, a.time) - eventDateMs(b.date, b.time))
 
   // Notes: "Notas" table → each <td class="ntextrow"> is a note (except the header).
   const notesBlock = sliceBetween(html, /<td[^>]*>Notas<\/td>/i, /Archivo/i)
