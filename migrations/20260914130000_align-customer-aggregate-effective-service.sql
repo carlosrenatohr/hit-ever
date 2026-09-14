@@ -4,12 +4,12 @@
 -- Multitenant: per-org (p_org), date-range (p_from/p_to), status filter (p_status).
 
 CREATE OR REPLACE FUNCTION public.customer_aggregate_stats(
-  p_org  text,
-  p_from date,
-  p_to   date,
-  p_status text
+  p_org    text,
+  p_from   date default null,
+  p_to     date default null,
+  p_status text default null
 )
-returns jsonb language sql stable
+returns json language sql stable
 set search_path = public
 as $$
   select json_build_object(

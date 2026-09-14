@@ -23,8 +23,10 @@ as $$
     LEFT JOIN (SELECT client_id, count(*) cnt FROM public.packages WHERE deleted_at IS NULL GROUP BY client_id) pa ON pa.client_id = a.id
     LEFT JOIN (SELECT client_id, count(*) cnt FROM public.packages WHERE deleted_at IS NULL GROUP BY client_id) pb ON pb.client_id = b.id
     WHERE a.organization_id = p_org
-      AND a.deactivated_at IS NULL
-      AND b.deactivated_at IS NULL
+      AND a.active IS NOT false
+      AND a.deleted_at IS NULL
+      AND b.active IS NOT false
+      AND b.deleted_at IS NULL
   )
   SELECT COALESCE(json_agg(json_build_object(
     'idA',        id_a,
@@ -64,18 +66,18 @@ BEGIN
   UPDATE public.invoices SET client_id = p_keep, updated_at = now()
   WHERE client_id = p_merge AND status NOT IN ('VOID');
 
-  -- Reassign rate defaults (only one can win — keep the existing on p_keep)
-  UPDATE public.billing_clients SET default_rate_id = NULL
-  WHERE id = p_keep AND default_rate_id IS NOT NULL;
+  -- Reassign rate defaults (keep keep's rate if it has one, otherwise adopt merge's)
   UPDATE public.billing_clients bc
-  SET default_rate_id = sub.new_rate_id
-  FROM (SELECT p_keep AS id, default_rate_id AS new_rate_id
-        FROM public.billing_clients WHERE id = p_merge AND default_rate_id IS NOT NULL) sub
-  WHERE bc.id = sub.id;
+  SET default_rate_id = sub.new_rate_id, updated_at = now()
+  FROM (SELECT p_keep AS id, m.default_rate_id AS new_rate_id
+        FROM public.billing_clients m
+        WHERE m.id = p_merge AND m.default_rate_id IS NOT NULL) sub
+  WHERE bc.id = sub.id
+    AND bc.default_rate_id IS NULL;
 
   -- Soft-delete the merged client
   UPDATE public.billing_clients
-  SET deactivated_at = now(), updated_at = now()
+  SET active = false, updated_at = now()
   WHERE id = p_merge;
 
   RETURN json_build_object(

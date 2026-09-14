@@ -4,9 +4,9 @@
 
 CREATE OR REPLACE FUNCTION public.unassigned_packages(
   p_org   text,
-  p_from  date default null,
-  p_to    date default null,
-  p_limit int  default 50
+  p_from  date,
+  p_to    date,
+  p_limit int
 )
 returns jsonb language sql stable
 set search_path = public
