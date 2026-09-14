@@ -100,6 +100,16 @@ describe('parseDetail', () => {
     expect(gc.estadoText).toBe('In Country')
     expect(gc.statusFromDetail).toBe('en_destino')
   })
+
+  it('sorts events in ascending chronological order (oldest first) regardless of HTML order', () => {
+    // GC delivers events newest-first; ensure they are sorted oldest-first after parsing.
+    const gc = parseDetail(fixture('detalle_gc_incountry.html'))
+    expect(gc.events.length).toBeGreaterThanOrEqual(2)
+    expect(gc.events[0].date).toBe('5/28/2026')
+    expect(gc.events[0].description).toBe('Received')
+    expect(gc.events.at(-1)!.date).toBe('6/1/2026')
+    expect(gc.events.at(-1)!.description).toBe('Llegó al País de Destino')
+  })
 })
 
 describe('almacenIdFromEmail', () => {
