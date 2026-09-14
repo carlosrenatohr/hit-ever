@@ -408,7 +408,7 @@ export class BillingService {
       if (p.weight_lb == null || p.weight_lb <= 0) {
         throw new Error(`Package ${p.almacen_id} has no weight.`)
       }
-      if (!p.service_type) {
+      if (!p.effective_service_type && !p.service_type) {
         throw new Error(`Package ${p.almacen_id} has no service type.`)
       }
       const active = await this.repo.getActivePackageLink(id)
@@ -418,8 +418,8 @@ export class BillingService {
       result.set(id, {
         guia: p.almacen_id,
         tracking: p.tracking_number,
-        serviceType: p.service_type,
-        freightType: SERVICE_TYPE_TO_FREIGHT[p.service_type] ?? 'AIR',
+        serviceType: p.effective_service_type ?? p.service_type,
+        freightType: SERVICE_TYPE_TO_FREIGHT[p.effective_service_type ?? p.service_type ?? ''] ?? 'AIR',
         weightLb: p.weight_lb,
       })
     }
@@ -464,7 +464,7 @@ export class BillingService {
         reason = `Estado ${p.effective_status} no facturable`
       } else if (p.weight_lb == null || p.weight_lb <= 0) {
         reason = 'Sin peso'
-      } else if (!p.service_type) {
+      } else if (!p.effective_service_type && !p.service_type) {
         reason = 'Sin servicio'
       } else {
         const active = await this.repo.getActivePackageLink(p.id)
@@ -475,8 +475,8 @@ export class BillingService {
         guia: p.almacen_id,
         tracking: p.tracking_number,
         status: p.effective_status,
-        serviceType: p.service_type,
-        freightType: p.service_type ? (SERVICE_TYPE_TO_FREIGHT[p.service_type] ?? null) : null,
+        serviceType: p.effective_service_type ?? p.service_type,
+        freightType: (p.effective_service_type ?? p.service_type) ? (SERVICE_TYPE_TO_FREIGHT[p.effective_service_type ?? p.service_type ?? ''] ?? null) : null,
         weightLb: p.weight_lb,
         eligible: reason === null,
         reason,
@@ -1068,7 +1068,7 @@ export class BillingService {
         reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_MISSING_WEIGHT', message: `Package ${p.almacen_id} has no weight.` })
       }
       // Service check
-      if (!p.service_type) {
+      if (!p.effective_service_type && !p.service_type) {
         reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_MISSING_SERVICE', message: `Package ${p.almacen_id} has no service type.` })
       }
     }
@@ -1155,7 +1155,7 @@ export class BillingService {
       }
     }
 
-    // Price each line (one line per package, freight from service_type, tier = REGULAR).
+    // Price each line (one line per package, freight from effective_service_type, tier = REGULAR).
     const lines: Array<{
       packageId: string; guia: string; tracking: string | null; serviceType: string | null
       freightType: FreightType; weightLb: number | null; tier: string
@@ -1164,14 +1164,15 @@ export class BillingService {
       pricingSource: string
     }> = []
     for (const p of pkgs) {
-      const freightType = SERVICE_TYPE_TO_FREIGHT[p.service_type ?? ''] ?? 'AIR'
+      const effectiveService = p.effective_service_type ?? p.service_type
+      const freightType = SERVICE_TYPE_TO_FREIGHT[effectiveService ?? ''] ?? 'AIR'
       const weightLb = p.weight_lb ?? 1 // minimum 1 lb for pricing
       const q = await this.catalog.quoteOrg(organizationId, freightType, 'REGULAR', weightLb, defaultRateTableId)
       lines.push({
         packageId: p.id,
         guia: p.almacen_id,
         tracking: p.tracking_number,
-        serviceType: p.service_type,
+        serviceType: effectiveService,
         freightType,
         weightLb: p.weight_lb,
         tier: 'REGULAR',
