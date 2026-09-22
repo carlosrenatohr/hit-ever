@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const BACKFILL_ORGS = ['hit', 'solo-guegue', 'suite']
+export const BACKFILL_ORGS = ['hit', 'solo-guegue', 'suite', 'original-express']
 
 const TIER_LABELS: Record<string, string> = {
   REGULAR: 'Regular',
