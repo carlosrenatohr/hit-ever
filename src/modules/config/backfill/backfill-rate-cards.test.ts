@@ -98,7 +98,7 @@ describe('buildBackfillPlan', () => {
     expect(() => buildBackfillPlan([bad])).toThrow(/Non-weight model/)
   })
 
-  it('BACKFILL_ORGS contains exactly hit, solo-guegue, suite', () => {
-    expect(BACKFILL_ORGS).toEqual(['hit', 'solo-guegue', 'suite'])
+  it('BACKFILL_ORGS contains exactly hit, solo-guegue, suite, original-express', () => {
+    expect(BACKFILL_ORGS).toEqual(['hit', 'solo-guegue', 'suite', 'original-express'])
   })
 })
