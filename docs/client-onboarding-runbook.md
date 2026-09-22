@@ -41,7 +41,7 @@ Checklist de decisión — mismos datos que se le pidieron a Original Express:
 | Moneda | Símbolo en tarifas/facturas | `USD` |
 | Entrada de paquetes | ¿scraper propio o manual? | **Manual** por ahora (`is_scrapable=false`) |
 | Rol del 1er usuario | Qué puede hacer la persona | `admin` (dueño/representante) |
-| Email (genérico ok) | `auth.users` + `app_users.email` — **cambiable después** | `admin@originalexpress.com` |
+| Email (genérico ok) | `auth.users` + `app_users.email` — **cambiable después** | genérico `admin@originalexpress.com` → **`torunoana71@gmail.com`** (real, 2026-09-22) |
 | Logo | ¿Se tiene ya? | **Después** (Config > branding, post-login) |
 
 > El email no es fijo: vive en `auth.users` y `app_users.email` y se actualiza con el mismo
@@ -126,7 +126,7 @@ npx @insforge/cli db query \
 | Nombre | `Original Express` |
 | Moneda | USD |
 | is_scrapable | false (manual por ahora) |
-| 1er usuario | `admin` · `admin@originalexpress.com` (email genérico, cambiable) |
+| 1er usuario | `admin` · `admin@originalexpress.com` → **`torunoana71@gmail.com`** (email real de Ana, actualizado 2026-09-22; el genérico era placeholder) |
 | Tarifas de arranque | rate_tables + rate_cards "Regular" AIR/MAR (editable) |
 | Logo | pendiente (Config > branding) |
 | Migración | `20260922060000_original-express-tenant.sql` |
