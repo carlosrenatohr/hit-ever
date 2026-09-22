@@ -436,8 +436,8 @@ export class ConfigService {
 }
 
 
-function stripStorageKey(a: { slug: string; name: string; logoUrl: string | null; logoKey: string | null }) {
-  return { slug: a.slug, name: a.name, logoUrl: a.logoUrl }
+function stripStorageKey(a: { slug: string; name: string; logoUrl: string | null; logoKey: string | null; updatedAt: string }) {
+  return { slug: a.slug, name: a.name, logoUrl: a.logoUrl, updatedAt: a.updatedAt }
 }
 
 // ─── Rate card validation helpers ────────────────────────────────────────────

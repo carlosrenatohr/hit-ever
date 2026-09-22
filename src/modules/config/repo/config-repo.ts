@@ -17,6 +17,7 @@ interface AgencyRow {
   name: string
   logo_url: string | null
   logo_key: string | null
+  updated_at: string
 }
 
 interface RateTableRow {
@@ -188,8 +189,8 @@ export class InsforgeConfigRepo implements ConfigRepository {
   // ─── Implementations ─────────────────────────────────────────────────────────
 
   async listAgencies(): Promise<Agency[]> {
-    const rows = await this.get<AgencyRow>('agencies', 'select=slug,name,logo_url,logo_key&order=slug')
-    return rows.map((r) => ({ slug: r.slug, name: r.name, logoUrl: r.logo_url, logoKey: r.logo_key }))
+    const rows = await this.get<AgencyRow>('agencies', 'select=slug,name,logo_url,logo_key,updated_at&order=slug')
+    return rows.map((r) => ({ slug: r.slug, name: r.name, logoUrl: r.logo_url, logoKey: r.logo_key, updatedAt: r.updated_at }))
   }
 
   async updateAgency(slug: string, patch: Row): Promise<void> {
