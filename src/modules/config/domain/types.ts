@@ -12,6 +12,8 @@ export interface Agency {
   name: string
   logoUrl: string | null
   logoKey: string | null
+  /** Bumped on every agency brand/info change; used as a cache-buster on the logo URL. */
+  updatedAt: string
 }
 
 export type PriceModel = 'weight' | 'volume' | 'fixed'
