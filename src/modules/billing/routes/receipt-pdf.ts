@@ -4,7 +4,10 @@
 // (pdf-lib, pure JS) so a share link can download the invoice directly.
 // ============================================================================
 
-import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
+import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFImage, type PDFPage } from 'pdf-lib'
+import decodeWebp, { init as initWebpModule } from '@jsquash/webp/decode'
+import { encode as encodePng } from 'upng-js'
+import { WEBP_DECODER_B64 } from './webp-decoder.b64.js'
 import type { PublicReceipt } from '../service/billing-service.js'
 import { money, formatPhone, FREIGHT_ES } from './public.js'
 
@@ -80,7 +83,92 @@ function drawRight(page: PDFPage, font: PDFFont, size: number, color: ReturnType
   draw(page, font, size, color, MARGIN + CONTENT_W - font.widthOfTextAtSize(sanitizePdfText(text), size), y, text)
 }
 
-export async function buildReceiptPdf(r: PublicReceipt): Promise<Uint8Array> {
+function isWebp(bytes: Uint8Array): boolean {
+  return bytes.length > 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+}
+
+/**
+ * Lazy-compile the embedded WebP decoder wasm (base64) once per isolate.
+ * Compiling is supported in Workers and Node, so this path is identical in
+ * both vitest and the deployed worker.
+ */
+let webpWasmModule: Promise<WebAssembly.Module | null> | null = null
+export function getWebpWasm(): Promise<WebAssembly.Module | null> {
+  if (!webpWasmModule) {
+    webpWasmModule = (async () => {
+      try {
+        const bytes = Uint8Array.from(atob(WEBP_DECODER_B64), (c) => c.charCodeAt(0))
+        return await WebAssembly.compile(bytes)
+      } catch {
+        return null
+      }
+    })()
+  }
+  return webpWasmModule
+}
+
+/** Decode WebP → RGBA → PNG bytes (jsquash wasm + upng encode). Null on any failure. */
+async function webpToPng(bytes: Uint8Array): Promise<Uint8Array | null> {
+  try {
+    const wasm = await getWebpWasm()
+    if (wasm) await initWebp(wasm)
+    else await initWebp()
+    const img = await decodeWebp(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+    return new Uint8Array(encodePng([img.data], img.width, img.height, 256))
+  } catch {
+    return null
+  }
+}
+
+let webpInited = false
+async function initWebp(module?: WebAssembly.Module): Promise<void> {
+  if (webpInited) return
+  await initWebpModule(module)
+  webpInited = true
+}
+
+type Fetcher = (url: string) => Promise<Response>
+
+/**
+ * Fetch the agency logo and embed it (PNG/JPEG natively; WebP decoded on the
+ * fly). Rendered object-contain in a `size` box at (x, y). Returns whether a
+ * logo was drawn — the caller shifts the brand text aside accordingly.
+ */
+async function drawLogo(
+  page: PDFPage,
+  pdf: PDFDocument,
+  logoUrl: string | null | undefined,
+  fetcher: Fetcher,
+  x: number,
+  y2: number,
+  size = 48,
+): Promise<boolean> {
+  if (!logoUrl) return false
+  try {
+    const res = await fetcher(logoUrl)
+    if (!res.ok) return false
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    let image: PDFImage | null = null
+    if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+      image = await pdf.embedPng(bytes)
+    } else if (bytes.length > 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+      image = await pdf.embedJpg(bytes)
+    } else if (isWebp(bytes)) {
+      const png = await webpToPng(bytes)
+      if (png) image = await pdf.embedPng(png)
+    }
+    if (!image) return false
+    const scale = Math.min(size / image.width, size / image.height)
+    const w = image.width * scale
+    const h = image.height * scale
+    page.drawImage(image, { x, y: y2 + (size - h) / 2, width: w, height: h })
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = (url) => fetch(url)): Promise<Uint8Array> {
   const doc = await PDFDocument.create()
   const page = doc.addPage([PAGE_W, PAGE_H])
   const helv = await doc.embedFont(StandardFonts.Helvetica)
@@ -99,20 +187,22 @@ export async function buildReceiptPdf(r: PublicReceipt): Promise<Uint8Array> {
     ? new Date(r.issueDate).toLocaleDateString('es-NI', { year: 'numeric', month: 'long', day: 'numeric' })
     : '—'
 
-  // ── Header: agency brand (text only, no logo fetch) + invoice meta ──
+  // ── Header: agency brand + logo (like the HTML receipt) + invoice meta ──
   const headTop = PAGE_H - 56
-  draw(page, bold, 16, INK, MARGIN, headTop, a.name || 'Orbit')
+  const hasLogo = await drawLogo(page, doc, a.logoUrl, logoFetcher, MARGIN, headTop)
+  const brandX = MARGIN + (hasLogo ? 64 : 0)
+  draw(page, bold, 16, INK, brandX, headTop, a.name || 'Orbit')
   let ly = headTop - 18
   if (a.ruc) {
-    draw(page, helv, 9, INK, MARGIN, ly, `RUC: ${sanitizePdfText(a.ruc)}`)
+    draw(page, helv, 9, INK, brandX, ly, `RUC: ${sanitizePdfText(a.ruc)}`)
     ly -= 12
   }
   if (a.address) {
-    draw(page, helv, 9, MUTED, MARGIN, ly, a.address)
+    draw(page, helv, 9, MUTED, brandX, ly, a.address)
     ly -= 12
   }
   if (a.phone) {
-    draw(page, helv, 9, MUTED, MARGIN, ly, `No de Telefono: ${sanitizePdfText(formatPhone(a.phone))}`)
+    draw(page, helv, 9, MUTED, brandX, ly, `No de Telefono: ${sanitizePdfText(formatPhone(a.phone))}`)
     ly -= 12
   }
 

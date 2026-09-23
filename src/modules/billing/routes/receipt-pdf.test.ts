@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildReceiptPdf, sanitizePdfText } from './receipt-pdf.js'
+import { buildReceiptPdf, sanitizePdfText, getWebpWasm } from './receipt-pdf.js'
 import type { PublicReceipt } from '../service/billing-service.js'
+
+// 1×1 PNG used to assert the logo-embedding path without network.
+const TINY_PNG = new Uint8Array(
+  Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
+)
 
 const receipt: PublicReceipt = {
   invoiceNumber: 7,
@@ -34,5 +39,20 @@ describe('buildReceiptPdf', () => {
     const head = new TextDecoder().decode(bytes.slice(0, 5))
     expect(head).toBe('%PDF-')
     expect(bytes.length).toBeGreaterThan(1000)
+  })
+
+  it('compiles the embedded WebP decoder wasm (encoded base64, lazy)', async () => {
+    const wasm = await getWebpWasm()
+    expect(wasm).toBeInstanceOf(WebAssembly.Module)
+  })
+
+  it('embeds the agency logo in the header (PNG fetcher)', async () => {
+    const withLogo: PublicReceipt = { ...receipt, agency: { ...receipt.agency, logoUrl: 'https://cdn.test/logos/original-express.webp' } }
+    const fetcher = async () => new Response(TINY_PNG, { status: 200 })
+    const bytes = await buildReceiptPdf(withLogo, fetcher)
+    expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe('%PDF-')
+    // The embedded XObject image makes the PDF bigger than the text-only version.
+    const textOnly = await buildReceiptPdf(receipt)
+    expect(bytes.length).toBeGreaterThan(textOnly.length)
   })
 })
