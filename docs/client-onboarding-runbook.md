@@ -163,6 +163,14 @@ npx @insforge/cli db query \
 9. Reportes: el filtro de proveedor y la columna "Proveedor" del CSV muestran el provider de la
    agencia (1 solo proveedor = filtro trivial pero funcional).
 10. Config > Auditoría: tras operar, aquí se ven los avisos del sistema (ver §6).
+11. Crear un paquete **manual** (flujo definitivo para tenants sin scraper). El modal pide
+    **Cliente** (obligatorio: autocompleta los clientes del tenant y ofrece "Crear cliente: X" si
+    el nombre no existe), **Estado inicial** (`En bodega Miami` por default; se puede cambiar
+    después desde el detalle) y **Tipo de servicio** (obligatorio). Después de crear, verificar en
+    el detalle del paquete: el **timeline** muestra la fila *"Paquete creado manualmente por
+    `<email>`"*; el cliente queda asignado y **prefilleado** en las acciones; el servicio muestra el
+    elegido (nunca un "Scraped (Aéreo)" inventado). El cliente autocreado es un cliente normal del
+    tenant: aparece en Clientes y en todos los buscadores, y se edita/elimina como cualquier otro.
 
 ---
 
@@ -209,7 +217,7 @@ Auditoría (org-scoped) y en el timeline de cada paquete.
 
 | Módulo | Esperado al arrancar | Dónde |
 |---|---|---|
-| Paquetería | crear paquete con proveedor (chip/select); stats, listado y export scoped a la org | Shipments / Overview / Reports |
+| Paquetería | crear paquete con proveedor (chip/select), **cliente obligatorio** (autocompletar o crear) y estado inicial; timeline registra el alta manual; stats, listado y export scoped a la org | Shipments / Overview / Reports |
 | Facturación | numeración per-org desde #1; tarifas v2 "Regular"; métodos/bancos seedeados; conceptos de cargo vacíos (crear desde Config si aplica) | Billing / Config > Conceptos |
 | Clientes | CRUD scoped a la org; valida que la rate table/card sea de la propia agencia | Customers |
 | Reportes | listado/export con proveedor; filtros scoped | Reports |
