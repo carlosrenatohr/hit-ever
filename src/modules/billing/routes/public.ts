@@ -8,6 +8,7 @@ import { Hono } from 'hono'
 import type { FreightType } from '../domain/enums.js'
 import { getBillingRepo } from '../repo/billing-repo.js'
 import { BillingService, type PublicReceipt } from '../service/billing-service.js'
+import { buildReceiptPdf } from './receipt-pdf.js'
 import type { CloudflareBindings } from '../../../types/index.js'
 
 const publicReceipt = new Hono<{ Bindings: CloudflareBindings }>()
@@ -16,8 +17,9 @@ function esc(s: unknown): string {
   return String(s ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch] as string)
 }
 const FREIGHT_ES: Record<FreightType, string> = { AIR: 'Aéreo', MAR: 'Marítimo' }
-const money = (n: number, currency: 'USD' | 'NIO') => `${currency === 'NIO' ? 'C$' : '$'}${(n ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-function formatPhone(phone: string): string {
+export { FREIGHT_ES }
+export const money = (n: number, currency: 'USD' | 'NIO') => `${currency === 'NIO' ? 'C$' : '$'}${(n ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+export function formatPhone(phone: string): string {
   const digits = phone.replace(/\D/g, '')
   if (digits.length === 8) return `${digits.slice(0, 4)}-${digits.slice(4)}`
   if (digits.length === 11 && digits.startsWith('505')) return `+505 ${digits.slice(3, 7)}-${digits.slice(7)}`
@@ -134,6 +136,24 @@ publicReceipt.get('/:token', async (c) => {
   const receipt = await svc.publicReceipt(token)
   if (!receipt) return c.text('Recibo no encontrado.', 404)
   return c.html(receiptHtml(receipt))
+})
+
+/**
+ * GET /billing/r/:token/pdf — same data rendered on the fly as a PDF and sent
+ * as an attachment, so a share link downloads the invoice directly (no preview
+ * page, nothing persisted on our side — the bytes are generated per request).
+ */
+publicReceipt.get('/:token/pdf', async (c) => {
+  const token = c.req.param('token')
+  if (!/^[0-9a-f-]{16,64}$/i.test(token)) return c.text('Recibo no encontrado.', 404)
+  const svc = new BillingService(getBillingRepo(c.env))
+  const receipt = await svc.publicReceipt(token)
+  if (!receipt) return c.text('Recibo no encontrado.', 404)
+  const bytes = await buildReceiptPdf(receipt)
+  return c.body(bytes, 200, {
+    'Content-Type': 'application/pdf',
+    'Content-Disposition': `attachment; filename="factura-${receipt.invoiceNumber}.pdf"`,
+  })
 })
 
 export { publicReceipt as publicReceiptRouter }
