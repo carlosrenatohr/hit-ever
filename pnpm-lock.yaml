@@ -14,16 +14,25 @@ importers:
       '@insforge/sdk':
         specifier: ^1.5.2
         version: 1.5.2
+      '@jsquash/webp':
+        specifier: ^1.5.0
+        version: 1.5.0
       hono:
         specifier: ^4.12.7
         version: 4.12.7
       pdf-lib:
         specifier: ^1.17.1
         version: 1.17.1
+      upng-js:
+        specifier: ^2.1.0
+        version: 2.1.0
       zod:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
+      '@types/upng-js':
+        specifier: ^2.1.5
+        version: 2.1.5
       exceljs:
         specifier: ^4.4.0
         version: 4.4.0
@@ -615,6 +624,18 @@ packages:
 
   '@pdf-lib/upng@1.0.1':
     resolution: {integrity: sha512-dQK2FUMQtowVP00mtIksrlZhdFXQZPC+taih1q4CvPZ5vqdxR/LKBaFg0oAfzd1GlHZXXSPdQfzQnt+ViGvEIQ==}
+
+  '@jsquash/webp@1.5.0':
+    resolution: {integrity: sha512-KggLoj2MnRSfIqTeKe1EmbljTX2vuV7mh79k89PCL1pyqiDULcPM1L47twxXt0hkb68F70bXiL31MxsuoZtKFw==}
+
+  '@types/upng-js@2.1.5':
+    resolution: {integrity: sha512-CzXg1lcCcWzrmYmke9BLbBPzb2DpdC1bXuXf0BtK3Bygvsozslei8S1bheDI1QUfZzZpMeQI5fywfnMj4CxocQ==}
+
+  upng-js@2.1.0:
+    resolution: {integrity: sha512-d3xzZzpMP64YkjP5pr8gNyvBt7dLk/uGI67EctzDuVp4lCZyVMo0aJO6l/VDlgbInJYDY6cnClLoBp29eKWI6g==}
+
+  wasm-feature-detect@1.9.0:
+    resolution: {integrity: sha512-zonE+xlIIYtxPy++L24ow0hAD8CICb4+FgPyROd3buyXIqsJvUEDkBgfCCoXOd1Hu3DUr0GOfnPIdcGV+YpNaA==}
 
   '@rolldown/binding-android-arm64@1.0.3':
     resolution: {integrity: sha512-454rs7jHngixp/NMxd5srYD57OnzSlZ/eFTETjORQHLwJG1lRtmNOJcBerZlfu4GjKqeq8aCCIQrMdHyhI51Hw==}
@@ -1860,6 +1881,18 @@ snapshots:
   '@pdf-lib/upng@1.0.1':
     dependencies:
       pako: 1.0.11
+
+  '@jsquash/webp@1.5.0':
+    dependencies:
+      wasm-feature-detect: 1.9.0
+
+  '@types/upng-js@2.1.5': {}
+
+  upng-js@2.1.0:
+    dependencies:
+      pako: 1.0.11
+
+  wasm-feature-detect@1.9.0: {}
 
   '@rolldown/binding-android-arm64@1.0.3':
     optional: true

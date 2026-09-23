@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.2] — 2026-09-23
+
+### Added
+- The on-the-fly receipt PDF now embeds the agency logo (object-contain, like the HTML receipt). Logos are stored as WebP, so the worker decodes them to PNG on the fly (jsquash wasm, ~138 KB binding); PNG/JPEG logos embed natively.
+
 ## [1.70.1] — 2026-09-23
 
 ### Added
