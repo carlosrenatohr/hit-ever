@@ -14,13 +14,13 @@
     "@hono/zod-validator": "^0.7.6",
     "@insforge/sdk": "^1.5.2",
     "@jsquash/webp": "^1.5.0",
-    "@types/upng-js": "^2.1.5",
     "hono": "^4.12.7",
     "pdf-lib": "^1.17.1",
     "upng-js": "^2.1.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/upng-js": "^2.1.5",
     "exceljs": "^4.4.0",
     "tsx": "^4.19.2",
     "vitest": "^4.1.8",
