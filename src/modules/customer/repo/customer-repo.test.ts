@@ -24,6 +24,7 @@ describe('InsforgeCustomerRepo', () => {
     expect(requested[0]).toContain('organization_id=eq.hit')
     expect(requested[0]).toContain('name=ilike.*Ana*')
     expect(requested[0]).toContain('packages(count)')
+    expect(requested[0]).toContain('packages.deleted_at=is.null')
     expect(requested[1]).toContain('/rpc/customer_weight_stats')
     expect(result).toEqual({
       rows: [
@@ -190,7 +191,9 @@ describe('InsforgeCustomerRepo', () => {
       invoices: [{ fiscalYear: 2026, invoiceNumber: 104, status: 'PAID' }],
       invoiceCount: 2,
     })
+    expect(requested.find((u) => u.includes('/records/packages'))).toContain('deleted_at=is.null')
     expect(requested.find((u) => u.includes('/records/packages'))).toContain('client_id=eq.c1')
+    expect(requested.find((u) => u.includes('/records/billing_clients'))).toContain('packages.deleted_at=is.null')
     expect(requested.find((u) => u.includes('/records/invoices'))).toContain('organization_id=eq.hit')
   })
 })
