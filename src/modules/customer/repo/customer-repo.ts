@@ -218,6 +218,8 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     parts.push(`organization_id=eq.${encodeURIComponent(filter.organizationId)}`)
     // Soft-deleted clients are out of every operational read by default.
     parts.push('deleted_at=is.null')
+    // Same for their packages: the count embed must skip deleted_at (no !inner → a client with 0 live packages still lists).
+    parts.push('packages.deleted_at=is.null')
     if (filter.search) {
       const search = filter.search.replace(/[(),*]/g, '')
       parts.push(`name=ilike.*${encodeURIComponent(search)}*`)
@@ -293,7 +295,7 @@ export class InsforgeCustomerRepo implements CustomerRepository {
 
   async get(id: string, organizationId?: string): Promise<BillingClient | null> {
     const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
-    const rows = await this.fetchRows<BillingClientDbRow>(`id=eq.${encodeURIComponent(id)}${orgFilter}&select=${CLIENT_COLS}&limit=1`)
+    const rows = await this.fetchRows<BillingClientDbRow>(`id=eq.${encodeURIComponent(id)}${orgFilter}&select=${CLIENT_COLS}&limit=1&packages.deleted_at=is.null`)
     return rows[0] ? toDomain(rows[0]) : null
   }
 
@@ -312,7 +314,7 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     const [pkgs, invs] = await Promise.all([
       this.fetchRowsWithCountFrom<{ almacen_id: string | null; tracking_number: string | null }>(
         'packages',
-        `client_id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}&select=almacen_id,tracking_number&limit=5&order=scraped_at.desc`,
+        `client_id=eq.${encodeURIComponent(id)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=almacen_id,tracking_number&limit=5&order=scraped_at.desc`,
       ),
       this.fetchRowsWithCountFrom<{ fiscal_year: number; invoice_number: number; status: string }>(
         'invoices',
