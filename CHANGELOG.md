@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-09-23
+
 ### Added
-- Public invoice receipt shows the grand total in the secondary currency (USD↔córdobas) at the agency's exchange rate, below the prominent main-currency total — mirrors the printed invoice shared via WhatsApp.
+- Public invoice receipt shows the grand total in the secondary currency (USD↔córdobas) at the agency's exchange rate, below the prominent main-currency total — mirrors the printed invoice shared via WhatsApp. `getAgencyInfo` reads `exchange_rate_nio_per_usd`.
 
 ## [1.0.0] — 2026-07-10
 
