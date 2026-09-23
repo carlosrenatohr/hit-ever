@@ -258,6 +258,8 @@ export function toPackageRow(providerId: string, organizationId: string, baseUrl
 export interface ProviderAgencyLink {
   agencySlug: string
   casilleroFilter: string | null // NULL = default owner (catch-all)
+  /** Manual-only agencies (is_scrapable=false) never own the catch-all default. */
+  isScrapable: boolean
 }
 
 /**
@@ -266,18 +268,25 @@ export interface ProviderAgencyLink {
  * filter is the default owner for anything that matches no filter (and for
  * packages whose casillero is unknown). Single-link providers short-circuit.
  * Returns null when the routing is ambiguous — callers must skip, never guess.
+ *
+ * Routing guard: a link of a manual-only agency (is_scrapable=false) with a NULL
+ * filter is NOT a candidate default — a new manual tenant without a casillero
+ * prefix must not break the shared provider's catch-all (would make it ambiguous
+ * and skip EVERY unmatched package). Prefix links of manual agencies still route,
+ * so an agency that later gets a prefix + is_scrapable=true ingests normally.
  */
 export function resolveProviderOrg(links: ProviderAgencyLink[], casillero: string | null): string | null {
-  if (links.length === 0) return null
-  if (links.length === 1) return links[0].agencySlug
+  const routable = links.filter((l) => l.casilleroFilter !== null || l.isScrapable)
+  if (routable.length === 0) return null
+  if (routable.length === 1) return routable[0].agencySlug
   if (casillero) {
-    const matches = links.filter((l) => l.casilleroFilter && casillero.startsWith(l.casilleroFilter))
+    const matches = routable.filter((l) => l.casilleroFilter && casillero.startsWith(l.casilleroFilter))
     if (matches.length > 0) {
       matches.sort((a, b) => (b.casilleroFilter?.length ?? 0) - (a.casilleroFilter?.length ?? 0))
       return matches[0].agencySlug
     }
   }
-  const defaults = links.filter((l) => !l.casilleroFilter)
+  const defaults = routable.filter((l) => !l.casilleroFilter)
   return defaults.length === 1 ? defaults[0].agencySlug : null
 }
 
@@ -301,7 +310,7 @@ export class IngestService {
       this.linksByProvider = new Map()
       for (const r of rows) {
         const links = this.linksByProvider.get(r.providerId) ?? []
-        links.push({ agencySlug: r.agencySlug, casilleroFilter: r.casilleroFilter })
+        links.push({ agencySlug: r.agencySlug, casilleroFilter: r.casilleroFilter, isScrapable: r.isScrapable })
         this.linksByProvider.set(r.providerId, links)
       }
     }
