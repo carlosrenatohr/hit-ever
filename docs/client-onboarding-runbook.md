@@ -61,6 +61,9 @@ Cada cliente nuevo = **una migración aditiva** (`YYYYMMDDHHMMSS_<slug>-tenant.s
    `source_key = '<slug>:Regular:REGULAR'` (mismo formato de idempotencia que el backfill).
 4. Seed **payment_methods / payment_banks** por defecto (Transferencia/Efectivo/Saldo a favor;
    BAC/LAFISE/BANPRO).
+5. Seed en **provider_agencies**: la fila de la junction con el proveedor del cliente y
+   `is_default = true` (**obligatorio** — sin provider, crear paquetes falla con error accionable;
+   ver §2.5).
 
 Reglas:
 - **Aditiva**: nunca toca filas de otras agencias ni altera constraints existentes (en prod el
@@ -72,6 +75,41 @@ Reglas:
 
 > Si el tenant recibe scraper en el futuro: `is_scrapable=true` (UPDATE) + routing en
 > `provider_agencies` + decidir credenciales (¿propias o las de HIT?). Documentar aparte.
+
+---
+
+### 2.5 Proveedor por defecto — obligatorio incluso en modo manual
+
+`create_package` resuelve el proveedor **data-driven**: `p_provider_code` (override del panel,
+validado contra la junction de la agencia) → `provider_agencies.is_default` de la agencia → error
+accionable si no hay ninguno (apunta a esta sección). Un tenant sin proveedor **no puede crear
+paquetes** (el modal del panel también lo avisa y deshabilita Crear). `provider_id` no es opcional:
+la idempotencia del paquete es `ON CONFLICT (provider_id, almacen_id)` — el proveedor es requisito
+de arranque, no solo de scraper.
+
+En la migración del tenant:
+
+```sql
+insert into provider_agencies (provider_id, agency_slug, casillero_filter, is_default)
+select id, '<slug>', null, true from providers where code = '<provider_code>'
+on conflict (provider_id, agency_slug) do nothing;
+```
+
+Reglas (importantes):
+
+- **Un default por agencia**: índice único `uq_provider_agencies_one_default` (`is_default` partial)
+  — elegir con qué proveedor se crean los paquetes del tenant.
+- **Guard de ruteo**: la junction alimenta el ruteo de ingest (por prefijo de casillero). Una
+  agencia **manual** (`is_scrapable=false`) con `casillero_filter NULL` (catch-all) **no cuenta**
+  para el default del proveedor compartido: sin prefijo no rutea nada. Protege el status quo — p.ej.
+  GC mantiene a `hit` como único catch-all aunque exista una fila manual sin prefijo.
+- **Nunca dos defaults `NULL` para el mismo proveedor**: si dos agencias scrapables tienen
+  `casillero_filter NULL`, el ruteo es ambiguo y el ingest **saltea ese paquete** (nunca adivina).
+  Antes de activar el scraper de un tenant hay que asignarle su prefijo de casillero (dato del
+  cliente) y **recién entonces** `is_scrapable=true`.
+- **Activar scraper más adelante** = prefijo en la fila de la junction + `is_scrapable=true` +
+  credenciales del proveedor (`credsFor` en `src/services/ingest.ts`: secrets de Cloudflare
+  `EVEREST_USERNAME/PASSWORD`, `GC_USERNAME/PASSWORD`). El guard del §6 protege los datos manuales.
 
 ---
 
@@ -115,6 +153,16 @@ npx @insforge/cli db query \
 5. Config > Tarifas: la rate card "Regular" (AIR/MAR) existe y es editable. Config > Pagos:
    métodos/bancos por defecto presentes.
 6. Config > Información: nombre de agencia editable (una vez por mes, server-enforced).
+7. Paquetería > **Crear paquete**: el modal muestra el proveedor — chip si hay 1, `<select>` con el
+   default preseleccionado si hay ≥2, mensaje claro si no hay ninguno. Crear uno y verificar en la
+   DB: `select provider_id, organization_id from packages where almacen_id = '<guia>'` — el provider
+   debe ser el default de la agencia, `organization_id` el slug del tenant.
+8. Facturación: crear un cliente y una factura #1. La numeración es **por agencia** (per-org):
+   arranca en #1 sin colisionar con otros tenants. Los conceptos de cargo ("otros") no vienen
+   seedeados — crear desde Config > Conceptos si el cliente los usará.
+9. Reportes: el filtro de proveedor y la columna "Proveedor" del CSV muestran el provider de la
+   agencia (1 solo proveedor = filtro trivial pero funcional).
+10. Config > Auditoría: tras operar, aquí se ven los avisos del sistema (ver §6).
 
 ---
 
@@ -131,9 +179,41 @@ npx @insforge/cli db query \
 | Logo | pendiente (Config > branding) |
 | Migración | `20260922060000_original-express-tenant.sql` |
 | Rama | `feat/original-express-tenant` (hit-ever2) |
+| Provider (junction) | Global Connection · `is_default=true` · `casillero_filter NULL` (migración `20260923015138_package-create-hardening.sql`, rama `feat/package-create-hardening`) |
 
-**Pendientes del cliente:** logo; decidir si algún día entra por scraper (routing +
-credenciales); completar datos de facturación (RUC/dirección) en Config > Información.
+**Pendientes del cliente:** logo; **prefijo/rango de casilleros en la cuenta de Global Connection**
+(necesario para activar el scraper: asignar `casillero_filter` en la junction + `is_scrapable=true` —
+ver §2.5); completar datos de facturación (RUC/dirección) en Config > Información.
+
+---
+
+## 6. Colisiones manual ↔ scraper (qué garantiza el sistema)
+
+Desde `20260923015138` (guard `packages_tenant_guard` + preflight en `create_package`), la operación
+manual y el scraper conviven sin pisarse:
+
+| Garantía | Mecanismo | Dónde se ve |
+|---|---|---|
+| El scraper **no roba ni mueve** paquetes entre tenants | trigger congela `organization_id` (escape: GUC `hit.allow_org_move='on'` solo para backfills deliberados) | Auditoría: `package.org_move_blocked` |
+| El scraper **no borra** valores manuales | trigger restaura el valor si el update trae `NULL` ("scrape nunca borra"; dedup de 24h para no inundar) | Auditoría: `package.scrape_values_preserved` + evento en el timeline del paquete |
+| Crear un paquete **no pisa** el ledger de otra org | `create_package` detecta `(provider_id, almacen_id)` ajeno → bloquea + audita (devuelve error JSON, no raise) | Auditoría: `package.create.blocked_cross_org` + mensaje claro en el modal |
+| Tracking duplicado en otra org | se crea igual, pero **avisa** (no bloquea) | Auditoría: `package.create.tracking_duplicate` + evento en la fila preexistente + `warning` ámbar en el modal |
+
+El duplicado de **guía en otra org** es un **bloqueo** con error claro (nunca un update mudo); el
+**tracking duplicado** es un **aviso** (se crea y todos se enteran). El admin ve todo en Config >
+Auditoría (org-scoped) y en el timeline de cada paquete.
+
+---
+
+## 7. Módulos que toca una agencia nueva (checklist de smoke)
+
+| Módulo | Esperado al arrancar | Dónde |
+|---|---|---|
+| Paquetería | crear paquete con proveedor (chip/select); stats, listado y export scoped a la org | Shipments / Overview / Reports |
+| Facturación | numeración per-org desde #1; tarifas v2 "Regular"; métodos/bancos seedeados; conceptos de cargo vacíos (crear desde Config si aplica) | Billing / Config > Conceptos |
+| Clientes | CRUD scoped a la org; valida que la rate table/card sea de la propia agencia | Customers |
+| Reportes | listado/export con proveedor; filtros scoped | Reports |
+| Configuración | branding, tarifas, pagos, conceptos, auditoría; alta de usuarios por CLI (§3) | Config |
 
 ---
 
