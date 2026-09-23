@@ -21,6 +21,15 @@
 --   3. events: fila "creado manualmente por <actor>" (source='panel') en el
 --      timeline del paquete, solo cuando la creación es REAL (xmax=0). Un merge
 --      idempotente (misma guía + mismo provider re-enviada) no re-registra.
+--
+-- Nota de firma: CREATE OR REPLACE NO puede cambiar la lista de argumentos —
+--          crear la versión de 19 params al lado de la de 17 habría dejado DOS
+--          overloads (la ambigüedad PGRST203 que 20260904120000 ya limpió).
+--          Por eso se dropea explícitamente la firma vieja y el grant va con la
+--          lista de tipos. Idempotente: en re-ejecución el drop si-exists
+--          no-op y el create-or-replace pisa la propia versión de 19 params.
+
+drop function if exists public.create_package(text, text, text, text, text, numeric, integer, numeric, text, text, text, text, text, numeric, text, timestamptz, text);
 
 create or replace function public.create_package(
   p_almacen_id       text,
@@ -266,4 +275,4 @@ begin
   );
 end $$;
 
-grant execute on function public.create_package to authenticated;
+grant execute on function public.create_package(text, text, text, text, text, numeric, integer, numeric, text, text, text, text, text, numeric, text, timestamptz, text, uuid, text) to authenticated;
