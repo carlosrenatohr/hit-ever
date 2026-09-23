@@ -192,9 +192,21 @@ export class InsforgeClient implements TrackingRepository {
     }))
   }
 
-  async getProviderAgencies(): Promise<{ providerId: string; agencySlug: string; casilleroFilter: string | null }[]> {
-    const rows = await this.get<{ provider_id: string; agency_slug: string; casillero_filter: string | null }>('provider_agencies', 'select=provider_id,agency_slug,casillero_filter')
-    return rows.map((r) => ({ providerId: r.provider_id, agencySlug: r.agency_slug, casilleroFilter: r.casillero_filter }))
+  async getProviderAgencies(): Promise<{ providerId: string; agencySlug: string; casilleroFilter: string | null; isScrapable: boolean }[]> {
+    // is_scrapable via to-one embed in the SAME subrequest (routing guard; stays
+    // under the 50-subrequest budget: one call per ingest invocation, not per package).
+    const rows = await this.get<{
+      provider_id: string
+      agency_slug: string
+      casillero_filter: string | null
+      agencies: { is_scrapable: boolean } | null
+    }>('provider_agencies', 'select=provider_id,agency_slug,casillero_filter,agencies(is_scrapable)')
+    return rows.map((r) => ({
+      providerId: r.provider_id,
+      agencySlug: r.agency_slug,
+      casilleroFilter: r.casillero_filter,
+      isScrapable: r.agencies?.is_scrapable ?? true,
+    }))
   }
 
   async isAgencyScrapable(agencySlug: string): Promise<boolean> {

@@ -16,7 +16,7 @@ export interface TrackingRepository {
   getActiveProviders(): Promise<Provider[]>
   /** provider_id → agency links (provider_agencies junction). A NULL casillero_filter
    * marks the default owner: casilleros matching no filter land there. */
-  getProviderAgencies(): Promise<{ providerId: string; agencySlug: string; casilleroFilter: string | null }[]>
+  getProviderAgencies(): Promise<{ providerId: string; agencySlug: string; casilleroFilter: string | null; isScrapable: boolean }[]>
   /** Latest scraped_at per active provider code (ingestion freshness health). */
   getLastScrapeByProvider(): Promise<Record<string, string | null>>
   /** When false, the agency works manual-only: every sync/scrape path must refuse it. */
@@ -124,10 +124,10 @@ export class MemoryRepository implements TrackingRepository {
     return SEED_PROVIDERS
   }
 
-  async getProviderAgencies(): Promise<{ providerId: string; agencySlug: string; casilleroFilter: string | null }[]> {
+  async getProviderAgencies(): Promise<{ providerId: string; agencySlug: string; casilleroFilter: string | null; isScrapable: boolean }[]> {
     return [
-      { providerId: 'everest', agencySlug: 'hit', casilleroFilter: '37458' },
-      { providerId: 'global_connection', agencySlug: 'hit', casilleroFilter: null },
+      { providerId: 'everest', agencySlug: 'hit', casilleroFilter: '37458', isScrapable: true },
+      { providerId: 'global_connection', agencySlug: 'hit', casilleroFilter: null, isScrapable: true },
     ]
   }
 

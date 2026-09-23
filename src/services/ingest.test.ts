@@ -89,15 +89,20 @@ describe('toPackageRow fallback chain', () => {
 })
 
 describe('resolveProviderOrg (junction routing)', () => {
-  // Mirrors the live junction: everest→hit(37458); GC→hit(default), GC→suite(8899), GC→solo-guegue(50).
+  // Mirrors the live junction: everest→hit(37458); GC→hit(default), GC→suite(8899),
+  // GC→solo-guegue(50). suite/solo-guegue are manual-only (is_scrapable=false) with
+  // explicit prefixes — the guard keeps their routing untouched. New manual agencies
+  // (e.g. original-express) start WITHOUT a prefix, so their NULL-filter link must
+  // never win the shared provider's catch-all (would make routing ambiguous).
   const GC_LINKS = [
-    { agencySlug: 'hit', casilleroFilter: null },
-    { agencySlug: 'suite', casilleroFilter: '8899' },
-    { agencySlug: 'solo-guegue', casilleroFilter: '50' },
+    { agencySlug: 'hit', casilleroFilter: null, isScrapable: true },
+    { agencySlug: 'suite', casilleroFilter: '8899', isScrapable: false },
+    { agencySlug: 'solo-guegue', casilleroFilter: '50', isScrapable: false },
+    { agencySlug: 'original-express', casilleroFilter: null, isScrapable: false },
   ]
 
   it('single-link provider always resolves to its agency', () => {
-    expect(resolveProviderOrg([{ agencySlug: 'hit', casilleroFilter: '37458' }], null)).toBe('hit')
+    expect(resolveProviderOrg([{ agencySlug: 'hit', casilleroFilter: '37458', isScrapable: true }], null)).toBe('hit')
   })
 
   it('routes shared-provider packages by casillero prefix', () => {
@@ -113,8 +118,8 @@ describe('resolveProviderOrg (junction routing)', () => {
 
   it('prefers the most specific filter when prefixes overlap', () => {
     const links = [
-      { agencySlug: 'a', casilleroFilter: '50' },
-      { agencySlug: 'b', casilleroFilter: '5012' },
+      { agencySlug: 'a', casilleroFilter: '50', isScrapable: true },
+      { agencySlug: 'b', casilleroFilter: '5012', isScrapable: true },
     ]
     expect(resolveProviderOrg(links, '5012x')).toBe('b')
     expect(resolveProviderOrg(links, '5099')).toBe('a')
@@ -123,10 +128,40 @@ describe('resolveProviderOrg (junction routing)', () => {
   it('returns null instead of guessing when routing is ambiguous', () => {
     expect(resolveProviderOrg([], '5012')).toBeNull()
     expect(resolveProviderOrg([
-      { agencySlug: 'a', casilleroFilter: '1' },
-      { agencySlug: 'b', casilleroFilter: null },
-      { agencySlug: 'c', casilleroFilter: null },
+      { agencySlug: 'a', casilleroFilter: '1', isScrapable: true },
+      { agencySlug: 'b', casilleroFilter: null, isScrapable: true },
+      { agencySlug: 'c', casilleroFilter: null, isScrapable: true },
     ], '999')).toBeNull()
+  })
+
+  it('ignores a manual-only catch-all link (is_scrapable=false, no prefix)', () => {
+    const links = [
+      { agencySlug: 'hit', casilleroFilter: null, isScrapable: true },
+      { agencySlug: 'original-express', casilleroFilter: null, isScrapable: false },
+    ]
+    expect(resolveProviderOrg(links, '999')).toBe('hit')
+    expect(resolveProviderOrg(links, null)).toBe('hit')
+  })
+
+  it('keeps routing manual agencies that DO have a prefix', () => {
+    const links = [
+      { agencySlug: 'hit', casilleroFilter: null, isScrapable: true },
+      { agencySlug: 'manual', casilleroFilter: '70', isScrapable: false },
+    ]
+    expect(resolveProviderOrg(links, '70123')).toBe('manual')
+    expect(resolveProviderOrg(links, '9999')).toBe('hit')
+  })
+
+  it('returns null when the only link is a manual catch-all (no default owner)', () => {
+    expect(resolveProviderOrg([{ agencySlug: 'manual', casilleroFilter: null, isScrapable: false }], '5012')).toBeNull()
+  })
+
+  it('prefers the scrapable default over a manual catch-all', () => {
+    const links = [
+      { agencySlug: 'a', casilleroFilter: null, isScrapable: true },
+      { agencySlug: 'b', casilleroFilter: null, isScrapable: false },
+    ]
+    expect(resolveProviderOrg(links, '999')).toBe('a')
   })
 })
 
