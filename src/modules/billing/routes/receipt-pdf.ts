@@ -113,9 +113,13 @@ async function webpToPng(bytes: Uint8Array): Promise<Uint8Array | null> {
     const wasm = await getWebpWasm()
     if (wasm) await initWebp(wasm)
     else await initWebp()
-    const img = await decodeWebp(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
+    // jsquash's embind binding accepts Uint8Array (a raw ArrayBuffer is rejected
+    // with "Cannot pass non-string to std::string") — always hand it a view.
+    const view = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    const img = await decodeWebp(view)
     return new Uint8Array(encodePng([img.data], img.width, img.height, 256))
-  } catch {
+  } catch (e) {
+    console.warn(`receipt-logo:webp-decode ${e instanceof Error ? e.message : String(e)}`)
     return null
   }
 }
@@ -146,7 +150,10 @@ async function drawLogo(
   if (!logoUrl) return false
   try {
     const res = await fetcher(logoUrl)
-    if (!res.ok) return false
+    if (!res.ok) {
+      console.warn(`receipt-logo:fetch-${res.status}`)
+      return false
+    }
     const bytes = new Uint8Array(await res.arrayBuffer())
     let image: PDFImage | null = null
     if (bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
@@ -156,6 +163,10 @@ async function drawLogo(
     } else if (isWebp(bytes)) {
       const png = await webpToPng(bytes)
       if (png) image = await pdf.embedPng(png)
+      else console.warn('receipt-logo:webp-decode-failed')
+    } else {
+      console.warn('receipt-logo:unsupported-format')
+      return false
     }
     if (!image) return false
     const scale = Math.min(size / image.width, size / image.height)
@@ -163,7 +174,8 @@ async function drawLogo(
     const h = image.height * scale
     page.drawImage(image, { x, y: y2 + (size - h) / 2, width: w, height: h })
     return true
-  } catch {
+  } catch (e) {
+    console.warn(`receipt-logo:error ${e instanceof Error ? e.message : String(e)}`)
     return false
   }
 }
@@ -180,8 +192,8 @@ export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = (
   const altTotal =
     rate && rate > 0 && r.total
       ? currency === 'NIO'
-        ? `Equiv. USD: ${money(r.total / rate, 'USD')} (tasa ${rate})`
-        : `Equiv. córdobas: ${money(r.total * rate, 'NIO')} (tasa ${rate})`
+        ? `≈ ${money(r.total / rate, 'USD')}`
+        : `≈ ${money(r.total * rate, 'NIO')}`
       : null
   const date = r.issueDate
     ? new Date(r.issueDate).toLocaleDateString('es-NI', { year: 'numeric', month: 'long', day: 'numeric' })

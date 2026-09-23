@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.3] — 2026-09-23
+
+### Added
+- The receipt PDF and HTML receipt show only the equivalent amount in the other currency (`≈ C$3,700.00`), without the exchange rate.
+
+### Fixed
+- The WebP logo decoder now receives a `Uint8Array` (jsquash's embind binding rejects raw `ArrayBuffer`), and logo failures log `receipt-logo:*` warnings for observability — the deployed logo path is no longer silent.
+
 ## [1.70.2] — 2026-09-23
 
 ### Added
