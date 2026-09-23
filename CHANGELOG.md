@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.4] — 2026-09-23
+
+### Fixed
+- Receipt PDF and HTML routes send \`Cache-Control: no-store\` — per-token content must never be served from a browser/WhatsApp/edge cache. The panel also sends a fresh \`?ts=\` on the WhatsApp link so each share is a new URL.
+
 ## [1.70.3] — 2026-09-23
 
 ### Added

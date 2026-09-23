@@ -135,7 +135,7 @@ publicReceipt.get('/:token', async (c) => {
   const svc = new BillingService(getBillingRepo(c.env))
   const receipt = await svc.publicReceipt(token)
   if (!receipt) return c.text('Recibo no encontrado.', 404)
-  return c.html(receiptHtml(receipt))
+  return c.html(receiptHtml(receipt), 200, { 'Cache-Control': 'no-store' })
 })
 
 /**
@@ -153,6 +153,8 @@ publicReceipt.get('/:token/pdf', async (c) => {
   return c.body(bytes, 200, {
     'Content-Type': 'application/pdf',
     'Content-Disposition': `attachment; filename="factura-${receipt.invoiceNumber}.pdf"`,
+    // Per-token content: never cached by the edge, browser or WhatsApp previews.
+    'Cache-Control': 'no-store',
   })
 })
 
