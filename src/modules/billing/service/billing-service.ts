@@ -130,7 +130,7 @@ export interface PublicReceipt {
   total: number
   paidUsd: number
   outstanding: number
-  agency: { name: string; logoUrl: string | null; ruc: string | null; address: string | null; phone: string | null; currency: Currency }
+  agency: { name: string; logoUrl: string | null; ruc: string | null; address: string | null; phone: string | null; currency: Currency; exchangeRateNioPerUsd: number | null }
 }
 
 export interface YearReport {
@@ -1004,6 +1004,7 @@ export class BillingService {
         address: agencyInfo?.address ?? null,
         phone: agencyInfo?.phone ?? null,
         currency: agencyInfo?.currency ?? 'USD',
+        exchangeRateNioPerUsd: agencyInfo?.exchangeRateNioPerUsd ?? null,
       },
     }
   }

@@ -81,6 +81,7 @@ describe('publicReceipt', () => {
     expect(r!.total).toBe(32.5)
     expect(r!.invoiceNumber).toBe(5)
     expect(r!.agency.name).toBe('HIT Cargo')
+    expect(r!.agency.exchangeRateNioPerUsd).toBeNull()
     const line = r!.lines[0] as Record<string, unknown>
     expect(line).not.toHaveProperty('profit')
     expect(line).not.toHaveProperty('freightCost')
