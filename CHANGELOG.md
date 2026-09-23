@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.1] — 2026-09-23
+
+### Added
+- `GET /billing/r/:token/pdf` — the public receipt rendered on the fly as a PDF (pdf-lib) and downloaded as an attachment; nothing is persisted. New route only: the existing HTML preview (`/billing/r/:token`) is untouched. The WhatsApp share link now points here so the recipient gets the PDF directly.
+
 ## [1.0.1] — 2026-09-23
 
 ### Added
