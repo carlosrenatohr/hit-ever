@@ -235,7 +235,8 @@ export interface BillingRepository {
   linkPackage(invoiceId: string, packageId: string, source: 'auto' | 'manual', matchedOc: string | null, by: string, organizationId: string): Promise<void>
   unlinkPackage(invoiceId: string, packageId: string): Promise<void>
   /** Get agency info and currency for multi-tenant invoice branding. */
-  getAgencyInfo(organizationId: string): Promise<{ name: string; logoUrl: string | null; ruc: string | null; address: string | null; phone: string | null; currency: Currency } | null>
+  /** Agency branding/currency for the public receipt (multi-tenant). */
+  getAgencyInfo(organizationId: string): Promise<{ name: string; logoUrl: string | null; ruc: string | null; address: string | null; phone: string | null; currency: Currency; exchangeRateNioPerUsd: number | null } | null>
   /** -- Package IDs that have at least one invoice link (org-scoped, for the reports filter). -- */
   listLinkedPackageIds(organizationId: string): Promise<string[]>
   /** Release all active package links for an invoice (sets active=false, released_at/by). Used on VOID. */
@@ -651,12 +652,22 @@ export class InsforgeBillingRepo implements BillingRepository {
     return rows[0] ? { invoiceId: rows[0].invoice_id } : null
   }
 
-  async getAgencyInfo(organizationId: string): Promise<{ name: string; logoUrl: string | null; ruc: string | null; address: string | null; phone: string | null; currency: Currency } | null> {
-    const rows = await this.get<{ name: string; logo_url: string | null; ruc: string | null; address: string | null; phone: string | null; currency: Currency }>(
+  async getAgencyInfo(organizationId: string): Promise<{ name: string; logoUrl: string | null; ruc: string | null; address: string | null; phone: string | null; currency: Currency; exchangeRateNioPerUsd: number | null } | null> {
+    const rows = await this.get<{ name: string; logo_url: string | null; ruc: string | null; address: string | null; phone: string | null; currency: Currency; exchange_rate_nio_per_usd: number | null }>(
       'agencies',
-      `slug=eq.${encodeURIComponent(organizationId)}&select=name,logo_url,ruc,address,phone,currency&limit=1`,
+      `slug=eq.${encodeURIComponent(organizationId)}&select=name,logo_url,ruc,address,phone,currency,exchange_rate_nio_per_usd&limit=1`,
     )
-    return rows[0] ? { name: rows[0].name, logoUrl: rows[0].logo_url, ruc: rows[0].ruc, address: rows[0].address, phone: rows[0].phone, currency: rows[0].currency } : null
+    return rows[0]
+      ? {
+          name: rows[0].name,
+          logoUrl: rows[0].logo_url,
+          ruc: rows[0].ruc,
+          address: rows[0].address,
+          phone: rows[0].phone,
+          currency: rows[0].currency,
+          exchangeRateNioPerUsd: rows[0].exchange_rate_nio_per_usd,
+        }
+      : null
   }
 }
 

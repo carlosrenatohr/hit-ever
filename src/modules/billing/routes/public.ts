@@ -43,6 +43,15 @@ function receiptHtml(r: PublicReceipt): string {
     })
     .join('')
   const subtotal = r.lines.reduce((sum, line) => sum + (line.total || 0), 0)
+  // Secondary (small) total in the other currency at the agency rate — mirrors the
+  // printed invoice so the shared link shows both USD and córdobas.
+  const rate = r.agency.exchangeRateNioPerUsd
+  const altTotal =
+    rate && rate > 0
+      ? r.agency.currency === 'NIO'
+        ? `≈ ${money(r.total / rate, 'USD')} (tasa ${rate})`
+        : `≈ ${money(r.total * rate, 'NIO')} (tasa ${rate})`
+      : null
   const date = r.issueDate ? new Date(r.issueDate).toLocaleDateString('es-NI', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'
   const agencyName = esc(r.agency.name)
   const logo = r.agency.logoUrl
@@ -77,6 +86,7 @@ function receiptHtml(r: PublicReceipt): string {
   .totals { margin-left:auto; width:260px; }
   .totals .row { display:flex; justify-content:space-between; padding:4px 0; }
   .totals .grand { border-top:2px solid var(--ink); margin-top:6px; padding-top:8px; font-size:18px; font-weight:800; }
+  .totals .alt { text-align:right; font-size:11px; font-weight:600; color:var(--muted); padding:2px 0 0; }
   .foot { margin-top:28px; text-align:center; color:var(--muted); font-size:12px; }
   .actions { max-width:720px; margin:0 auto; text-align:right; }
   .btn { display:inline-block; margin:8px 0; padding:8px 16px; border:0; border-radius:8px; background:var(--brand); color:#fff; font-weight:600; cursor:pointer; }
@@ -108,6 +118,7 @@ function receiptHtml(r: PublicReceipt): string {
   <div class="totals">
     <div class="row"><span>Subtotal</span><span>${money(subtotal, r.agency.currency)}</span></div>
     <div class="row grand"><span>Total</span><span>${money(r.total, r.agency.currency)}</span></div>
+    ${altTotal ? `<div class="alt">${altTotal}</div>` : ''}
   </div>
   <div class="foot">Gracias por su preferencia · ${agencyName}</div>
 </div>

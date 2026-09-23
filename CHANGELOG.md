@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Public invoice receipt shows the grand total in the secondary currency (USD↔córdobas) at the agency's exchange rate, below the prominent main-currency total — mirrors the printed invoice shared via WhatsApp.
+
 ## [1.0.0] — 2026-07-10
 
 First stable release of the HIT Cargo tracking worker — a Cloudflare Worker (Hono) that scrapes
