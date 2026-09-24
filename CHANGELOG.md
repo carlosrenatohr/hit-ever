@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.10] — 2026-09-24
+
+### Changed
+- Row separators in the receipt PDF are better balanced: 9pt under the last text of a row (less dead white at the end of each guia) and 17pt before the next row's title (more air — the divider no longer crowds the following guia).
+
 ## [1.70.9] — 2026-09-24
 
 ### Fixed

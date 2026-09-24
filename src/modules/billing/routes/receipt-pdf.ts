@@ -332,13 +332,13 @@ export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = d
     draw(page, font.regular, 10.5, INK, colLbsRight - font.regular.widthOfTextAtSize(sanitizePdfText(String(l.quantityLbs ?? '-')), 10.5), rowY, String(l.quantityLbs ?? '-'))
     draw(page, font.regular, 10.5, INK, colUnitRight - font.regular.widthOfTextAtSize(sanitizePdfText(money(l.unitPrice, currency)), 10.5), rowY, money(l.unitPrice, currency))
     drawRight(page, font.medium, 10.5, INK, money(l.total, currency), rowY)
-    // Row separator with guaranteed air: 12pt below the LAST text baseline of the
-    // row (tracking line included) and 10pt before the next row's text, so the
-    // line can never overlap a glyph even with wrapped/multi-line cells.
+    // Row separator with balanced air: 9pt below the LAST text baseline of the
+    // row (tracking line included) and 17pt before the next row's title, so the
+    // line reads as a divider for the current row and never crowds the next one.
     const lastBaseline = rowY - (cellLines.length - 1) * 12
-    const dividerY = lastBaseline - 12
+    const dividerY = lastBaseline - 9
     page.drawLine({ start: { x: MARGIN, y: dividerY }, end: { x: PAGE_W - MARGIN, y: dividerY }, thickness: 0.6, color: LINE100 })
-    rowY = dividerY - 10
+    rowY = dividerY - 17
     if (rowY < 130) {
       rowY = 130
       break
