@@ -24,12 +24,12 @@ const receipt: PublicReceipt = {
 }
 
 describe('sanitizePdfText', () => {
-  it('maps non-WinAnsi glyphs to ASCII-ish equivalents', () => {
+  it('maps non-common glyphs to ASCII-ish equivalents (≈ → aprox., — → -)', () => {
     expect(sanitizePdfText('Total ≈ C$1,234 — ok')).toBe('Total aprox. C$1,234 - ok')
   })
 
-  it('collapses whitespace, keeps Latin-1 accents and drops emoji/out-of-range bytes', () => {
-    expect(sanitizePdfText('Café ñ — smile 😀')).toBe('Café ñ - smile')
+  it('maps the middle dot separator and keeps Latin-1 accents', () => {
+    expect(sanitizePdfText('Café ñ · hola — smile 😀')).toBe('Café ñ - hola - smile')
   })
 })
 
