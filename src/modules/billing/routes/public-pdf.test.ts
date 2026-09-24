@@ -68,8 +68,9 @@ describe('GET /billing/r/:token/pdf', () => {
     expect(res.headers.get('Content-Type')).toContain('application/pdf')
     const cd = res.headers.get('Content-Disposition') ?? ''
     expect(cd).toMatch(/^attachment; filename="factura-7\.pdf"/)
-    // The download name mirrors the receipt page title (UTF-8 via RFC 5987).
-    expect(cd).toContain("filename*=UTF-8''Factura%20%237%20%E2%80%94%20HIT%20Cargo.pdf")
+    // The download name mirrors the receipt page title (UTF-8 via RFC 5987),
+    // using only common characters ("-" instead of the em dash).
+    expect(cd).toContain("filename*=UTF-8''Factura%20%237%20-%20HIT%20Cargo.pdf")
     const bytes = new Uint8Array(await res.arrayBuffer())
     expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe('%PDF-')
     expect(bytes.length).toBeGreaterThan(800)

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.7] — 2026-09-23
+
+### Changed
+- **Receipt PDF layout now mirrors the panel print template (InvoicePrint)**: Poppins embedded (latin subset) for 400/500/600/700/800, logo vertically centered against the brand block, generous spacing under the "Factura No." label, bordered header, a bottom border per line row, and lines around the Subtotal/Total block. WhatsApp and print views are now visually identical.
+- **HTML receipt view loads Poppins** (Google Fonts) and shares the same short es-NI date as the print — matching the PDF.
+- **Common characters only** across PDF/HTML/filenames: `≈`, `—`, `·`, `N.º` replaced by `C$…`, `-`, ``, `Factura No.` (Poppins latin subset covers the range shown).
+
 ## [1.70.6] — 2026-09-23
 
 ### Fixed

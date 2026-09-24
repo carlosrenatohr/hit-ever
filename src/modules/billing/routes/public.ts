@@ -19,6 +19,25 @@ function esc(s: unknown): string {
 const FREIGHT_ES: Record<FreightType, string> = { AIR: 'Aéreo', MAR: 'Marítimo' }
 export { FREIGHT_ES }
 export const money = (n: number, currency: 'USD' | 'NIO') => `${currency === 'NIO' ? 'C$' : '$'}${(n ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+/**
+ * Short es-NI date ("5 sept 2026") for the receipt. A bare YYYY-MM-DD is the
+ * local calendar day (like the panel's toLocalDate) — formatting a UTC-midnight
+ * Date would shift it back a day in UTC- zones (Nicaragua). Full ISO timestamps
+ * pass through as-is.
+ */
+export function shortDateEs(value: string | null | undefined): string {
+  if (!value) return '-'
+  const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (bare) {
+    const months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+    const [, yy, mm, dd] = bare
+    const m = months[Number(mm) - 1] ?? mm
+    return `${Number(dd)} ${m} ${yy}`
+  }
+  const d = new Date(value)
+  if (isNaN(+d)) return '-'
+  return d.toLocaleDateString('es-NI', { year: 'numeric', month: 'short', day: 'numeric' })
+}
 export function formatPhone(phone: string): string {
   const digits = phone.replace(/\D/g, '')
   if (digits.length === 8) return `${digits.slice(0, 4)}-${digits.slice(4)}`
@@ -30,8 +49,10 @@ export function formatPhone(phone: string): string {
 
 /**
  * Downloads name the file like the receipt page title (what the print/save
- * flow suggests): "Factura #7 — Original Express.pdf". The ASCII fallback stays
- * simple for old clients; the UTF-8 name ships via RFC 5987 filename*.
+ * flow suggests): "Factura #7 - Original Express.pdf" (common chars only, so
+ * the name matches the PDF, the HTML title and the panel print template). The
+ * ASCII fallback stays simple for old clients; the UTF-8 name ships via RFC
+ * 5987 filename*.
  */
 function receiptFilename(r: PublicReceipt): { ascii: string; utf8: string } {
   const agency = String(r.agency.name || 'Orbit')
@@ -39,7 +60,7 @@ function receiptFilename(r: PublicReceipt): { ascii: string; utf8: string } {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 60)
-  return { ascii: `factura-${r.invoiceNumber}.pdf`, utf8: `Factura #${r.invoiceNumber} — ${agency}.pdf` }
+  return { ascii: `factura-${r.invoiceNumber}.pdf`, utf8: `Factura #${r.invoiceNumber} - ${agency}.pdf` }
 }
 
 function receiptHtml(r: PublicReceipt): string {
@@ -51,8 +72,8 @@ function receiptHtml(r: PublicReceipt): string {
           : esc(l.description ?? 'Otro cargo')
       return `<tr>
       <td>${firstCell}</td>
-      <td>${l.freightType ? esc(FREIGHT_ES[l.freightType]) : '—'}</td>
-      <td class="num">${l.quantityLbs != null ? esc(l.quantityLbs) : '—'}</td>
+      <td>${l.freightType ? esc(FREIGHT_ES[l.freightType]) : '-'}</td>
+      <td class="num">${l.quantityLbs != null ? esc(l.quantityLbs) : '-'}</td>
       <td class="num">${money(l.unitPrice, r.agency.currency)}</td>
       <td class="num">${money(l.total, r.agency.currency)}</td>
     </tr>`
@@ -68,15 +89,19 @@ function receiptHtml(r: PublicReceipt): string {
         ? `${money(r.total / rate, 'USD')}`
         : `${money(r.total * rate, 'NIO')}`
       : null
-  const date = r.issueDate ? new Date(r.issueDate).toLocaleDateString('es-NI', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'
+  // Same short es-NI date as the panel print (fmtDate) — matches the PDF.
+  const date = shortDateEs(r.issueDate)
   const agencyName = esc(r.agency.name)
   const logo = r.agency.logoUrl
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">
-<title>Factura #${esc(r.invoiceNumber)} — ${agencyName}</title>
+<title>Factura #${esc(r.invoiceNumber)} - ${agencyName}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 <style>
   :root { --ink:#111; --muted:#6b7280; --line:#e5e7eb; --brand:#FF3B3F; }
   * { box-sizing:border-box; }
-  body { margin:0; background:#f3f4f6; color:var(--ink); font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  body { margin:0; background:#f3f4f6; color:var(--ink); font:15px/1.5 Poppins,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
   .sheet { max-width:720px; margin:24px auto; background:#fff; padding:40px; border:1px solid var(--line); border-radius:12px; }
   .top { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid var(--ink); padding-bottom:16px; margin-bottom:20px; }
   .brand { display:flex; align-items:center; gap:12px; }
@@ -90,6 +115,7 @@ function receiptHtml(r: PublicReceipt): string {
   .meta { text-align:right; }
   .meta .n { font-size:24px; font-weight:800; }
   .meta .l { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+  .meta .d { font-size:12px; color:var(--muted); margin-top:4px; }
   .who { margin-bottom:20px; }
   .who .l { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
   .who .client-details { font-size:12px; color:var(--muted); margin-top:2px; }
@@ -120,11 +146,11 @@ function receiptHtml(r: PublicReceipt): string {
         ${r.agency.phone ? `<div class="phone">No de Telefono: ${esc(formatPhone(r.agency.phone))}</div>` : ''}
       </div>
     </div>
-    <div class="meta"><div class="l">Factura N.º</div><div class="n">${esc(r.invoiceNumber)}</div><div class="l">${esc(date)}</div></div>
+    <div class="meta"><div class="l">Factura No.</div><div class="n">${esc(r.invoiceNumber)}</div><div class="d">${esc(date)}</div></div>
   </div>
   <div class="who">
     <div class="l">Cliente</div>
-    <div>${esc(r.clientName ?? '—')}</div>
+    <div>${esc(r.clientName ?? '-')}</div>
     ${r.clientAddress ? `<div class="client-details">${esc(r.clientAddress)}</div>` : ''}
   </div>
   <table>
@@ -136,7 +162,7 @@ function receiptHtml(r: PublicReceipt): string {
     <div class="row grand"><span>Total</span><span>${money(r.total, r.agency.currency)}</span></div>
     ${altTotal ? `<div class="alt">${altTotal}</div>` : ''}
   </div>
-  <div class="foot">Gracias por su preferencia · ${agencyName}</div>
+  <div class="foot">Gracias por su preferencia - ${agencyName}</div>
 </div>
 </body></html>`
 }
