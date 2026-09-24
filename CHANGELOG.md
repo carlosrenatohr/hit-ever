@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.5] — 2026-09-23
+
+### Changed
+- The WhatsApp PDF downloads as \`Factura #7 — <Agencia>.pdf\` (same wording as the receipt page title in the print/save flow) instead of the ambiguous \`factura-7.pdf\` — RFC 5987 UTF-8 filename.
+
 ## [1.70.4] — 2026-09-23
 
 ### Fixed

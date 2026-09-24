@@ -28,6 +28,20 @@ export function formatPhone(phone: string): string {
   return phone
 }
 
+/**
+ * Downloads name the file like the receipt page title (what the print/save
+ * flow suggests): "Factura #7 — Original Express.pdf". The ASCII fallback stays
+ * simple for old clients; the UTF-8 name ships via RFC 5987 filename*.
+ */
+function receiptFilename(r: PublicReceipt): { ascii: string; utf8: string } {
+  const agency = String(r.agency.name || 'Orbit')
+    .replace(/[\r\n";]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60)
+  return { ascii: `factura-${r.invoiceNumber}.pdf`, utf8: `Factura #${r.invoiceNumber} — ${agency}.pdf` }
+}
+
 function receiptHtml(r: PublicReceipt): string {
   const rows = r.lines
     .map((l) => {
@@ -150,9 +164,10 @@ publicReceipt.get('/:token/pdf', async (c) => {
   const receipt = await svc.publicReceipt(token)
   if (!receipt) return c.text('Recibo no encontrado.', 404)
   const bytes = await buildReceiptPdf(receipt)
+  const name = receiptFilename(receipt)
   return c.body(bytes, 200, {
     'Content-Type': 'application/pdf',
-    'Content-Disposition': `attachment; filename="factura-${receipt.invoiceNumber}.pdf"`,
+    'Content-Disposition': `attachment; filename="${name.ascii}"; filename*=UTF-8''${encodeURIComponent(name.utf8)}`,
     // Per-token content: never cached by the edge, browser or WhatsApp previews.
     'Cache-Control': 'no-store',
   })
