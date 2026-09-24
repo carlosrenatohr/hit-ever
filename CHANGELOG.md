@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.8] — 2026-09-24
+
+### Fixed
+- The invoice number no longer touches the \`Factura No.\` label (label-to-number gap widened from 13pt to 26pt; date pushed down accordingly).
+
 ## [1.70.7] — 2026-09-23
 
 ### Changed

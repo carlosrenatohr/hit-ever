@@ -278,11 +278,11 @@ export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = d
   brandLines.forEach((ln, i) => draw(page, ln.font, ln.size, ln.color, brandX, baselines[i], ln.text))
 
   // Meta right — top-aligned with the brand block, generous spacing (label →
-  // number gap was too tight before).
+  // number gap was too tight before: the 18pt numeral used to kiss the label).
   const metaTop = blockTop - 1
   drawRight(page, font.semibold, 7.5, FAINT, 'FACTURA NO.', metaTop)
-  drawRight(page, font.extrabold, 18, INK, String(r.invoiceNumber), metaTop - 13)
-  drawRight(page, font.regular, 9, MUTED, date, metaTop - 34)
+  drawRight(page, font.extrabold, 18, INK, String(r.invoiceNumber), metaTop - 26)
+  drawRight(page, font.regular, 9, MUTED, date, metaTop - 48)
 
   // border-b-2 (double) under the header
   const dividerY = blockBottom - 14
