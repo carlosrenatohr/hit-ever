@@ -321,20 +321,24 @@ export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = d
   for (const l of r.lines) {
     const firstName =
       l.lineType === 'freight'
-        ? (l.guia ? sanitizePdfText(l.guia) : '') + (l.tracking ? `\nTracking ${sanitizePdfText(l.tracking)}` : '')
+        ? (l.guia ? sanitizePdfText(l.guia) : '') + (l.tracking ? `\n${sanitizePdfText(l.tracking)}` : '')
         : sanitizePdfText(l.description ?? 'Otro cargo')
     const cellLines = firstName.split('\n').slice(0, 3).flatMap((ln) => {
       const wrapped = wrap(ln, font.regular, 10.5, 208)
       return wrapped.length ? wrapped : ['']
     })
-    const rowH = Math.max(16, cellLines.length * 12 + 4)
     cellLines.forEach((ln, i) => draw(page, i === 0 ? font.semibold : font.regular, i === 0 ? 10.5 : 7.5, i === 0 ? INK : MUTED, colFirst, rowY - i * 12, ln))
     draw(page, font.regular, 10.5, INK, colFreight, rowY, l.freightType ? FREIGHT_ES[l.freightType] : '-')
     draw(page, font.regular, 10.5, INK, colLbsRight - font.regular.widthOfTextAtSize(sanitizePdfText(String(l.quantityLbs ?? '-')), 10.5), rowY, String(l.quantityLbs ?? '-'))
     draw(page, font.regular, 10.5, INK, colUnitRight - font.regular.widthOfTextAtSize(sanitizePdfText(money(l.unitPrice, currency)), 10.5), rowY, money(l.unitPrice, currency))
     drawRight(page, font.medium, 10.5, INK, money(l.total, currency), rowY)
-    rowY -= rowH
-    page.drawLine({ start: { x: MARGIN, y: rowY + 2 }, end: { x: PAGE_W - MARGIN, y: rowY + 2 }, thickness: 0.6, color: LINE100 })
+    // Row separator with guaranteed air: 12pt below the LAST text baseline of the
+    // row (tracking line included) and 10pt before the next row's text, so the
+    // line can never overlap a glyph even with wrapped/multi-line cells.
+    const lastBaseline = rowY - (cellLines.length - 1) * 12
+    const dividerY = lastBaseline - 12
+    page.drawLine({ start: { x: MARGIN, y: dividerY }, end: { x: PAGE_W - MARGIN, y: dividerY }, thickness: 0.6, color: LINE100 })
+    rowY = dividerY - 10
     if (rowY < 130) {
       rowY = 130
       break

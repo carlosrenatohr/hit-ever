@@ -68,7 +68,7 @@ function receiptHtml(r: PublicReceipt): string {
     .map((l) => {
       const firstCell =
         l.lineType === 'freight'
-          ? `<span class="guia">${l.guia ? esc(l.guia) : ''}</span>${l.tracking ? `<br><span class="sub">Tracking ${esc(l.tracking)}</span>` : ''}`
+          ? `<span class="guia">${l.guia ? esc(l.guia) : ''}</span>${l.tracking ? `<br><span class="sub">${esc(l.tracking)}</span>` : ''}`
           : esc(l.description ?? 'Otro cargo')
       return `<tr>
       <td>${firstCell}</td>
