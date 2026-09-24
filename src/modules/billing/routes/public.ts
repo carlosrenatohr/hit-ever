@@ -65,8 +65,8 @@ function receiptHtml(r: PublicReceipt): string {
   const altTotal =
     rate && rate > 0
       ? r.agency.currency === 'NIO'
-        ? `≈ ${money(r.total / rate, 'USD')}`
-        : `≈ ${money(r.total * rate, 'NIO')}`
+        ? `${money(r.total / rate, 'USD')}`
+        : `${money(r.total * rate, 'NIO')}`
       : null
   const date = r.issueDate ? new Date(r.issueDate).toLocaleDateString('es-NI', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'
   const agencyName = esc(r.agency.name)

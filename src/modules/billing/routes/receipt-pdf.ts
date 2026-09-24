@@ -131,7 +131,31 @@ async function initWebp(module?: WebAssembly.Module): Promise<void> {
   webpInited = true
 }
 
-type Fetcher = (url: string) => Promise<Response>
+type Fetcher = (url: string, init?: RequestInit) => Promise<Response>
+
+/**
+ * Default logo fetcher: the InsForge storage gateway redirects to a signed CDN
+ * (cdn.insforge.dev) that 403s requests WITHOUT a User-Agent — and Workers fetch
+ * sends none by default. Walk the redirects manually, always sending a UA.
+ */
+async function defaultLogoFetcher(url: string, init?: RequestInit): Promise<Response> {
+  let u: string = url
+  for (let i = 0; i < 5; i++) {
+    const res = await fetch(u, {
+      ...init,
+      redirect: 'manual',
+      headers: { ...(init?.headers ?? {}), 'User-Agent': 'Mozilla/5.0 (compatible; OrbitInvoice/1.0)' },
+    })
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get('location')
+      if (!loc) return res
+      u = new URL(loc, u).toString()
+      continue
+    }
+    return res
+  }
+  return new Response(null, { status: 599 })
+}
 
 /**
  * Fetch the agency logo and embed it (PNG/JPEG natively; WebP decoded on the
@@ -180,7 +204,7 @@ async function drawLogo(
   }
 }
 
-export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = (url) => fetch(url)): Promise<Uint8Array> {
+export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = defaultLogoFetcher): Promise<Uint8Array> {
   const doc = await PDFDocument.create()
   const page = doc.addPage([PAGE_W, PAGE_H])
   const helv = await doc.embedFont(StandardFonts.Helvetica)
@@ -192,8 +216,8 @@ export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = (
   const altTotal =
     rate && rate > 0 && r.total
       ? currency === 'NIO'
-        ? `≈ ${money(r.total / rate, 'USD')}`
-        : `≈ ${money(r.total * rate, 'NIO')}`
+        ? `${money(r.total / rate, 'USD')}`
+        : `${money(r.total * rate, 'NIO')}`
       : null
   const date = r.issueDate
     ? new Date(r.issueDate).toLocaleDateString('es-NI', { year: 'numeric', month: 'long', day: 'numeric' })
