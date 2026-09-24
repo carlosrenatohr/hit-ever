@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.9] — 2026-09-24
+
+### Fixed
+- Row separators in the receipt PDF sit in guaranteed air: 12pt below the last text baseline of each row and 10pt before the next row — no more overlap from the 2nd row on, even with wrapped cells.
+- The tracking number renders without the redundant \`Tracking \` prefix (PDF and HTML receipt).
+
 ## [1.70.8] — 2026-09-24
 
 ### Fixed
