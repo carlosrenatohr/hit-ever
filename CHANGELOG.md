@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.6] — 2026-09-23
+
+### Fixed
+- **Logo in receipts finally works**: the storage gateway redirects to a signed CDN that 403s requests without a User-Agent — and Workers fetch sends none. The logo fetcher now walks redirects manually with a UA header (verified in workerd locally: 200, PNG).
+- The secondary currency line shows just the symbol+amount (\`C$3,700.00\`), no \`≈\`, no rate.
+
 ## [1.70.5] — 2026-09-23
 
 ### Changed
