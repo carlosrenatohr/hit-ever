@@ -22,7 +22,7 @@ describe('InsforgeCustomerRepo', () => {
 
     expect(requested[0]).toContain('/api/database/records/billing_clients?')
     expect(requested[0]).toContain('organization_id=eq.hit')
-    expect(decodeURIComponent(requested[0])).toContain('name=ilike.*[aá][nñ][aá]*')
+    expect(decodeURIComponent(requested[0])).toContain('name_unaccent=ilike.*ana*')
     expect(requested[0]).toContain('packages(count)')
     expect(requested[0]).toContain('packages.deleted_at=is.null')
     expect(requested[1]).toContain('/rpc/customer_weight_stats')
@@ -51,7 +51,7 @@ describe('InsforgeCustomerRepo', () => {
 
     await new InsforgeCustomerRepo('https://db.test', 'key').list({ organizationId: 'hit', search: 'Mendez' })
 
-    expect(decodeURIComponent(requested[0])).toContain('name=ilike.*m[eé][nñ]d[eé]z*')
+    expect(decodeURIComponent(requested[0])).toContain('name_unaccent=ilike.*mendez*')
   })
 
   it('builds an OR status filter and drops the legacy toReview flag when statuses are set', async () => {
