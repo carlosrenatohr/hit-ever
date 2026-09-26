@@ -22,7 +22,7 @@ describe('InsforgeCustomerRepo', () => {
 
     expect(requested[0]).toContain('/api/database/records/billing_clients?')
     expect(requested[0]).toContain('organization_id=eq.hit')
-    expect(requested[0]).toContain('name=ilike.*Ana*')
+    expect(decodeURIComponent(requested[0])).toContain('name=ilike.*[aá][nñ][aá]*')
     expect(requested[0]).toContain('packages(count)')
     expect(requested[0]).toContain('packages.deleted_at=is.null')
     expect(requested[1]).toContain('/rpc/customer_weight_stats')
@@ -36,6 +36,22 @@ describe('InsforgeCustomerRepo', () => {
       ],
       count: 1,
     })
+  })
+
+  it('folds accents in the name search so Mendez matches Méndez', async () => {
+    const requested: string[] = []
+    vi.stubGlobal('fetch', async (input: Request | string) => {
+      const url = typeof input === 'string' ? input : input.url
+      requested.push(url)
+      if (url.includes('/rpc/customer_weight_stats')) {
+        return new Response(JSON.stringify({}), { status: 200 })
+      }
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'content-range': '*/0' } })
+    })
+
+    await new InsforgeCustomerRepo('https://db.test', 'key').list({ organizationId: 'hit', search: 'Mendez' })
+
+    expect(decodeURIComponent(requested[0])).toContain('name=ilike.*m[eé][nñ]d[eé]z*')
   })
 
   it('builds an OR status filter and drops the legacy toReview flag when statuses are set', async () => {

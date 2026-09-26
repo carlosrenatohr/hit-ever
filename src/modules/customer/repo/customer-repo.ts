@@ -1,4 +1,5 @@
 import type { CloudflareBindings } from '../../../types/index.js'
+import { toIlikePattern } from '../../../lib/text.js'
 import type { BillingClient } from '../../billing/domain/types.js'
 import type { AuditFilter, AuditLogEntry } from '../../config/domain/types.js'
 import type { CreateCustomerInput, CustomerAggregateStats, CustomerDeletePreview, CustomerEventsPage, CustomerListFilter, CustomerPage, CustomerStatus, CustomerWeightStats, CustomerWithStats, UpdateCustomerInput } from '../domain/types.js'
@@ -221,7 +222,8 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     // Same for their packages: the count embed must skip deleted_at (no !inner → a client with 0 live packages still lists).
     parts.push('packages.deleted_at=is.null')
     if (filter.search) {
-      const search = filter.search.replace(/[(),*]/g, '')
+      // Accent-insensitive: Mendez also matches Méndez (char classes ride on ILIKE).
+      const search = toIlikePattern(filter.search.replace(/[(),*]/g, ''))
       parts.push(`name=ilike.*${encodeURIComponent(search)}*`)
     }
     if (filter.statuses?.length) {
