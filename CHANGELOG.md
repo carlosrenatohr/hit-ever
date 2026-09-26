@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.11] — 2026-09-26
+
+### Added
+- Invoice archiving as a soft delete (`POST /invoices/:id/archive`): stamps `deleted_at`/`deleted_by`/`delete_reason` and hides the invoice from every operational read (list, detail, mutations, reports, public receipt); releases its active package links so the packages become re-invoiceable again; logs the invoice + per-package audit events. Migration `20260926090950_invoice-soft-delete.sql` (additive, partial index) — archived invoices 404 on every other mutation; restore is future work.
+
+### Fixed
+- Customer name search and label filters now match ignoring accents (worker-side normalization).
+
 ## [1.70.10] — 2026-09-24
 
 ### Changed
