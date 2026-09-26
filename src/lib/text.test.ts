@@ -1,13 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { toIlikePattern } from './text.js'
+import { foldAccents } from './text.js'
 
-describe('toIlikePattern', () => {
-  it('expands vowels and ñ into LIKE char classes', () => {
-    expect(toIlikePattern('Mendez')).toBe('m[eé][nñ]d[eé]z')
-    expect(toIlikePattern('25001234')).toBe('25001234')
+describe('foldAccents', () => {
+  it('folds Spanish accents to ASCII lowercase', () => {
+    expect(foldAccents('Rodríguez Méndez Núñez')).toBe('rodriguez mendez nunez')
   })
 
-  it('builds the same pattern from an uppercase term (ILIKE folds the pattern)', () => {
-    expect(toIlikePattern('MENDEZ')).toBe(toIlikePattern('Mendez'))
+  it('leaves plain terms untouched', () => {
+    expect(foldAccents('25001234')).toBe('25001234')
+  })
+
+  it('folds uppercase input (ILIKE folds both sides anyway)', () => {
+    expect(foldAccents('MENDEZ')).toBe('mendez')
+  })
+
+  it('produces a plain pattern — no LIKE bracket classes (they do not match in this cluster)', () => {
+    expect(foldAccents('Ana').includes('[')).toBe(false)
   })
 })
