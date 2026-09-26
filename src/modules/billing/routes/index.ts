@@ -281,6 +281,26 @@ billing.post(
   },
 )
 
+/** POST /api/billing/invoices/:id/archive — soft delete: hides the invoice from
+ *  lists/detail/receipt/reports (deleted_at) and releases its active package
+ *  links so the packages are re-invoiced. An archived invoice 404s on every
+ *  other mutation. */
+billing.post(
+  '/invoices/:id/archive',
+  billingAuth('invoices:write'),
+  zValidator('json', z.object({ reason: z.string().max(500).optional() }).optional()),
+  async (c) => {
+    const svc = new BillingService(getBillingRepo(c.env))
+    try {
+      const body = c.req.valid('json')
+      await svc.archiveInvoice(c.req.param('id'), body?.reason ?? null, c.get('billingSession').agency, c.get('billingSession').email ?? 'panel')
+      return Res.ok(c, { id: c.req.param('id'), archived: true })
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
+
 /** POST /api/billing/invoices/:id/close — financial lock: freezes lines/links and
  * enables payment registration. One-way; a closed invoice only takes payments or VOID. */
 billing.post('/invoices/:id/close', billingAuth('invoices:write'), async (c) => {
