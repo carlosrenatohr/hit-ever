@@ -203,6 +203,9 @@ export interface BillingRepository {
   setInvoiceStatus(invoiceId: string, status: InvoiceStatus, patch?: Row): Promise<void>
   /** Patch header fields (issue_date, observations, totals) on an open invoice. */
   patchInvoiceHeader(invoiceId: string, organizationId: string, patch: Row): Promise<void>
+  /** Archive (soft delete): stamps deleted_at/deleted_by/delete_reason. Org-scoped
+   *  and guarded by deleted_at=is.null, so a double archive is a no-op at SQL level. */
+  setInvoiceArchived(invoiceId: string, organizationId: string, deletedBy: string, reason: string | null): Promise<void>
   /**
    * Atomic close: patches ONLY while the invoice still matches what the caller
    * read (open + unchanged status), scoped to its organization. True = this
@@ -425,6 +428,14 @@ export class InsforgeBillingRepo implements BillingRepository {
     await this.patch('invoices', `id=eq.${encodeURIComponent(invoiceId)}&organization_id=eq.${encodeURIComponent(organizationId)}`, patch)
   }
 
+  async setInvoiceArchived(invoiceId: string, organizationId: string, deletedBy: string, reason: string | null): Promise<void> {
+    await this.patch(
+      'invoices',
+      `id=eq.${encodeURIComponent(invoiceId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null`,
+      { deleted_at: new Date().toISOString(), deleted_by: deletedBy, delete_reason: reason },
+    )
+  }
+
   async closeInvoiceIfOpen(invoiceId: string, organizationId: string, expectedStatus: InvoiceStatus, newStatus: InvoiceStatus, closedAt: string, closedBy: string | null): Promise<boolean> {
     // Compare-and-set: the filters pin the exact state the caller read
     // (open + status unchanged, in-organization). A concurrent close/void
@@ -462,6 +473,7 @@ export class InsforgeBillingRepo implements BillingRepository {
     const pageSize = Math.min(1000, Math.max(1, filter.pageSize ?? 25))
     const parts: string[] = ['select=*', 'order=fiscal_year.desc,invoice_number.desc']
     parts.push(`organization_id=eq.${encodeURIComponent(filter.organizationId)}`)
+    parts.push('deleted_at=is.null')
     if (filter.status) parts.push(`status=eq.${filter.status}`)
     if (filter.fiscalYear) parts.push(`fiscal_year=eq.${filter.fiscalYear}`)
     if (filter.clientId) parts.push(`client_id=eq.${filter.clientId}`)
@@ -485,7 +497,7 @@ export class InsforgeBillingRepo implements BillingRepository {
 
   async getInvoiceBundle(invoiceId: string, organizationId?: string): Promise<InvoiceBundle | null> {
     const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
-    const headers = await this.get<InvoiceHeaderDbRow>('invoices', `id=eq.${encodeURIComponent(invoiceId)}&limit=1${orgFilter}`)
+    const headers = await this.get<InvoiceHeaderDbRow>('invoices', `id=eq.${encodeURIComponent(invoiceId)}&limit=1&deleted_at=is.null${orgFilter}`)
     const header = headers[0]
     if (!header) return null
     const [lines, payments, packages] = await Promise.all([
@@ -501,7 +513,7 @@ export class InsforgeBillingRepo implements BillingRepository {
   }
 
   async getPublicBundle(token: string): Promise<InvoiceBundle | null> {
-    const headers = await this.get<InvoiceHeaderDbRow>('invoices', `public_token=eq.${encodeURIComponent(token)}&limit=1`)
+    const headers = await this.get<InvoiceHeaderDbRow>('invoices', `public_token=eq.${encodeURIComponent(token)}&limit=1&deleted_at=is.null`)
     const header = headers[0]
     if (!header) return null
     const [lines, packages] = await Promise.all([
@@ -517,7 +529,7 @@ export class InsforgeBillingRepo implements BillingRepository {
     // old fan-out blew the limit and 500'd. `limit=5000` covers any realistic range.
     type Row = InvoiceHeaderDbRow & { invoice_line_items: LineItemDbRow[] }
     const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
-    const rows = await this.get<Row>('invoices', `issue_date=gte.${from}&issue_date=lte.${to}${orgFilter}&select=*,invoice_line_items(*)&limit=5000`)
+    const rows = await this.get<Row>('invoices', `issue_date=gte.${from}&issue_date=lte.${to}${orgFilter}&deleted_at=is.null&select=*,invoice_line_items(*)&limit=5000`)
     return rows.map(({ invoice_line_items, ...header }) => ({
       header: header as InvoiceHeaderDbRow,
       lines: invoice_line_items ?? [],
@@ -527,30 +539,30 @@ export class InsforgeBillingRepo implements BillingRepository {
   }
 
   async getExceptions(organizationId?: string): Promise<ExceptionsPayload> {
-    type Emb = { invoice_number: number; fiscal_year: number; client_name_raw: string | null }
+    type Emb = { invoice_number: number; fiscal_year: number; client_name_raw: string | null; deleted_at?: string | null }
     const orgFilter = organizationId ? `&organization_id=eq.${encodeURIComponent(organizationId)}` : ''
     // Off-catalog line prices.
     const offRows = await this.get<{ invoice_id: string; unit_price: number; freight_type: string; invoices: Emb }>(
       'invoice_line_items',
-      `price_off_catalog=eq.true&select=invoice_id,unit_price,freight_type,invoices(invoice_number,fiscal_year,client_name_raw)${orgFilter}`,
+      `price_off_catalog=eq.true&select=invoice_id,unit_price,freight_type,invoices(invoice_number,fiscal_year,client_name_raw,deleted_at)${orgFilter}`,
     )
     // Quarantined payment cells.
     const qRows = await this.get<{ invoice_id: string; raw: string | null; invoices: Emb }>(
       'invoice_payments',
-      `quarantined=eq.true&select=invoice_id,raw,invoices(invoice_number,fiscal_year,client_name_raw)${orgFilter}`,
+      `quarantined=eq.true&select=invoice_id,raw,invoices(invoice_number,fiscal_year,client_name_raw,deleted_at)${orgFilter}`,
     )
     // Invoices carrying OC tokens but with no linked package (orphans).
     const withOc = await this.get<{ id: string; invoice_number: number; fiscal_year: number; client_name_raw: string | null; tracking_orders: string[] }>(
       'invoices',
-      `status=neq.VOID&select=id,invoice_number,fiscal_year,client_name_raw,tracking_orders&limit=2000${orgFilter}`,
+      `status=neq.VOID&deleted_at=is.null&select=id,invoice_number,fiscal_year,client_name_raw,tracking_orders&limit=2000${orgFilter}`,
     )
     const linkedRows = await this.get<{ invoice_id: string }>('invoice_packages', `select=invoice_id&limit=5000${orgFilter}`)
     const linked = new Set(linkedRows.map((r) => r.invoice_id))
     const clients = await this.get<{ id: string; name: string }>('billing_clients', `to_review=eq.true&select=id,name${orgFilter}`)
 
     return {
-      offCatalog: offRows.map((r) => ({ invoiceId: r.invoice_id, invoiceNumber: r.invoices?.invoice_number, fiscalYear: r.invoices?.fiscal_year, client: r.invoices?.client_name_raw ?? null, detail: `${r.freight_type} @ ${r.unit_price}/lb` })),
-      quarantinedPayments: qRows.map((r) => ({ invoiceId: r.invoice_id, invoiceNumber: r.invoices?.invoice_number, fiscalYear: r.invoices?.fiscal_year, client: r.invoices?.client_name_raw ?? null, detail: r.raw ?? '(vacío)' })),
+      offCatalog: offRows.filter((r) => !r.invoices?.deleted_at).map((r) => ({ invoiceId: r.invoice_id, invoiceNumber: r.invoices?.invoice_number, fiscalYear: r.invoices?.fiscal_year, client: r.invoices?.client_name_raw ?? null, detail: `${r.freight_type} @ ${r.unit_price}/lb` })),
+      quarantinedPayments: qRows.filter((r) => !r.invoices?.deleted_at).map((r) => ({ invoiceId: r.invoice_id, invoiceNumber: r.invoices?.invoice_number, fiscalYear: r.invoices?.fiscal_year, client: r.invoices?.client_name_raw ?? null, detail: r.raw ?? '(vacío)' })),
       orphanInvoices: withOc
         .filter((i) => (i.tracking_orders?.length ?? 0) > 0 && !linked.has(i.id))
         .map((i) => ({ invoiceId: i.id, invoiceNumber: i.invoice_number, fiscalYear: i.fiscal_year, client: i.client_name_raw ?? null, detail: (i.tracking_orders ?? []).join(', ') })),

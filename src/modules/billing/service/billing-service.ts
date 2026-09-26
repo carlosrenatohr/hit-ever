@@ -885,6 +885,27 @@ export class BillingService {
     return (await this.get(id, organizationId))!
   }
 
+  /**
+   * Archive (soft delete): hides the invoice from every operational read (list,
+   * detail, mutations, reports, public receipt) and releases its active package
+   * links so the packages become re-invoiced-able — otherwise archiving a
+   * mistaken DRAFT would trap them behind an invoice the panel can no longer
+   * open. Mirrors voidInvoice's audit trail (invoice event + per-package event);
+   * restore is future work (same stance as ClientService.delete).
+   */
+  async archiveInvoice(id: string, reason: string | null, organizationId: string, actor: string): Promise<void> {
+    const b = await this.repo.getInvoiceBundle(id, organizationId)
+    if (!b) throw new Error('Invoice not found.')
+    await this.repo.setInvoiceArchived(id, organizationId, actor, reason)
+    await this.repo.releasePackageLinksByInvoice(id, 'system:archive')
+    for (const p of b.packages) {
+      if (p.active !== false) {
+        await this.repo.insertPackageEvent(p.package_id, `Factura #${b.header.invoice_number} archivada`, new Date().toISOString())
+      }
+    }
+    await this.repo.insertInvoiceEvent(id, organizationId, 'Factura archivada', reason, actor)
+  }
+
   async linkPackage(id: string, packageId: string, actor: string, organizationId: string): Promise<InvoiceView> {
     // Closed invoices are frozen: no package may be attached after the lock.
     const before = await this.repo.getInvoiceBundle(id, organizationId)
