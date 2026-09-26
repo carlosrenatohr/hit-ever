@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.12] — 2026-09-26
+
+### Fixed
+- Customer autocomplete restored (global Clientes search + create-package picker): the accent-insensitive search shipped in 1.70.11 used LIKE bracket classes (`[aá]`), which do not match in this cluster (verified: `'a' ilike '[a]'` = f on PG 15.18/en_US.utf8), silently returning zero rows. Now the search filters a generated `name_unaccent` column (`unaccent(name)`) with an accent-folded plain query — accent-insensitive and functional. Migration `20260926104843_customer-search-unaccent.sql`.
+
 ## [1.70.11] — 2026-09-26
 
 ### Added
