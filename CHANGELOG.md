@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.71.0] — 2026-09-29
+
 ### Added
 - `docs/scaling-and-hosting.md` §**Cloudflare Queues**: recomendación escrita de trabajo diferido (diferida, no implementada — decisión 2026-09-29): señales para activarla, diseño (un proveedor por mensaje, productores = ticks de cron, retries + DLQ, verdad en InsForge), límites de Free y por qué no sustituye a Upstash ni a la escalera de hosting.
 
