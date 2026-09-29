@@ -3,15 +3,24 @@
 -- ============================================================================
 -- Additive migration. Creates a complete demo agency with:
 --   1. Agency row (solo-guegue)
---   2. Provider assignment (global_connection → solo-guegue)
+--   2. Provider assignment (global_connection → solo-guegue) — SUPERSEDED by
+--      provider_agencies (T5); dejado como no-op documentado (ver §2).
 --   3. Rate tables (AIR + MAR estándar, REGULAR tier only)
 --   4. Billing clients (5 Nicaraguan names)
---   5. Packages (12, varied statuses)
+--   5. Packages (12, varied statuses) — solo si global_connection existe
 --   6. Tracking events (2-4 per package)
 --
 -- All inserts use ON CONFLICT DO NOTHING for idempotency.
 -- Provider is reassigned from 'hit' to 'solo-guegue' (single-tenant for now;
 -- see task T5 for M:N provider_agencies migration).
+--
+-- FIX 2026-09-29: esta migración erroraba en cada apply — (a) §2 seteaba
+-- `providers.updated_at`, columna inexistente (db/0001_init.sql) → fallaba en
+-- prod y en entornos nuevos; (b) §5 hacía RAISE si global_connection no existía
+-- (su insert está comentado en db/0001 a propósito). Corregido: §2 es no-op
+-- documentado (T5 lo supersede) y §5 omite los paquetes demo con NOTICE cuando
+-- el provider falta. Cero cambios de data en prod (la migración ya estaba
+-- aplicada y registrada; GC conserva org 'hit').
 -- ============================================================================
 
 -- ─── 1. Agency ───────────────────────────────────────────────────────────────
@@ -20,12 +29,13 @@ values ('solo-guegue', 'Solo Guegue')
 on conflict (slug) do nothing;
 
 -- ─── 2. Provider — reassign Global Connection to solo-guegue ─────────────────
--- GC is currently assigned to 'hit'. Reassign so the demo agency has its own
--- provider. This is a temporary 1:N mapping; T5 will create provider_agencies.
-update providers
-set organization_id = 'solo-guegue',
-    updated_at = now()
-where code = 'global_connection';
+-- ⚠️ FIX 2026-09-29: la versión original hacía `set organization_id = 'solo-guegue',
+-- updated_at = now()` — pero `providers` NO tiene columna `updated_at`
+-- (db/0001_init.sql) → la sentencia erroraba en cada apply (verificado en prod).
+-- Además, esta asignación manual 1:N quedó SUPERSEDIDA por la junction
+-- `provider_agencies` (migración 20260904110000_provider-agencies-mn);
+-- `providers.organization_id` está deprecado. GC sigue en org 'hit'; el vínculo
+-- proveedor↔agencia de la demo vive en provider_agencies, no acá. No-op a propósito.
 
 -- ─── 3. Rate tables — one per freight type, REGULAR tier only ────────────────
 -- The agency owner creates additional tiers (ESPECIAL, VIP, etc.) from the
@@ -86,7 +96,12 @@ begin
   -- Resolve provider_id
   select id into v_provider from providers where code = 'global_connection';
   if v_provider is null then
-    raise exception 'global_connection provider not found';
+    -- FIX 2026-09-29: antes RAISE — rompía el apply en entornos/CI nuevos donde
+    -- GC no existe (db/0001_init.sql deja el insert comentado a propósito; GC se
+    -- da de alta manual en prod). Ahora: NOTICE + skip de los paquetes demo;
+    -- si GC existe (prod), el comportamiento es idéntico.
+    raise notice 'Solo Guegue demo: provider global_connection ausente — paquetes demo omitidos (agregar el provider para sembrarlos).';
+    return;
   end if;
 
   -- Resolve client IDs

@@ -10,6 +10,30 @@ Registro de problemas conocidos del worker y su causa raíz, para no re-investig
 
 ---
 
+## 2026-09-29 · Migración `20260904020000` (demo Solo Guegue) erroraba en cada apply
+
+**Síntoma.** La cadena de migraciones (envs nuevos, `up --all`) fallaba en
+`migrations/20260904020000_solo-gueguense-demo-data.sql` con 2 errores — §2
+(`update providers … updated_at`) y §5 (RAISE `global_connection provider not found`) —
+aplicando el seed solo a medias (sentencia a sentencia).
+
+**Diagnóstico (verificado con datos).** (a) `providers` no tiene la columna `updated_at`
+(no está en `db/0001_init.sql` ni la agrega ninguna migración — chequeado contra el
+esquema real de prod); además, la asignación manual 1:N quedó supersedida por la junction
+`provider_agencies` (T5, `20260904110000`) y `providers.organization_id` está deprecado.
+(b) `global_connection` no existe en entornos nuevos: su insert está comentado en
+`db/0001_init.sql` a propósito (requiere host real; en prod se dio de alta manual).
+
+**Causa.** Bug de schema preexistente + RAISE duro contra una dependencia opcional.
+
+**Fix (2026-09-29).** §2 → no-op documentado (sin `updated_at`, sin reassign — T5 lo
+supersede); §5 → si GC falta, `raise notice` + skip de los paquetes demo (con GC presente
+el comportamiento es idéntico). Validador local: cadena completa (db + 68 migraciones)
+aplica con 0 errores. **Cero impacto en prod**: la migración ya estaba registrada como
+aplicada (tracker) y GC conserva org `hit`.
+
+---
+
 ## 2026-09-11 · Guía 220643 (y 7 más) nunca llegaron a la BD — hueco de ingesta 16-ago → 02-sep
 
 **Síntoma.** La guía GC 220643 (DANIEL VILCHEZ, casillero 1538, recibida en MIA el 19-ago) no
