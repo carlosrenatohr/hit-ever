@@ -197,19 +197,21 @@ ver §2.5); completar datos de facturación (RUC/dirección) en Config > Informa
 
 ## 6. Colisiones manual ↔ scraper (qué garantiza el sistema)
 
-Desde `20260923015138` (guard `packages_tenant_guard` + preflight en `create_package`), la operación
-manual y el scraper conviven sin pisarse:
+Desde `20260923015138` (guard `packages_tenant_guard`) y `20260929051106` (identidad por tenant,
+ADR-013), la operación manual y el scraper conviven sin pisarse:
 
 | Garantía | Mecanismo | Dónde se ve |
 |---|---|---|
 | El scraper **no roba ni mueve** paquetes entre tenants | trigger congela `organization_id` (escape: GUC `hit.allow_org_move='on'` solo para backfills deliberados) | Auditoría: `package.org_move_blocked` |
 | El scraper **no borra** valores manuales | trigger restaura el valor si el update trae `NULL` ("scrape nunca borra"; dedup de 24h para no inundar) | Auditoría: `package.scrape_values_preserved` + evento en el timeline del paquete |
-| Crear un paquete **no pisa** el ledger de otra org | `create_package` detecta `(provider_id, almacen_id)` ajeno → bloquea + audita (devuelve error JSON, no raise) | Auditoría: `package.create.blocked_cross_org` + mensaje claro en el modal |
-| Tracking duplicado en otra org | se crea igual, pero **avisa** (no bloquea) | Auditoría: `package.create.tracking_duplicate` + evento en la fila preexistente + `warning` ámbar en el modal |
+| Una guía existe **una sola vez por tenant** | `unique (organization_id, almacen_id)`; crear a mano mergea idempotentemente y **restaura** si la fila estaba dada de baja | `create_package` devuelve el id de la fila existente |
+| La misma guía en **otro tenant** existe en silencio | insert normal: nunca bloqueo, aviso ni audit cross-tenant (esos caminos se eliminaron de `create_package`) | No aparece nada — por diseño |
+| El scraper **no mergea** guías de OTRO proveedor dentro del tenant | pre-check en `upsertPackages` (+1 GET por batch de upsert): guía dueña de otro provider → se omite | Auditoría: `package.ingest_skipped` + log del Worker |
+| RPCs por guía (estado, tags, notas, cliente, servicio, delete) | filtran `organization_id` de la sesión — imposible escribir sobre la guía de otra org | Mensajes en español: "No encontramos la guía % en tu agencia" |
 
-El duplicado de **guía en otra org** es un **bloqueo** con error claro (nunca un update mudo); el
-**tracking duplicado** es un **aviso** (se crea y todos se enteran). El admin ve todo en Config >
-Auditoría (org-scoped) y en el timeline de cada paquete.
+El admin ve la actividad en Config > Auditoría (org-scoped) y en el timeline de cada paquete.
+La API legacy `/admin/*` (Bearer) queda **sin org-scope**: con la misma guía en dos tenants
+resuelve la fila más reciente — conocido, documentado en ADR-013.
 
 ---
 

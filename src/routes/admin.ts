@@ -169,7 +169,10 @@ function db(c: any) {
   return getRepository(c.env)
 }
 
-/** POST /admin/packages/:guia/status — body { status, note? } (e.g. mark "entregado" in GC) */
+/** POST /admin/packages/:guia/status — body { status, note? } (e.g. mark "entregado" in GC)
+ * ADR-013: admin API legacy SIN org-scope (Bearer interno) — con guías duplicadas entre
+ * tenants el lookup resuelve la fila más reciente. El panel y el track público SÍ filtran org.
+ */
 admin.post(
   '/packages/:guia/status',
   zValidator('json', z.object({ status: STATUS_ENUM, note: z.string().optional() })),

@@ -24,6 +24,9 @@ export interface CloudflareBindings {
     // Auth for internal endpoints (admin / email hook)
     ADMIN_SECRET: string
 
+    // Public track: tenant default (ADR-013) — ?org= lo pisa por request; si falta, 'hit'
+    PUBLIC_TRACK_ORG?: string
+
     // Cloudflare Browser Rendering (future binding)
     // BROWSER: Fetcher  // uncomment when Browser Rendering API is enabled
 }

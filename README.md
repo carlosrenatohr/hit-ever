@@ -34,7 +34,7 @@ The upstream tolerates only one active session per account, so all scraping — 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `GET` | `/` | — | API root / info |
-| `GET` | `/track/:id` | public | Public tracking. Minimal payload from InsForge (no PII/mailbox/value/photo). `200 / 404 / 422 / 429 / 503`. |
+| `GET` | `/track/:id` | public | Public tracking scoped to ONE tenant via `?org=<slug>` (default: Worker var `PUBLIC_TRACK_ORG`, then `hit` — ADR-013). Minimal payload from InsForge (no PII/mailbox/value/photo). `200 / 404 / 422 / 429 / 503`. |
 | `GET` | `/admin/health` | — | Health check (`environment: configured \| missing-env`) |
 | `POST` | `/admin/ingest` | Bearer | Run ingestion. `?pages=N&days=D` or chunked `?offset=N&days=D`. |
 | `POST` | `/admin/packages/:guia/status` | Bearer | Manual status override (wins over scraped). |
@@ -73,6 +73,18 @@ All responses share one envelope. Add `?pretty=1` for indented JSON.
 ```
 
 `status` (internal enum): `en_almacen | parcial | en_transito | en_destino | entregado | excepcion | desconocido`. `statusLabel` is the Spanish user label and `step` (1..4, `0` for excepción/desconocido) drives the site's 4-step bar (Miami → En tránsito → Nicaragua → Entregado). A manual override (`/admin/packages/:guia/status`) wins over the scraped status.
+
+#### Tenant scope (ADR-013) + batch-ingest cost
+
+A guía is unique **per tenant** — the same number may exist in other agencies, silently. This route reads exactly one tenant:
+
+1. `?org=<slug>` per request (validated `^[a-z0-9-]{1,63}$`; malformed → `422 INVALID_ORG`),
+2. else the optional Worker var `PUBLIC_TRACK_ORG`,
+3. else `hit`.
+
+`hit-cargo.com` always passes `?org=hit`. Scoping happens inside the existing lookup query — no extra subrequests on this route.
+
+Batch ingestion, on the other hand, pays **+1 read per upsert batch** for the cross-provider pre-check (`InsforgeClient.upsertPackages`): a guía already owned by a *different* provider in the same tenant is skipped and audited (`audit_logs` action `package.ingest_skipped`), never merged — two providers shipping the same number are two physical packages.
 
 ---
 

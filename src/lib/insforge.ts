@@ -145,16 +145,21 @@ export class InsforgeClient implements TrackingRepository {
   }
 
   // ─── Public read ───────────────────────────────────────────────────────────────
-  async getPackageByGuia(guia: string): Promise<PackageRecord | null> {
-    // almacen_id is NOT unique on its own (uniqueness is provider_id+almacen_id, and Everest/GC
-    // warehouse numbers can collide). Order by most-recently-scraped so the lookup is deterministic
-    // instead of returning an arbitrary provider's row. Soft-deleted packages are out of public track.
-    const rows = await this.get<DbPackageRow>('packages', `almacen_id=eq.${encodeURIComponent(guia)}&deleted_at=is.null&order=scraped_at.desc&limit=1`)
+  async getPackageByGuia(guia: string, org?: string): Promise<PackageRecord | null> {
+    // ADR-013: la identidad de la guía es (organization_id, almacen_id) — la misma guía
+    // existe en otros tenants en silencio, así que todo read que conoce el org DEBE
+    // filtrarlo (el público/panel pasa org; la legacy admin API queda sin filtro).
+    // order=scraped_at.desc se mantiene como defensa (determinismo pre-migración).
+    // Soft-deleted packages are out of public track.
+    const orgQ = org ? `&organization_id=eq.${encodeURIComponent(org)}` : ''
+    const rows = await this.get<DbPackageRow>('packages', `almacen_id=eq.${encodeURIComponent(guia)}&deleted_at=is.null${orgQ}&order=scraped_at.desc&limit=1`)
     return rows[0] ? rowToPackage(rows[0]) : null
   }
 
-  async getPackageByTracking(tracking: string): Promise<PackageRecord | null> {
-    const rows = await this.get<DbPackageRow>('packages', `tracking_number=eq.${encodeURIComponent(tracking)}&deleted_at=is.null&limit=1`)
+  async getPackageByTracking(tracking: string, org?: string): Promise<PackageRecord | null> {
+    // Mismo org-scope que getPackageByGuia (ADR-013).
+    const orgQ = org ? `&organization_id=eq.${encodeURIComponent(org)}` : ''
+    const rows = await this.get<DbPackageRow>('packages', `tracking_number=eq.${encodeURIComponent(tracking)}&deleted_at=is.null${orgQ}&limit=1`)
     return rows[0] ? rowToPackage(rows[0]) : null
   }
 
@@ -228,7 +233,7 @@ export class InsforgeClient implements TrackingRepository {
     return out
   }
 
-  /** Upsert a package (conflict on provider_id, almacen_id). Returns its id. */
+  /** Upsert a package (conflict on organization_id, almacen_id — guía identity per tenant, ADR-013). Returns its id. */
   async upsertPackage(pkg: Record<string, unknown>): Promise<string | null> {
     const rows = await this.upsertPackages([pkg])
     return rows[0]?.id ?? null
@@ -238,16 +243,23 @@ export class InsforgeClient implements TrackingRepository {
    * Bulk upsert packages in ONE request, returning the rows (with ids) via
    * `Prefer: return=representation`. Used by the page ingester to stay well under the
    * Worker subrequest limit (1 call for the whole page instead of 2-3 per package).
+   *
+   * ADR-013: el conflict target es (organization_id, almacen_id) — una guía por tenant.
+   * Antes del upsert se corre un pre-check (+1 GET por org): una guía de ESTE tenant ya
+   * registrada con OTRO provider son dos paquetes físicos distintos → se omite del batch
+   * (nunca se mergea) y se audita en audit_logs. Ver excludeCrossProviderDuplicates.
    */
   async upsertPackages(rows: Record<string, unknown>[]): Promise<{ id: string; almacen_id: string }[]> {
     if (rows.length === 0) return []
+    const sendable = await this.excludeCrossProviderDuplicates(rows)
+    if (sendable.length === 0) return []
     // PostgREST bulk insert requires every object in the array to share the SAME keys
     // (else PGRST102 "All object keys must match"). Rows are not uniform: only packages with
     // a RETIRADO note carry manual_status*. Group by key signature and send one request per
     // group — this both satisfies PostgREST and keeps rows without an override from ever
     // sending manual_status, so a merge-duplicates upsert never clobbers an admin override.
     const groups = new Map<string, Record<string, unknown>[]>()
-    for (const r of rows) {
+    for (const r of sendable) {
       const sig = Object.keys(r).sort().join(',')
       const g = groups.get(sig)
       if (g) g.push(r)
@@ -255,7 +267,7 @@ export class InsforgeClient implements TrackingRepository {
     }
     const out: { id: string; almacen_id: string }[] = []
     for (const group of groups.values()) {
-      const res = await fetch(`${this.base}/packages?on_conflict=provider_id,almacen_id`, {
+      const res = await fetch(`${this.base}/packages?on_conflict=organization_id,almacen_id`, {
         method: 'POST',
         headers: { ...this.headers, Prefer: 'resolution=merge-duplicates,return=representation' },
         body: JSON.stringify(group),
@@ -264,6 +276,72 @@ export class InsforgeClient implements TrackingRepository {
       out.push(...((await res.json()) as { id: string; almacen_id: string }[]))
     }
     return out
+  }
+
+  /**
+   * ADR-013 (regla de negocio): dentro de un tenant, una guía propiedad de OTRO provider
+   * jamás se mergea — serían dos paquetes físicos distintos. Filtra esas filas del batch
+   * y deja un audit_logs (`package.ingest_skipped`) en la tenant dueña para que el admin
+   * vea por qué la guía no se actualizó. Filas sin (org, guía) previo o con el MISMO
+   * provider pasan sin cambios (merge idempotente). 1 GET por org del batch — el costo de
+   * subrequests queda documentado en README.md §`GET /track/:id`.
+   */
+  private async excludeCrossProviderDuplicates(rows: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
+    const keyed = rows.filter((r) => r.organization_id && r.almacen_id && r.provider_id)
+    if (keyed.length === 0 || keyed.length !== rows.length) return rows // sin datos de org/provider → sin pre-check
+    const byOrg = new Map<string, Set<string>>()
+    for (const r of keyed) {
+      const org = String(r.organization_id)
+      const ids = byOrg.get(org)
+      if (ids) ids.add(String(r.almacen_id))
+      else byOrg.set(org, new Set([String(r.almacen_id)]))
+    }
+    // (org|guía) → provider_id dueño. Incluye filas dadas de baja: siguen ocupando la unique.
+    const owner = new Map<string, string>()
+    for (const [org, ids] of byOrg) {
+      const q = `organization_id=eq.${encodeURIComponent(org)}&almacen_id=in.(${[...ids].map((i) => encodeURIComponent(i)).join(',')})&select=almacen_id,provider_id`
+      const res = await fetch(`${this.base}/packages?${q}`, { headers: this.headers })
+      if (!res.ok) throw new Error(`Insforge cross-provider pre-check → ${res.status}: ${(await res.text()).slice(0, 300)}`)
+      for (const e of (await res.json()) as { almacen_id: string; provider_id: string }[]) {
+        owner.set(`${org}|${e.almacen_id}`, e.provider_id)
+      }
+    }
+    const kept: Record<string, unknown>[] = []
+    const skipped: { row: Record<string, unknown>; existingProviderId: string }[] = []
+    for (const r of rows) {
+      const prior = r.organization_id && r.almacen_id ? owner.get(`${r.organization_id}|${r.almacen_id}`) : undefined
+      if (prior !== undefined && prior !== String(r.provider_id)) skipped.push({ row: r, existingProviderId: prior })
+      else kept.push(r)
+    }
+    if (skipped.length) await this.auditSkippedDuplicates(skipped)
+    return kept
+  }
+
+  /** Audit best-effort: un fallo aquí no debe tumbar la ingesta (el skip ya ocurrió; queda el log). */
+  private async auditSkippedDuplicates(skipped: { row: Record<string, unknown>; existingProviderId: string }[]): Promise<void> {
+    try {
+      const payload = skipped.map(({ row, existingProviderId }) => ({
+        organization_id: row.organization_id,
+        actor_type: 'system',
+        action: 'package.ingest_skipped',
+        entity_type: 'package',
+        entity_id: String(row.almacen_id),
+        metadata: {
+          almacen_id: row.almacen_id,
+          incoming_provider_id: row.provider_id,
+          existing_provider_id: existingProviderId,
+          reason: 'guía ya registrada en esta tenant con otro proveedor — no se mergea (ADR-013)',
+        },
+      }))
+      const res = await fetch(`${this.base}/audit_logs`, {
+        method: 'POST',
+        headers: { ...this.headers, Prefer: 'return=minimal' },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) console.error(`[insforge] ingest skip audit failed (${res.status}):`, (await res.text()).slice(0, 300))
+    } catch (e) {
+      console.error('[insforge] ingest skip audit failed:', (e as Error).message)
+    }
   }
 
   /** Replaces a package's events (dedup by unique(package_id, occurred_at, description)). */
