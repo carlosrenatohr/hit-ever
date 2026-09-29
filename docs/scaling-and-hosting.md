@@ -17,6 +17,9 @@ conclusión. Relacionado: [known-issues.md](known-issues.md) (incidente del lím
   quedan en Cloudflare** (el edge es ideal para lectura global/cacheada); **el scraper se muda a un
   droplet de DigitalOcean** (proceso Node siempre-encendido + cron, sin límites de subrequests/tiempo).
 - **AWS: saltearla.** Sin beneficio a esta escala y con factura enredada.
+- **Queues (trabajo diferido):** recomendación **escrita**, no implementada (decisión 2026-09-29).
+  Hoy nada del Worker es trabajo asíncrono masivo; el diseño y las señales de activación están en
+  [§Cloudflare Queues](#cloudflare-queues--recomendación-escrita-diferido).
 
 ## Por qué el scraper no encaja bien en serverless
 
@@ -50,6 +53,54 @@ throttleado, cron del sistema, sesión persistente, sin límites de subrequests 
 
 **El techo real:** escalar "masivo" el scraping = más **cuentas de proveedor** (sesiones paralelas), un
 **feed/API real** de Everest/GC (lo mejor), o proxies (frágil, gato-y-ratón). No más CPU.
+
+## Cloudflare Queues — recomendación escrita (diferido)
+
+**Decisión (2026-09-29): no lo implementamos todavía — el diseño queda acá.** Hoy nada del Worker es
+trabajo asíncrono masivo: no hay loop de polling, la ingesta corre en ticks de cron (4 paquetes por
+tick) y el panel nunca espera un trabajo largo. Meter una cola ahora sería una pieza operativa más
+(con su config, sus logs y su debugging) sin ningún problema que resolver.
+
+**Señales para activarlo (con que una se cumpla, basta):**
+
+- El cron se queda sin presupuesto (subrequests / ticks / CPU) aunque se baje el batch, o aparece un
+  cuarto proveedor y los 5 triggers de Free ya no alcanzan.
+- Aparece trabajo *disparable por evento* que hoy no existe: re-scrape de N guías pedido por un
+  usuario desde el panel, facturación masiva en background, correos diferidos, backfill de histórico.
+- El panel necesita responderle rápido al usuario (202) y terminar el trabajo fuera de la request.
+
+**Diseño propuesto (si se activa):**
+
+- Cola `ingest`: **producer** = ticks de cron o un endpoint staff; **consumer** = el handler
+  `queue(batch)` del mismo Worker, con `max_batch_size` chico (1–5) → **un proveedor por mensaje**,
+  para no romper la regla vigente de *un proveedor por invocación* (límite de 50 subrequests).
+- Los ticks de cron pasan a ser **productores baratos**: encolan en vez de ejecutar. El techo de 5
+  triggers deja de ser el cuello de botella: 5 ticks pueden encolar muchas más pasadas de las que
+  podrían ejecutar dentro del propio tick.
+- `max_retries` + cola DLQ (`ingest-dlq`) para no perder guías a medio scrapear. La verdad del
+  trabajo (qué se ingirió, qué falló) vive en InsForge — `audit_logs` / estado de paquetes —, la cola
+  solo dispara.
+
+```jsonc
+// wrangler.jsonc — esquema de referencia (validar contra la doc de Cloudflare al momento de implementar)
+"queues": {
+  "producers": [{ "binding": "INGEST_QUEUE", "queue": "ingest" }],
+  "consumers": [{ "queue": "ingest", "max_batch_size": 5, "max_retries": 3, "dead_letter_queue": "ingest-dlq" }],
+}
+```
+
+**Coste y límites:** Queues está disponible en Workers **Free** desde 2026-02-04 con ~10k
+operaciones/día (docs de Cloudflare, verificado 2026-09) — sobra con holgura para ticks de cron; el
+techo real sería el volumen de mensajes, no la cadencia.
+
+**Por qué no lo resolvemos con Upstash:** este Worker ya usa Upstash Redis (sesiones + rate-limit),
+pero ese camino **no** está en el path panel→InsForge y tampoco saca subrequests de la invocación del
+scraper. La cola tiene que vivir dentro de la misma plataforma para acortar la invocación, no en un
+servicio aparte que además agrega un salto de red.
+
+**Queues no reemplaza la escalera de hosting:** si el límite sigue siendo Cargotrack (sesión única,
+throttle, no se paraleliza), el salto sigue siendo Workers Paid → droplet (§Opciones de hosting).
+Queues resuelve *cuánto trabajo se puede encolar*, no *cuánto puede scrapear Cargotrack*.
 
 ## Pre-configurar `limits.subrequests` (¿hace ruido en Free?)
 

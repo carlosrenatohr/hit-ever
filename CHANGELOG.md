@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `docs/scaling-and-hosting.md` §**Cloudflare Queues**: recomendación escrita de trabajo diferido (diferida, no implementada — decisión 2026-09-29): señales para activarla, diseño (un proveedor por mensaje, productores = ticks de cron, retries + DLQ, verdad en InsForge), límites de Free y por qué no sustituye a Upstash ni a la escalera de hosting.
+
+### Added
 - `set_package_weight(p_guia, p_weight_lb)` y `delete_package_tag(p_guia, p_label, p_value)` — migración `20260929105752_package-weight-and-tag-delete.sql`. Dos RPC guía-keyed con el molde vigente (`is_writer()` + org-scope por ADR-013 + mensajes en español + `audit_logs`) para editar el peso de un paquete y borrar etiquetas desde el panel, donde `packages`/`package_tags` solo tienen política de SELECT.
 - El peso se escribe directo en `weight_lb`, **sin** columna override: el valor manual vive hasta que el próximo ingest/refresh del proveedor lo reescriba (decisión de diseño del módulo de paquetería — evita 2 columnas nuevas en todas las filas). El cambio queda como nota legible en `package_notes` ("Peso actualizado: X → Y lb") y en `audit_logs`.
 - El borrado de etiquetas es idempotente (dos clics o una etiqueta ya borrada no fallan) y audita solo cuando borró filas; `package_tags` no tiene unicidad por `(package_id, label)`, así que borra todas las coincidencias y devuelve el total.
