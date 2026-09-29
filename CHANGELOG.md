@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.70.13] — 2026-09-29
+
 ### Changed
 - Package identity is now per tenant: `unique (organization_id, almacen_id)` replaces `unique (provider_id, almacen_id)` (migration `20260929051106_package-unique-per-tenant.sql`, ADR-013). The same guía in two tenants is allowed and never surfaced to users; within a tenant a manual create merges idempotently (and restores a soft-deleted row), while ingestion never merges a guía owned by a *different* provider — it skips it and audits `package.ingest_skipped` (+1 read per upsert batch).
 - `create_package` no longer blocks cross-tenant guías (`cross_org_conflict`) nor warns about cross-tenant tracking duplicates (removed with step 5, including `package.create.tracking_duplicate`); its validation errors are now user-facing Spanish copy.
