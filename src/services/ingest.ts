@@ -403,6 +403,8 @@ export class IngestService {
     if (pkgRows.length === 0) return 0
 
     // BULK writes: one package upsert (returns ids) + one event upsert — minimal subrequests.
+    // ADR-013: una guía de este tenant ya registrada con OTRO provider se omite en el upsert
+    // (sin id → sus eventos no se registran); ver InsforgeClient.upsertPackages (pre-check + audit).
     const upserted = await this.db.upsertPackages(pkgRows)
     const idByAlmacen = new Map(upserted.map((u) => [u.almacen_id, u.id]))
     const eventRows: Record<string, unknown>[] = []

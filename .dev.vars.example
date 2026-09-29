@@ -26,5 +26,9 @@ UPSTASH_REDIS_TOKEN=
 # OpenAI (optional: AI parsing fallback, not used yet)
 OPENAI_API_KEY=
 
-# Secret for internal endpoints (/admin/*, /hooks/*). Make it long and random.
+SECRET for internal endpoints (/admin/*, /hooks/*). Make it long and random.
 ADMIN_SECRET=change-me-to-a-long-random-string
+
+# Public track: default tenant for GET /track/:id when the request has no ?org= (ADR-013).
+# Optional — falls back to "hit". Must be a slug: [a-z0-9-].
+PUBLIC_TRACK_ORG=hit

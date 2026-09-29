@@ -16,6 +16,22 @@ const trackParamSchema = z.object({
         .regex(/^[\w\-]+$/, 'Invalid tracking ID format'),
 })
 
+// ─── Tenant scope (ADR-013) ──────────────────────────────────────────────────
+// La misma guía existe en varios tenants en silencio: el track público debe leer
+// solo UNA tenant. Orden: ?org=<slug> > PUBLIC_TRACK_ORG (env) > 'hit'.
+// ?org= malformado → null (el caller responde 422); env malformado → log + default
+// para no tumbar el endpoint por un error de config.
+const TRACK_ORG_DEFAULT = 'hit'
+const ORG_SLUG_RE = /^[a-z0-9-]{1,63}$/
+
+export function resolveTrackOrg(queryOrg: string | undefined, envOrg: string | undefined): string | null {
+    const q = queryOrg?.trim()
+    if (q) return ORG_SLUG_RE.test(q) ? q : null
+    const e = envOrg?.trim()
+    if (e && !ORG_SLUG_RE.test(e)) console.error(`[track] PUBLIC_TRACK_ORG inválido ("${e}") — usando "${TRACK_ORG_DEFAULT}"`)
+    return e && ORG_SLUG_RE.test(e) ? e : TRACK_ORG_DEFAULT
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 const track = new Hono<{ Bindings: CloudflareBindings }>()
 
@@ -29,8 +45,9 @@ const track = new Hono<{ Bindings: CloudflareBindings }>()
  *
  * Security:
  *  - Per-IP rate limit (anti-abuse/enumeration).
- *  - The DB only contains HIT's packages (mailbox filter during ingestion),
- *    so a foreign id simply does not exist → 404 (bounded surface).
+ *  - Multi-tenant (ADR-013): lee SOLO la tenant resuelta (?org= > env
+ *    PUBLIC_TRACK_ORG > 'hit'); la misma guía en otra tenant no es visible acá y
+ *    un id ajeno simplemente no existe → 404 (bounded surface).
  *  - Returns a MINIMAL payload: no mailbox (casillero), customer name, value, or photo.
  */
 track.get(
@@ -43,6 +60,12 @@ track.get(
     async (c) => {
         const { id } = c.req.valid('param')
         const start = Date.now()
+
+        // ─── Tenant scope (ADR-013): resolver ANTES de tocar la DB ───────────
+        const org = resolveTrackOrg(c.req.query('org'), c.env.PUBLIC_TRACK_ORG)
+        if (org === null) {
+            return Res.err(c, 'INVALID_ORG', 'Org inválida: usá un slug de agencia (letras, números y guiones).', 422)
+        }
 
         // ─── Rate limit ───────────────────────────────────────────────────────
         const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
@@ -57,8 +80,8 @@ track.get(
             const db = getRepository(c.env)
 
             // Primary by waybill number (guía); fallback by carrier tracking.
-            let pkg = await db.getPackageByGuia(id)
-            if (!pkg) pkg = await db.getPackageByTracking(normalizeTracking(id))
+            let pkg = await db.getPackageByGuia(id, org)
+            if (!pkg) pkg = await db.getPackageByTracking(normalizeTracking(id), org)
 
             if (!pkg || !pkg.id) {
                 return Res.err(

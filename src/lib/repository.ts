@@ -10,8 +10,9 @@ import type { EventRecord, PackageRecord, Provider, ShipmentStatus } from '../ty
 // Adapters: InsforgeClient (PostgREST-style REST) and MemoryRepository (in-memory demo).
 
 export interface TrackingRepository {
-  getPackageByGuia(guia: string): Promise<PackageRecord | null>
-  getPackageByTracking(tracking: string): Promise<PackageRecord | null>
+  /** ADR-013: la guía se repite entre tenants — pasar `org` cuando se conozca (público/panel). */
+  getPackageByGuia(guia: string, org?: string): Promise<PackageRecord | null>
+  getPackageByTracking(tracking: string, org?: string): Promise<PackageRecord | null>
   getEvents(packageId: string): Promise<EventRecord[]>
   getActiveProviders(): Promise<Provider[]>
   /** provider_id → agency links (provider_agencies junction). A NULL casillero_filter
@@ -105,13 +106,19 @@ export class MemoryRepository implements TrackingRepository {
     for (const [k, v] of Object.entries(SEED_EVENTS)) this.events.set(k, v.map((e) => ({ ...e })))
   }
 
-  async getPackageByGuia(guia: string): Promise<PackageRecord | null> {
-    return this.packages.get(guia) ?? null
+  async getPackageByGuia(guia: string, org?: string): Promise<PackageRecord | null> {
+    const p = this.packages.get(guia) ?? null
+    // Demo: un seed sin organizationId matchea cualquier org (repo single-tenant).
+    if (p && org && p.organizationId && p.organizationId !== org) return null
+    return p
   }
 
-  async getPackageByTracking(tracking: string): Promise<PackageRecord | null> {
+  async getPackageByTracking(tracking: string, org?: string): Promise<PackageRecord | null> {
     for (const p of this.packages.values()) {
-      if ((p.trackingNumber ?? '').toUpperCase() === tracking.toUpperCase()) return p
+      if ((p.trackingNumber ?? '').toUpperCase() !== tracking.toUpperCase()) continue
+      // Mismo criterio org que getPackageByGuia (ADR-013).
+      if (org && p.organizationId && p.organizationId !== org) continue
+      return p
     }
     return null
   }

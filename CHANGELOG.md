@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Package identity is now per tenant: `unique (organization_id, almacen_id)` replaces `unique (provider_id, almacen_id)` (migration `20260929051106_package-unique-per-tenant.sql`, ADR-013). The same guía in two tenants is allowed and never surfaced to users; within a tenant a manual create merges idempotently (and restores a soft-deleted row), while ingestion never merges a guía owned by a *different* provider — it skips it and audits `package.ingest_skipped` (+1 read per upsert batch).
+- `create_package` no longer blocks cross-tenant guías (`cross_org_conflict`) nor warns about cross-tenant tracking duplicates (removed with step 5, including `package.create.tracking_duplicate`); its validation errors are now user-facing Spanish copy.
+- Guía-keyed write RPCs (`set_manual_status`, `add_package_tag`, `add_package_note`, `set_package_client`, `set_package_service`, `delete_package`) resolve the guía **within the session tenant** (SECURITY DEFINER without an org filter would allow cross-tenant writes once guías repeat) and return Spanish messages.
+
+### Security
+- `set_package_client` / `set_package_service` re-guarded with `is_writer()` — the `viewer` role could call them directly (same class as the `20260711130000` fix for the original three RPCs).
+
+### Added
+- `GET /track/:id` accepts `?org=<slug>` (fallback: Worker var `PUBLIC_TRACK_ORG`, then `hit`) so the public track reads exactly one tenant; malformed org → `422 INVALID_ORG`.
+
 ## [1.70.12] — 2026-09-26
 
 ### Fixed
