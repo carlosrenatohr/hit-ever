@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isVoidClient, normalizeClientName } from './client.js'
+import { isVoidClient, normalizeClientName, cleanClientDisplay, clientMatchKey } from './client.js'
 import { freightFromTipo, parseOc } from './freight.js'
 import { normalizePayment } from './payment.js'
 
@@ -61,5 +61,29 @@ describe('parseOc', () => {
   it('best-effort splits a float where a comma was eaten', () => {
     expect(parseOc(663714.6648)).toEqual(['663714', '6648'])
     expect(parseOc(655218)).toEqual(['655218'])
+  })
+})
+
+describe('clientMatchKey', () => {
+  it('matches real prod pairs: case drift, HAZMAT prefix, accents (guía 278447 case)', () => {
+    // package referencia_name "ANTONY" vs client "Antony" (hit)
+    expect(clientMatchKey('ANTONY')).toBe(clientMatchKey('Antony'))
+    // "HAZMAT FERNANDA QUINTANILLA" vs client "Fernanda Quintanilla" (hit)
+    expect(clientMatchKey('HAZMAT FERNANDA QUINTANILLA')).toBe(clientMatchKey('Fernanda Quintanilla'))
+    // accent drift both directions
+    expect(clientMatchKey('María José Ruiz')).toBe(clientMatchKey('Maria Jose Ruiz'))
+    // whitespace collapse
+    expect(clientMatchKey('  ANTONY   ')).toBe('antony')
+  })
+  it('never equals for distinct names', () => {
+    expect(clientMatchKey('Antony')).not.toBe(clientMatchKey('Antonia'))
+    expect(clientMatchKey('Antony')).not.toBe(clientMatchKey('Fernanda Quintanilla'))
+  })
+})
+
+describe('cleanClientDisplay', () => {
+  it('drops the HAZMAT tag and collapses whitespace, preserving casing', () => {
+    expect(cleanClientDisplay('HAZMAT FERNANDA QUINTANILLA')).toBe('FERNANDA QUINTANILLA')
+    expect(cleanClientDisplay('  Carlos  Andrés ')).toBe('Carlos Andrés')
   })
 })
