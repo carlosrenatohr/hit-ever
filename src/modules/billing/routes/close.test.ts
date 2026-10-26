@@ -85,7 +85,7 @@ describe('payments respect the lock', () => {
     const calls = stubDb(openHeader)
     const res = await post('/api/billing/invoices/i1/payments', { method: 'CASH', currency: 'USD', amount: 5 })
     expect(res.status).toBe(422)
-    expect(((await res.json()) as { error: { message: string } }).error.message).toMatch(/Close the invoice/i)
+    expect(((await res.json()) as { error: { message: string } }).error.message).toMatch(/cierra la factura/i)
     expect(calls.some((c) => c.method === 'POST' && c.url.includes('/records/invoice_payments'))).toBe(false)
   })
   it('accepts a payment on a closed invoice (the lock only gates the before)', async () => {
