@@ -21,6 +21,8 @@ interface DbPackageRow {
   raw_status: string | null
   service_type: ServiceType | null
   weight_lb: number | null
+  /** GENERATED: staff override if set, else scraped — reads prefer it. */
+  effective_weight_lb: number | null
   volume_cf: number | null
   pieces: number | null
   dimensions: string | null
@@ -72,7 +74,7 @@ function rowToPackage(r: DbPackageRow): PackageRecord {
     status: r.status,
     rawStatus: r.raw_status,
     serviceType: r.service_type,
-    weightLb: r.weight_lb,
+    weightLb: r.effective_weight_lb ?? r.weight_lb,
     volumeCf: r.volume_cf,
     pieces: r.pieces,
     dimensions: r.dimensions,
