@@ -10,7 +10,55 @@ Registro de problemas conocidos del worker y su causa raíz, para no re-investig
 
 ---
 
-## 2026-09-29 · Migración `20260904020000` (demo Solo Guegue) erroraba en cada apply
+## 2026-10-24 · Facturas parciales por explosión de subrequests (bulk billing)
+
+**Síntoma.** El bulk de facturación dejaba facturas vivas a medias: 3 facturas (incluida
+la #85, con 11 paquetes) tenían líneas de flete pero solo algunos vínculos activos en
+`invoice_packages`; el resto de los POST murió por el límite de 50 subrequests del plan
+Free. Sin error visible para el staff: la factura parecía normal, cobraba menos.
+
+**Diagnóstico.** La creación era `8+5N` subrequests (un POST por paquete para vínculo,
+evento y nota): con N=11 → 63 fetches; la factura moría a mitad de los vínculos.
+
+**Causa.** POSTs por paquete en loop, sin presupuesto ni rollback.
+
+**Fix (2026-10-26, Fases 0-2).** (0) Migración de reparación
+`20261026214605_repair-invoice-package-links.sql` — vínculos activos faltantes para las
+facturas vivas (#85: 11/11; 8 rows stamped `system:repair-links`). (1) Batching:
+presupuesto constante ≈14 fetches (vínculos/eventos/notas por lote, rates cacheadas por
+request) + guard `links == packages` + `rollbackPartialInvoice` que libera vínculos,
+archiva la factura y audita con código de soporte `F-XXXXXXXX`; el caller recibe 422
+`INVOICE_CREATION_REVERTED`. (2) `integrityWarning` en la vista de factura + banner ámbar
+en el panel. Ver [`billing-invoice-integrity.md`](billing-invoice-integrity.md) y
+[ADR-014](../../docs/adr/014.md).
+
+---
+
+## 2026-10-26 · Cadena de migraciones: orphans + `create_package` owner `postgres`
+
+**Síntoma.** `insforge migrations up --all` fallaba: (a) 4 migraciones aplicadas a prod
+pero sin registrar en el tracker (orphans con timestamps futuros bloqueaban la cadena);
+(b) tras ordenar la cadena, falla en `create_package`: `must be owner of function
+create_package`.
+
+**Diagnóstico.** (a) Migraciones aplicadas statement-by-statement durante incidentes
+previos nunca fueron registradas. (b) `create_package` fue creada fuera de la CLI
+(owner `postgres`); `create or replace` exige ser owner — la CLI corre como
+`project_admin`.
+
+**Causa.** Drift entre prod y el tracker + ownership postgres de funciones tempranas.
+
+**Fix.** (a) Orphans re-timestampeados al pasado y registrados; el orphan
+`20260923015138` (borrado) fue rescatado dentro de
+`20261026220000_package-create-hardening-prereqs.sql`. (b) **Limitación permanente
+documentada**: las migraciones nuevas se aplican a prod statement por statement con
+`npx @insforge/cli db query` (el proxy rechaza multi-statement y comentarios); los envs
+nuevos aplican la cadena completa desde archivos. Verificar ownership post-apply
+(`pg_proc.proowner = project_admin`). `dashboard_stats` quedó owner `project_admin` al
+re-aplicarse `20261026221000` — ya no bloquea nada.
+
+---
+
 
 **Síntoma.** La cadena de migraciones (envs nuevos, `up --all`) fallaba en
 `migrations/20260904020000_solo-gueguense-demo-data.sql` con 2 errores — §2

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Facturas parciales (incidente 2026-10-24)**: el bulk de facturación dejaba facturas
+  vivas a medias al explotar el límite de 50 subrequests (POSTs por paquete, `8+5N`).
+  Reparación idempotente de vínculos (`20261026214605`), presupuesto de subrequests
+  constante (≈14, lote por tabla), guard `links == packages`, `rollbackPartialInvoice`
+  con código de soporte `F-XXXXXXXX` (422 `INVOICE_CREATION_REVERTED`) y flag
+  `integrityWarning` + banner ámbar en el panel. Mensajes de validación del staff en
+  español. Ver `docs/billing-invoice-integrity.md`.
+
+### Changed
+- **Peso efectivo** (`20261026230000`): `packages.weight_override_lb` + GENERATED
+  `effective_weight_lb`; el peso editado a mano ya no lo pisa el scrape. Billing, track
+  público y stats de peso consumen el efectivo.
+- **Match de clientes**: referencias↔clientes comparadas insensibles a mayúsculas,
+  acentos y tags HAZMAT (`clientMatchKey`); la clave de dedupe
+  `billing_clients.name_normalized` no cambia.
+
 ## [1.71.0] — 2026-09-29
 
 ### Added

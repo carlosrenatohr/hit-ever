@@ -27,6 +27,8 @@
   // invocation with the list-walk — that's why it's a separate, less-frequent schedule.
   // The scheduled handler branches on event.cron. Near-real-time freshness comes from the
   // email trigger (→ /hooks); frequency trades freshness against Cargotrack re-logins.
+  // Billing bulk is also budget-bounded: ~14 constant fetches per invoice invocation
+  // (batched links/events/notes POSTs + cached rates) — see docs/billing-invoice-integrity.md.
   "triggers": {
     "crons": ["0 */2 * * *", "30 */2 * * *", "15 */6 * * *", "45 */6 * * *"]
   }
