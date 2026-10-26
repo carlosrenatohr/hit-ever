@@ -11,6 +11,7 @@ import { margin, round2 } from '../domain/calc.js'
 import type { Currency, FreightType, InvoiceStatus, PaymentBank, PaymentMethod, PriceTier } from '../domain/enums.js'
 import { SERVICE_TYPE_TO_FREIGHT } from '../domain/enums.js'
 import { normalizeClientName } from '../ingest/normalize/client.js'
+import { BillingError } from '../domain/errors.js'
 import type { BillingRepository, ExceptionsPayload, InvoiceBundle } from '../repo/billing-repo.js'
 
 const EPS = 0.01
@@ -374,6 +375,63 @@ export class BillingService {
   }
 
   /**
+   * Compensating rollback for a half-created invoice: release the links created
+   * so far and archive the header. Packages go back to billable and no ghost
+   * invoice survives. Best effort — failures inside the rollback are logged,
+   * never re-thrown (the original error must win).
+   */
+  private async rollbackPartialInvoice(args: {
+    invoiceId: string
+    invoiceNumber: number
+    organizationId: string
+    actor: string
+    flow: 'createInvoice' | 'createBulkInvoice'
+    packageCount: number
+    linkedCount: number | null
+    supportCode: string
+    error: unknown
+  }): Promise<void> {
+    const { invoiceId, invoiceNumber, organizationId, actor, flow, packageCount, linkedCount, supportCode, error } = args
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(JSON.stringify({
+      evt: 'billing.invoice.failed',
+      flow,
+      org: organizationId,
+      actor,
+      invoiceId,
+      invoiceNumber,
+      packageCount,
+      linkedCount,
+      supportCode,
+      error: message,
+    }))
+    try {
+      await this.repo.releasePackageLinksByInvoice(invoiceId, 'system:creation-failed')
+      await this.repo.setInvoiceArchived(invoiceId, organizationId, 'system:creation-failed', `Creación incompleta revertida automáticamente (${supportCode})`)
+      // One best-effort audit row on the failure path only (never on the happy
+      // path): filter "billing.invoice.failed" in Workers Logs for the live trail.
+      await this.repo.insertAuditLog({
+        organizationId,
+        actorEmail: actor,
+        action: 'invoice.create_failed',
+        entityType: 'invoice',
+        entityId: invoiceId,
+        metadata: { flow, invoice_number: invoiceNumber, package_count: packageCount, linked_count: linkedCount, support_code: supportCode, error: message },
+      })
+    } catch (rollbackError) {
+      console.error(JSON.stringify({
+        evt: 'billing.invoice.rollback_failed',
+        flow,
+        org: organizationId,
+        invoiceId,
+        invoiceNumber,
+        supportCode,
+        error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+      }))
+    }
+  }
+
+  /**
    * Validate + resolve a set of packages for billing against one invoice.
    * Enforces org scope (via getPackagesForBulk), invoiceable status, client
    * match (client_id, or referencia_name for legacy rows), positive weight,
@@ -381,6 +439,7 @@ export class BillingService {
    * fields used to stamp each freight line and link the package.
    */
   private async resolveInvoicePackages(
+
     packageIds: string[],
     clientId: string | null,
     clientName: string | null,
@@ -392,6 +451,9 @@ export class BillingService {
     if (packageIds.length === 0) return result
     const pkgs = await this.repo.getPackagesForBulk(packageIds, organizationId)
     const byId = new Map(pkgs.map((p) => [p.id, p]))
+    // One batched read for the whole set — a per-package lookup here was the
+    // fetch that scaled N subrequests and killed large invoices mid-loop.
+    const activeLinks = await this.repo.getActivePackageLinks(packageIds)
     for (const id of packageIds) {
       const p = byId.get(id)
       if (!p) throw new Error(`Package ${id} not found in your agency.`)
@@ -411,9 +473,9 @@ export class BillingService {
       if (!p.effective_service_type && !p.service_type) {
         throw new Error(`Package ${p.almacen_id} has no service type.`)
       }
-      const active = await this.repo.getActivePackageLink(id)
-      if (active && active.invoiceId !== excludeInvoiceId) {
-        throw new Error(`Package ${p.almacen_id} is already invoiced (invoice ${active.invoiceId}).`)
+      const active = activeLinks.get(id)
+      if (active && active !== excludeInvoiceId) {
+        throw new Error(`Package ${p.almacen_id} is already invoiced (invoice ${active}).`)
       }
       result.set(id, {
         guia: p.almacen_id,
@@ -447,6 +509,8 @@ export class BillingService {
   }> {
     const pkgs = await this.repo.getPackagesForClient(clientId, organizationId)
     const invoiceable = new Set(['en_destino', 'entregado'])
+    // One batched read for the whole client (subrequest budget, not N).
+    const activeLinks = await this.repo.getActivePackageLinks(pkgs.map((p) => p.id))
     const packages: Array<{
       packageId: string
       guia: string | null
@@ -467,7 +531,7 @@ export class BillingService {
       } else if (!p.effective_service_type && !p.service_type) {
         reason = 'Sin servicio'
       } else {
-        const active = await this.repo.getActivePackageLink(p.id)
+        const active = activeLinks.get(p.id)
         if (active) reason = 'Ya facturado'
       }
       packages.push({
@@ -611,7 +675,6 @@ export class BillingService {
     const profit = round2(lineRows.reduce((s, r) => s + r.profit, 0))
 
     const invoiceNumber = await this.repo.nextInvoiceNumber(fiscalYear, organizationId)
-
     // Only an explicit DRAFT stays open (editable, payments blocked) until
     // closeInvoice() locks it. Anything else is final at creation and is
     // auto-closed here — the panel's "Nueva factura" flow (ISSUED) keeps
@@ -639,12 +702,44 @@ export class BillingService {
       paid_usd: 0,
     })
     await this.repo.insertLineItems(invoiceId, lineRows)
-    for (const pkgId of packageIds) {
-      // matched_oc carries the guide: the linked-packages view must show the
-      // guía, never a raw UUID.
-      await this.repo.linkPackage(invoiceId, pkgId, 'manual', packageInfo.get(pkgId)?.guia ?? null, actor, organizationId)
-      // Package history entry: the invoice trace must live with the package too.
-      await this.repo.insertPackageEvent(pkgId, `Factura #${invoiceNumber} generada`, new Date().toISOString())
+    // Everything from here on is post-header work that must complete together:
+    // lines, links, package events and the invoice event. If any step fails the
+    // invoice is compensated (archived + links released) so no half-invoice
+    // ghost survives blocking reports while letting the packages re-bill.
+    const supportCode = `F-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
+    let linkedCount: number | null = null
+    try {
+      // matched_oc carries the guía: the linked-packages view must show the
+      // guía, never a raw UUID. Batched posts keep the fetch budget constant.
+      await this.repo.linkPackages(
+        invoiceId,
+        packageIds.map((pkgId) => ({ packageId: pkgId, matchedOc: packageInfo.get(pkgId)?.guia ?? null })),
+        'manual',
+        actor,
+        organizationId,
+      )
+      const now = new Date().toISOString()
+      await this.repo.insertPackageEvents(
+        packageIds.map((pkgId) => ({ packageId: pkgId, description: `Factura #${invoiceNumber} generada`, occurredAt: now })),
+      )
+      // Integrity guard: linking fewer packages than the invoice bills silently
+      // re-opens those packages for a second invoice (double billing).
+      const linked = await this.repo.listActiveLinkedPackageIds(invoiceId)
+      linkedCount = linked.length
+      const missing = packageIds.filter((pkgId) => !linked.includes(pkgId))
+      if (missing.length > 0) {
+        throw new Error(`only linked ${linked.length} of ${packageIds.length} packages (${missing.length} missing)`)
+      }
+    } catch (e) {
+      await this.rollbackPartialInvoice({
+        invoiceId, invoiceNumber, organizationId, actor,
+        flow: 'createInvoice', packageCount: packageIds.length, linkedCount, supportCode, error: e,
+      })
+      throw new BillingError(
+        'INVOICE_CREATION_REVERTED',
+        `No se pudo crear la factura completa. Se revirtió automáticamente: no se creó ninguna factura. Reintenta; si vuelve a pasar, envía este código a soporte: ${supportCode}.`,
+        422,
+      )
     }
     await this.repo.insertInvoiceEvent(invoiceId, organizationId, 'Factura generada', `Total ${total.toFixed(2)} USD`, actor)
     return (await this.get(invoiceId, organizationId))!
@@ -1049,6 +1144,9 @@ export class BillingService {
     const foundIds = new Set(pkgs.map((p) => p.id))
     const reasons: Array<{ packageId: string; guia: string | null; code: string; message: string }> = []
 
+    // One batched read instead of one per package (subrequest budget).
+    const activeLinks = await this.repo.getActivePackageLinks(packageIds)
+
     // Missing or wrong-org packages
     for (const id of packageIds) {
       if (!foundIds.has(id)) {
@@ -1080,7 +1178,7 @@ export class BillingService {
       if (name) clientName = name
 
       // Active invoice check
-      const active = await this.repo.getActivePackageLink(p.id)
+      const active = activeLinks.get(p.id)
       if (active) {
         reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_ALREADY_INVOICED', message: `Package ${p.almacen_id} is already invoiced.` })
       }
@@ -1140,11 +1238,12 @@ export class BillingService {
       throw new Error(`${bad.length} package(s) are not invoiceable (must be en destino or entregado).`)
     }
 
-    // Validate: no package already has an active invoice link.
+    // Validate: no package already has an active invoice link (one batched read).
+    const activeLinks = await this.repo.getActivePackageLinks(packageIds)
     for (const p of pkgs) {
-      const active = await this.repo.getActivePackageLink(p.id)
+      const active = activeLinks.get(p.id)
       if (active) {
-        throw new Error(`Package ${p.almacen_id} is already invoiced (invoice ${active.invoiceId}).`)
+        throw new Error(`Package ${p.almacen_id} is already invoiced (invoice ${active}).`)
       }
     }
 
@@ -1289,11 +1388,41 @@ export class BillingService {
 
     await this.repo.insertLineItems(invoiceId, lineRows)
 
-    // Link every package + emit timeline events. matched_oc carries the guía
-    // so the linked-packages view shows the guide, never a raw UUID.
-    for (const l of preview.lines) {
-      await this.repo.linkPackage(invoiceId, l.packageId, 'manual', l.guia, actor, organizationId)
-      await this.repo.insertPackageEvent(l.packageId, `Factura #${invoiceNumber} generada`, new Date().toISOString())
+    // Link every package + emit timeline events, batched and guarded like the
+    // guided flow: any failure compensates the whole invoice (archive + release).
+    const supportCode = `F-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
+    const bulkPackageIds = preview.lines.map((l) => l.packageId)
+    let linkedCount: number | null = null
+    try {
+      // matched_oc carries the guía so the linked-packages view shows the guide,
+      // never a raw UUID.
+      await this.repo.linkPackages(
+        invoiceId,
+        preview.lines.map((l) => ({ packageId: l.packageId, matchedOc: l.guia })),
+        'manual',
+        actor,
+        organizationId,
+      )
+      const now = new Date().toISOString()
+      await this.repo.insertPackageEvents(
+        bulkPackageIds.map((pkgId) => ({ packageId: pkgId, description: `Factura #${invoiceNumber} generada`, occurredAt: now })),
+      )
+      const linked = await this.repo.listActiveLinkedPackageIds(invoiceId)
+      linkedCount = linked.length
+      const missing = bulkPackageIds.filter((pkgId) => !linked.includes(pkgId))
+      if (missing.length > 0) {
+        throw new Error(`only linked ${linked.length} of ${bulkPackageIds.length} packages (${missing.length} missing)`)
+      }
+    } catch (e) {
+      await this.rollbackPartialInvoice({
+        invoiceId, invoiceNumber, organizationId, actor,
+        flow: 'createBulkInvoice', packageCount: bulkPackageIds.length, linkedCount, supportCode, error: e,
+      })
+      throw new BillingError(
+        'INVOICE_CREATION_REVERTED',
+        `No se pudo crear la factura completa. Se revirtió automáticamente: no se creó ninguna factura. Reintenta; si vuelve a pasar, envía este código a soporte: ${supportCode}.`,
+        422,
+      )
     }
 
     await this.repo.insertInvoiceEvent(invoiceId, organizationId, 'Factura generada', `Bulk: ${input.packageIds.length} paquetes, total ${total.toFixed(2)} USD`, actor)

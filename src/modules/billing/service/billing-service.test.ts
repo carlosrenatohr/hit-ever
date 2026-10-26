@@ -3,6 +3,21 @@ import type { InvoiceBundle } from '../repo/billing-repo.js'
 import type { BillingRepository } from '../repo/billing-repo.js'
 import { aggregateClose, aggregateYear, BillingService, computeStatus, paymentUsd, toView } from './billing-service.js'
 
+/** Defaults for the batched link/event/guard methods added to BillingRepository.
+ *  Mocks spread the repo AFTER these, so per-test overrides win. The guard
+ *  default returns an empty list — create-path tests with packages override it
+ *  to report every package linked (or assert the rollback). */
+function withBatchedLinks<T extends object>(repo: T) {
+  return {
+    getActivePackageLinks: async () => new Map<string, string>(),
+    listActiveLinkedPackageIds: async () => [] as string[],
+    linkPackages: vi.fn(async () => {}),
+    insertPackageEvents: vi.fn(async () => {}),
+    insertAuditLog: async () => {},
+    ...repo,
+  }
+}
+
 describe('computeStatus', () => {
   it('keeps VOID terminal', () => {
     expect(computeStatus('VOID', 100, 100)).toBe('VOID')
@@ -139,7 +154,11 @@ describe('createInvoice — package links', () => {
       payments: [],
       packages: [{ id: 'lk1', invoice_id: 'i1', package_id: 'pkg-1', source: 'manual', matched_oc: null }],
     }
-    const insertPackageEvent = vi.fn(async () => {})
+    const insertPackageEvents = vi.fn(async () => {})
+    const linkPackages = vi.fn(async () => {})
+    const releasePackageLinksByInvoice = vi.fn(async () => {})
+    const setInvoiceArchived = vi.fn(async () => {})
+    const insertAuditLog = vi.fn(async () => {})
     const repo = {
       getOrgRateCards: async () => [],
       getOrgRates: async () => [
@@ -152,6 +171,7 @@ describe('createInvoice — package links', () => {
       getClientDefaultRateCard: async () => null,
       getClientLifecycle: async () => clientActive,
       getActivePackageLink: async () => null,
+      getActivePackageLinks: async () => new Map<string, string>(),
       getPackagesForBulk: async (ids: string[]) =>
         belongs
           ? ids.map((id) => ({ id, almacen_id: `G-${id}`, tracking_number: `T-${id}`, effective_status: 'entregado', service_type: 'aereo', weight_lb: 5, client_id: 'c1', referencia_name: 'Ana', organization_id: 'solo-guegue' }))
@@ -159,28 +179,32 @@ describe('createInvoice — package links', () => {
       nextInvoiceNumber: async () => 1,
       createInvoiceHeader: async () => 'i1',
       insertLineItems: vi.fn(async () => {}),
-      linkPackage: async () => {},
+      linkPackages,
+      insertPackageEvents,
+      insertAuditLog,
       insertInvoiceEvent: vi.fn(async () => {}),
-      insertPackageEvent,
       getInvoiceBundle: async () => bundle,
+      listActiveLinkedPackageIds: async () => ['pkg-1'],
+      releasePackageLinksByInvoice,
+      setInvoiceArchived,
     } as unknown as BillingRepository
-    return { repo, insertPackageEvent }
+    return { repo, insertPackageEvents, linkPackages, insertAuditLog, releasePackageLinksByInvoice, setInvoiceArchived }
   }
 
   it('rejects a package that does not belong to the agency (no writes)', async () => {
-    const { repo, insertPackageEvent } = repoForPackages(false)
+    const { repo, insertPackageEvents } = repoForPackages(false)
     const svc = new BillingService(repo)
     await expect(
       svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], packageIds: ['pkg-1'] }, 'tester', 'solo-guegue'),
     ).rejects.toThrow(/not found in your agency/)
-    expect(insertPackageEvent).not.toHaveBeenCalled()
+    expect(insertPackageEvents).not.toHaveBeenCalled()
   })
 
   it('stamps the package history with the invoice number on success', async () => {
-    const { repo, insertPackageEvent } = repoForPackages(true)
+    const { repo, insertPackageEvents } = repoForPackages(true)
     const svc = new BillingService(repo)
     await svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], packageIds: ['pkg-1'] }, 'tester', 'solo-guegue')
-    expect(insertPackageEvent).toHaveBeenCalledWith('pkg-1', 'Factura #1 generada', expect.any(String))
+    expect(insertPackageEvents).toHaveBeenCalledWith([{ packageId: 'pkg-1', description: 'Factura #1 generada', occurredAt: expect.any(String) }])
   })
 
   it('snapshots guía/tracking into the line when the freight line carries a packageId', async () => {
@@ -201,6 +225,40 @@ describe('createInvoice — package links', () => {
       svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }] }, 'tester', 'solo-guegue'),
     ).rejects.toThrow(/deactivated/)
   })
+
+  it('reverts the whole invoice when linking fails (rollback: release + archive + audit, 422 envelope)', async () => {
+    const { repo, linkPackages, releasePackageLinksByInvoice, setInvoiceArchived, insertAuditLog } = repoForPackages(true)
+    linkPackages.mockRejectedValueOnce(new Error('fetch failed: subrequest limit'))
+    const svc = new BillingService(repo)
+    await expect(
+      svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], packageIds: ['pkg-1'] }, 'tester', 'solo-guegue'),
+    ).rejects.toMatchObject({ code: 'INVOICE_CREATION_REVERTED', status: 422 })
+    // Compensating actions: links released (package back to billable) and the
+    // ghost header archived, never left blocking reports half-invoiced.
+    expect(releasePackageLinksByInvoice).toHaveBeenCalledWith('i1', 'system:creation-failed')
+    expect(setInvoiceArchived).toHaveBeenCalledWith('i1', 'solo-guegue', 'system:creation-failed', expect.stringMatching(/revertida automáticamente \(F-/))
+    expect(insertAuditLog).toHaveBeenCalledWith(expect.objectContaining({ action: 'invoice.create_failed', entityId: 'i1', metadata: expect.objectContaining({ support_code: expect.stringMatching(/^F-[0-9A-F]{8}$/) }) }))
+  })
+
+  it('reverts when the integrity guard finds fewer active links than packages billed', async () => {
+    const { repo, releasePackageLinksByInvoice, setInvoiceArchived } = repoForPackages(true)
+    // Guard reads back the links; simulate one link lost (budget died midway in prod).
+    ;(repo.listActiveLinkedPackageIds as (id: string) => Promise<string[]>) = async () => []
+    const svc = new BillingService(repo)
+    await expect(
+      svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], packageIds: ['pkg-1'] }, 'tester', 'solo-guegue'),
+    ).rejects.toMatchObject({ code: 'INVOICE_CREATION_REVERTED' })
+    expect(releasePackageLinksByInvoice).toHaveBeenCalled()
+    expect(setInvoiceArchived).toHaveBeenCalled()
+  })
+
+  it('keeps the invoice when the guard confirms every package linked', async () => {
+    const { repo, setInvoiceArchived } = repoForPackages(true)
+    const svc = new BillingService(repo)
+    const view = await svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], packageIds: ['pkg-1'] }, 'tester', 'solo-guegue')
+    expect(view.invoiceNumber).toBe(1)
+    expect(setInvoiceArchived).not.toHaveBeenCalled()
+  })
 })
 
 describe('listUnbilledPackagesForClient', () => {
@@ -212,6 +270,7 @@ describe('listUnbilledPackagesForClient', () => {
         { id: 'p3', almacen_id: 'SG-3', tracking_number: null, effective_status: 'entregado', service_type: 'aereo', weight_lb: null, client_id: 'c1', referencia_name: 'Ana', organization_id: 'solo-guegue' },
       ],
       getActivePackageLink: async (id: string) => (id === 'p1' ? { invoiceId: 'i9' } : null),
+      getActivePackageLinks: async (ids: string[]) => (ids.includes('p1') ? new Map([['p1', 'i9']]) : new Map()),
     } as unknown as BillingRepository
     const res = await new BillingService(repo).listUnbilledPackagesForClient('c1', 'solo-guegue')
     expect(res.packages.map((p) => [p.guia, p.eligible, p.reason])).toEqual([
@@ -245,6 +304,7 @@ describe('updateInvoice — package link sync', () => {
       getClientDefaultRateTable: async () => null,
       getClientDefaultRateCard: async () => null,
       getActivePackageLink: async () => null,
+      getActivePackageLinks: async () => new Map<string, string>(),
       getPackagesForBulk: async (ids: string[]) =>
         ids.map((id) => ({ id, almacen_id: `G-${id}`, tracking_number: `T-${id}`, effective_status: 'entregado', service_type: 'aereo', weight_lb: 5, client_id: 'c1', referencia_name: 'Ana', organization_id: 'solo-guegue' })),
       replaceLineItems: async () => {},
@@ -296,6 +356,7 @@ describe('updateInvoice — package link sync', () => {
       getClientDefaultRateTable: async () => null,
       getClientDefaultRateCard: async () => null,
       getActivePackageLink: async () => null,
+      getActivePackageLinks: async () => new Map<string, string>(),
       getPackagesForBulk: async (ids: string[]) =>
         ids.map((id) => ({ id, almacen_id: `G-${id}`, tracking_number: `T-${id}`, effective_status: 'entregado', service_type: 'aereo', weight_lb: 5, client_id: 'c1', referencia_name: 'Ana', organization_id: 'solo-guegue' })),
       replaceLineItems: async () => {},
@@ -380,6 +441,10 @@ describe('createInvoice — other charges', () => {
       nextInvoiceNumber: async () => 1,
       createInvoiceHeader: async () => 'i1',
       insertLineItems,
+      linkPackages: async () => {},
+      insertPackageEvents: async () => {},
+      insertAuditLog: async () => {},
+      listActiveLinkedPackageIds: async () => [],
       linkPackage: async () => {},
       insertInvoiceEvent: vi.fn(async () => {}),
       getInvoiceBundle: async () => bundle,
@@ -520,9 +585,14 @@ describe('createInvoice — initial lock state', () => {
       nextInvoiceNumber: async () => 1,
       createInvoiceHeader,
       insertLineItems: async () => {},
+      linkPackages: async () => {},
+      insertPackageEvents: async () => {},
+      insertAuditLog: async () => {},
+      listActiveLinkedPackageIds: async () => [],
       insertInvoiceEvent: async () => {},
       getInvoiceBundle: async () => bundle({}),
       getActivePackageLink: async () => null,
+      getActivePackageLinks: async () => new Map(),
       packageBelongsToOrg: async () => true,
     } as unknown as BillingRepository
     return { repo, createInvoiceHeader }
@@ -560,7 +630,9 @@ function bulkRepo(pkgs: Array<{ id: string; almacen_id: string; effective_status
   const insertLineItems = vi.fn(async () => {})
   const insertInvoiceEvent = vi.fn(async () => {})
   const insertPackageEvent = vi.fn(async () => {})
+  const insertPackageEvents = vi.fn(async () => {})
   const linkPackage = vi.fn(async () => {})
+  const linkPackages = vi.fn(async () => {})
   const createInvoiceHeader = vi.fn(async () => 'i-bulk')
   const repo = {
     getPackagesForBulk: async () => pkgs.map((p) => ({ ...p, organization_id: 'hit', tracking_number: null })),
@@ -578,9 +650,14 @@ function bulkRepo(pkgs: Array<{ id: string; almacen_id: string; effective_status
     createInvoiceHeader,
     insertLineItems,
     linkPackage,
+    linkPackages,
     insertPackageEvent,
+    insertPackageEvents,
+    insertAuditLog: async () => {},
     insertInvoiceEvent,
     getActivePackageLink: async (packageId: string) => activeLinks[packageId] ? { invoiceId: activeLinks[packageId] } : null,
+    getActivePackageLinks: async (ids: string[]) => new Map(ids.filter((id) => activeLinks[id]).map((id) => [id, activeLinks[id]])),
+    listActiveLinkedPackageIds: async () => pkgs.map((p) => p.id),
     getInvoiceBundle: async () => ({
       header: { id: 'i-bulk', invoice_number: 1, fiscal_year: 2026, client_id: 'c1', client_name_raw: 'Test', issue_date: '2026-09-06', status: 'DRAFT', address: null, special_price: false, observations: null, tracking_orders: [], agent_id: null, public_token: null, paid_at: null, total: 14, profit: 5, paid_usd: 0, closed_at: null, closed_by: null, created_at: '', updated_at: '' },
       lines: [{ id: 'l1', invoice_id: 'i-bulk', line_no: 1, description: null, freight_type: 'AIR', quantity_lbs: 2, unit: 'lbs', unit_price: 7, total: 14, list_price: null, freight_cost: 9, profit: 5, price_tier: 'REGULAR', price_off_catalog: false, package_id: pkgs[0]?.id ?? null, package_guia: pkgs[0]?.almacen_id ?? null, package_tracking: null }],
@@ -588,7 +665,7 @@ function bulkRepo(pkgs: Array<{ id: string; almacen_id: string; effective_status
       packages: [],
     }),
   } as unknown as BillingRepository
-  return { repo, insertLineItems, linkPackage, createInvoiceHeader }
+  return { repo, insertLineItems, linkPackages, insertPackageEvents, createInvoiceHeader }
 }
 
 const enDestino = (id: string, client: string | null = 'Ana', ref: string | null = 'Ana') => ({
@@ -655,7 +732,7 @@ describe('previewBulkPackages — pricing', () => {
 
 describe('createBulkInvoice', () => {
   it('creates a DRAFT invoice with one line per package and links every package', async () => {
-    const { repo, insertLineItems, linkPackage, createInvoiceHeader } = bulkRepo([enDestino('p1'), entregado('p2')])
+    const { repo, insertLineItems, linkPackages, insertPackageEvents, createInvoiceHeader } = bulkRepo([enDestino('p1'), entregado('p2')])
     const svc = new BillingService(repo)
     const view = await svc.createBulkInvoice({ packageIds: ['p1', 'p2'] }, 'admin@hit.com', 'hit')
     expect(view.status).toBe('DRAFT')
@@ -670,8 +747,10 @@ describe('createBulkInvoice', () => {
     expect(rows[0].package_id).toBe('p1')
     expect(rows[0].package_guia).toBe('gp1')
     expect(rows[0].package_tracking).toBeNull()
-    // Both packages linked
-    expect(linkPackage).toHaveBeenCalledTimes(2)
+    // Both packages linked in one batched post
+    expect(linkPackages).toHaveBeenCalledTimes(1)
+    expect((linkPackages.mock.calls[0][1] as unknown[]).length).toBe(2)
+    expect(insertPackageEvents).toHaveBeenCalledTimes(1)
   })
 })
 

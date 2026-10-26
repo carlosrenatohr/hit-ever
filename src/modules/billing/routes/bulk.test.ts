@@ -21,14 +21,35 @@ function stubAuthAndDb(opts: { packages?: unknown[]; rates?: unknown[]; methods?
       return new Response(JSON.stringify([{ role: 'billing', active: true, name: 'B', email: 'billing@hit.com', agency: 'hit' }]), { status: 201 })
     }
     calls.push({ method, url, body: typeof init?.body === 'string' ? init.body : undefined })
-    // Active-link check: if the URL queries invoice_packages with active=eq.true
-    // and a package_id, return the configured active link (or empty).
+    // Active-link check: if the URL queries invoice_packages with active=eq.true,
+    // return the configured active link(s) — single (package_id=eq.) or batched
+    // (package_id=in.(…)), plus the creation guard (invoice_id=eq.).
     if (method === 'GET' && url.includes('/records/invoice_packages?') && url.includes('active=eq.true')) {
+      const inMatch = url.match(/package_id=in\.\(([^)]*)\)/)
+      if (inMatch) {
+        const ids = inMatch[1].split(',').map((s) => decodeURIComponent(s.trim()))
+        const rows = ids
+          .map((pkgId) => ({ package_id: pkgId, invoice_id: opts.activeLinks?.[pkgId] }))
+          .filter((r) => r.invoice_id)
+        return new Response(JSON.stringify(rows), { status: 200 })
+      }
       const pkgMatch = url.match(/package_id=eq\.([^&]+)/)
       if (pkgMatch) {
         const pkgId = decodeURIComponent(pkgMatch[1])
         const invoiceId = opts.activeLinks?.[pkgId]
         if (invoiceId) return new Response(JSON.stringify([{ invoice_id: invoiceId }]), { status: 200 })
+      }
+      // Creation guard: active links for one invoice — report the packages the
+      // worker just POSTed to invoice_packages (it links, then reads back).
+      if (url.includes('invoice_id=eq.')) {
+        const linkedPost = [...calls].reverse().find((c) => c.method === 'POST' && c.url.includes('/records/invoice_packages') && c.body)
+        if (linkedPost?.body) {
+          try {
+            const rows = JSON.parse(linkedPost.body) as Array<{ package_id?: string }>
+            return new Response(JSON.stringify(rows.filter((r) => r.package_id)), { status: 200 })
+          } catch { /* fall through to empty */ }
+        }
+        return new Response(JSON.stringify([]), { status: 200 })
       }
       return new Response(JSON.stringify([]), { status: 200 })
     }
