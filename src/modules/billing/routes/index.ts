@@ -18,15 +18,15 @@ import { getConfigRepo } from '../../config/repo/config-repo.js'
 import { BillingService } from '../service/billing-service.js'
 import { BillingError } from '../domain/errors.js'
 
-/** Map a service error to an HTTP status by its message. */
+/** Map a service error to an HTTP status by its message (messages are Spanish). */
 function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   // Typed errors first: their code + status are the contract; the regex below
   // only serves legacy throws (rewording one would otherwise drop it to a 500).
   if (e instanceof BillingError) return Res.err(c, e.code, e.message, e.status)
-  const msg = e instanceof Error ? e.message : 'Unexpected error.'
-  if (/not found/i.test(msg)) return Res.err(c, 'NOT_FOUND', msg, 404)
-  if (/already invoiced/i.test(msg)) return Res.err(c, 'PACKAGE_ALREADY_INVOICED', msg, 409)
-  if (/voided|at least one|not offered|already closed|close the invoice|links are frozen|not invoiceable|different clients|no client assigned|No packages|Too many|editing is frozen|Cannot edit/i.test(msg)) return Res.err(c, 'INVALID_REQUEST', msg, 422)
+  const msg = e instanceof Error ? e.message : 'Error inesperado.'
+  if (/ya está facturado/i.test(msg)) return Res.err(c, 'PACKAGE_ALREADY_INVOICED', msg, 409)
+  if (/no existe en tu agencia|no encontrada/i.test(msg)) return Res.err(c, 'NOT_FOUND', msg, 404)
+  if (/anulada|al menos una|no está disponible|ya está cerrada|ya fue cerrada|cierra la factura|vínculos de paquetes están congelados|no está[n]? facturable[s]?|pertenece a otro cliente|pertenecen a clientes distintos|no tiene cliente asignado|no tienen cliente asignado|no hay paquetes|demasiados|edición está bloqueada|no se puede editar|desactivado|cargos adicionales|no tiene peso|no tiene tipo de servicio/i.test(msg)) return Res.err(c, 'INVALID_REQUEST', msg, 422)
   return Res.err(c, 'BILLING_ERROR', msg, 500)
 }
 

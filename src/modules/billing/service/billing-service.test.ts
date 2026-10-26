@@ -60,6 +60,31 @@ describe('toView', () => {
     expect(v.outstanding).toBe(20)
     expect(v.margin).toBeCloseTo(0.325, 3)
   })
+
+  it('flags the integrity warning when a billed package has no active link', () => {
+    const b = bundle({ status: 'ISSUED' }, [
+      { line_type: 'freight', package_id: 'pkg-1' },
+      { line_type: 'freight', package_id: 'pkg-2' },
+    ])
+    b.packages = [
+      { id: 'lk1', invoice_id: 'i1', package_id: 'pkg-1', source: 'manual', matched_oc: null, active: true },
+      { id: 'lk2', invoice_id: 'i1', package_id: 'pkg-2', source: 'manual', matched_oc: null, active: false },
+    ] as InvoiceBundle['packages']
+    const v = toView(b)
+    expect(v.integrityWarning).toBe(true)
+  })
+
+  it('no warning when every billed package has an active link', () => {
+    const b = bundle({ status: 'ISSUED' }, [{ line_type: 'freight', package_id: 'pkg-1' }])
+    b.packages = [{ id: 'lk1', invoice_id: 'i1', package_id: 'pkg-1', source: 'manual', matched_oc: null, active: true }] as InvoiceBundle['packages']
+    expect(toView(b).integrityWarning).toBe(false)
+  })
+
+  it('no warning on VOID invoices — released links are by design', () => {
+    const b = bundle({ status: 'VOID' }, [{ line_type: 'freight', package_id: 'pkg-1' }])
+    b.packages = [{ id: 'lk1', invoice_id: 'i1', package_id: 'pkg-1', source: 'manual', matched_oc: null, active: false }] as InvoiceBundle['packages']
+    expect(toView(b).integrityWarning).toBeNull()
+  })
   it('void invoices have zero outstanding', () => {
     const v = toView(bundle({ status: 'VOID' }, [{ total: 50, profit: 10 }]))
     expect(v.outstanding).toBe(0)
@@ -196,7 +221,7 @@ describe('createInvoice — package links', () => {
     const svc = new BillingService(repo)
     await expect(
       svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], packageIds: ['pkg-1'] }, 'tester', 'solo-guegue'),
-    ).rejects.toThrow(/not found in your agency/)
+    ).rejects.toThrow(/no existe en tu agencia/)
     expect(insertPackageEvents).not.toHaveBeenCalled()
   })
 
@@ -223,7 +248,7 @@ describe('createInvoice — package links', () => {
     const svc = new BillingService(repo)
     await expect(
       svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }] }, 'tester', 'solo-guegue'),
-    ).rejects.toThrow(/deactivated/)
+    ).rejects.toThrow(/desactivado/)
   })
 
   it('reverts the whole invoice when linking fails (rollback: release + archive + audit, 422 envelope)', async () => {
@@ -457,7 +482,7 @@ describe('createInvoice — other charges', () => {
     const svc = new BillingService(repo)
     await expect(
       svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], otherLines: [{ conceptId: 'cc1', amount: 0 }] }, 'tester', 'solo-guegue'),
-    ).rejects.toThrow(/positive amount/)
+    ).rejects.toThrow(/monto mayor a cero/)
   })
 
   it('rejects a concept from another agency', async () => {
@@ -465,7 +490,7 @@ describe('createInvoice — other charges', () => {
     const svc = new BillingService(repo)
     await expect(
       svc.createInvoice({ clientName: 'Ana', lines: [{ freightType: 'AIR', tier: 'REGULAR', quantityLbs: 1 }], otherLines: [{ conceptId: 'cc1', amount: 3 }] }, 'tester', 'solo-guegue'),
-    ).rejects.toThrow(/not found in your agency/)
+    ).rejects.toThrow(/no existe en tu agencia/)
   })
 
   it('composes the description from the concept name and adds the amount to the totals', async () => {
@@ -523,17 +548,17 @@ describe('closeInvoice — financial lock', () => {
   })
   it('fails cleanly when the compare-and-set loses to a concurrent close/void', async () => {
     const { repo, insertInvoiceEvent } = lockRepo({}, false)
-    await expect(new BillingService(repo).closeInvoice('i1', 'hit', 'a@b.c')).rejects.toThrow(/already closed or voided/)
+    await expect(new BillingService(repo).closeInvoice('i1', 'hit', 'a@b.c')).rejects.toThrow(/ya fue cerrada o anulada/)
     expect(insertInvoiceEvent).not.toHaveBeenCalled()
   })
   it('rejects closing twice', async () => {
     const { repo, closeInvoiceIfOpen } = lockRepo({ closed_at: '2026-09-01T00:00:00Z', closed_by: 'x@y.z' })
-    await expect(new BillingService(repo).closeInvoice('i1', 'hit', 'a@b.c')).rejects.toThrow(/already closed/)
+    await expect(new BillingService(repo).closeInvoice('i1', 'hit', 'a@b.c')).rejects.toThrow(/ya está cerrada/)
     expect(closeInvoiceIfOpen).not.toHaveBeenCalled()
   })
   it('rejects closing a VOID invoice', async () => {
     const { repo } = lockRepo({ status: 'VOID' })
-    await expect(new BillingService(repo).closeInvoice('i1', 'hit', 'a@b.c')).rejects.toThrow(/voided/)
+    await expect(new BillingService(repo).closeInvoice('i1', 'hit', 'a@b.c')).rejects.toThrow(/anulada/)
   })
 })
 
@@ -542,7 +567,7 @@ describe('payment + link guards vs the lock', () => {
     const { repo, insertPayment } = lockRepo({ status: 'ISSUED' })
     await expect(
       new BillingService(repo).applyPayment('i1', { method: 'CASH', currency: 'USD', amount: 5 }, 'hit', 'a@b.c'),
-    ).rejects.toThrow(/Close the invoice before recording payments/)
+    ).rejects.toThrow(/Cierra la factura antes de registrar pagos/)
     expect(insertPayment).not.toHaveBeenCalled()
   })
   it('allows payments once closed (legacy with money was backfilled closed)', async () => {
@@ -553,8 +578,8 @@ describe('payment + link guards vs the lock', () => {
   it('freezes package links after closing', async () => {
     const { repo, linkPackage, unlinkPackage } = lockRepo({ closed_at: '2026-09-01T00:00:00Z' })
     const svc = new BillingService(repo)
-    await expect(svc.linkPackage('i1', 'pkg-1', 'a@b.c', 'hit')).rejects.toThrow(/links are frozen/)
-    await expect(svc.unlinkPackage('i1', 'pkg-1', 'hit')).rejects.toThrow(/links are frozen/)
+    await expect(svc.linkPackage('i1', 'pkg-1', 'a@b.c', 'hit')).rejects.toThrow(/vínculos de paquetes están congelados/)
+    await expect(svc.unlinkPackage('i1', 'pkg-1', 'hit')).rejects.toThrow(/vínculos de paquetes están congelados/)
     expect(linkPackage).not.toHaveBeenCalled()
     expect(unlinkPackage).not.toHaveBeenCalled()
   })
@@ -564,7 +589,7 @@ describe('payment + link guards vs the lock', () => {
       ...repo,
       packageBelongsToOrg: async () => false,
     } as unknown as BillingRepository
-    await expect(new BillingService(withPin).linkPackage('i1', 'pkg-1', 'a@b.c', 'hit')).rejects.toThrow(/not found in your agency/)
+    await expect(new BillingService(withPin).linkPackage('i1', 'pkg-1', 'a@b.c', 'hit')).rejects.toThrow(/no existe en tu agencia/)
   })
 })
 
@@ -684,23 +709,23 @@ const enTransito = (id: string) => ({ ...enDestino(id), effective_status: 'en_tr
 describe('previewBulkPackages — validation', () => {
   it('rejects empty selection', async () => {
     const { repo } = bulkRepo([])
-    await expect(new BillingService(repo).previewBulkPackages([], 'hit')).rejects.toThrow(/No packages/)
+    await expect(new BillingService(repo).previewBulkPackages([], 'hit')).rejects.toThrow(/No hay paquetes/)
   })
   it('rejects more than 100 packages', async () => {
     const { repo } = bulkRepo([])
-    await expect(new BillingService(repo).previewBulkPackages(Array.from({ length: 101 }, (_, i) => `p${i}`), 'hit')).rejects.toThrow(/Too many/)
+    await expect(new BillingService(repo).previewBulkPackages(Array.from({ length: 101 }, (_, i) => `p${i}`), 'hit')).rejects.toThrow(/Demasiados/)
   })
   it('rejects non-invoiceable statuses (en_transito)', async () => {
     const { repo } = bulkRepo([enTransito('p1')])
-    await expect(new BillingService(repo).previewBulkPackages(['p1'], 'hit')).rejects.toThrow(/not invoiceable/)
+    await expect(new BillingService(repo).previewBulkPackages(['p1'], 'hit')).rejects.toThrow(/facturable/)
   })
   it('rejects packages with no client (neither client_id nor referencia_name)', async () => {
     const { repo } = bulkRepo([{ ...enDestino('p1'), client_id: null, referencia_name: null }])
-    await expect(new BillingService(repo).previewBulkPackages(['p1'], 'hit')).rejects.toThrow(/no client assigned/)
+    await expect(new BillingService(repo).previewBulkPackages(['p1'], 'hit')).rejects.toThrow(/cliente asignado/)
   })
   it('rejects mixed clients', async () => {
     const { repo } = bulkRepo([enDestino('p1', 'Ana'), enDestino('p2', 'Luis')])
-    await expect(new BillingService(repo).previewBulkPackages(['p1', 'p2'], 'hit')).rejects.toThrow(/different clients/)
+    await expect(new BillingService(repo).previewBulkPackages(['p1', 'p2'], 'hit')).rejects.toThrow(/clientes distintos/)
   })
 })
 

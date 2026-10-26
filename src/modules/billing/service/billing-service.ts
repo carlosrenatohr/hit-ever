@@ -107,7 +107,10 @@ export interface InvoiceView {
     raw: string | null
     quarantined: boolean
   }>
-  packages: Array<{ packageId: string; source: 'auto' | 'manual'; matchedOc: string | null; guia: string | null; tracking: string | null }>
+  packages: Array<{ packageId: string; source: 'auto' | 'manual'; matchedOc: string | null; guia: string | null; tracking: string | null; active: boolean }>
+  /** True when a live invoice bills packages whose active link is missing or
+   *  released — the half-invoice integrity net (panel shows a warning banner). */
+  integrityWarning: boolean | null
 }
 
 export interface MonthlyClose {
@@ -251,7 +254,17 @@ export function toView(b: InvoiceBundle): InvoiceView {
       reference: p.reference,
       comments: p.comments,
     })),
-    packages: b.packages.map((p) => ({ packageId: p.package_id, source: p.source, matchedOc: p.matched_oc, guia: p.packages?.almacen_id ?? p.matched_oc ?? null, tracking: p.packages?.tracking_number ?? null })),
+    packages: b.packages.map((p) => ({ packageId: p.package_id, source: p.source, matchedOc: p.matched_oc, guia: p.packages?.almacen_id ?? p.matched_oc ?? null, tracking: p.packages?.tracking_number ?? null, active: p.active !== false })),
+    // Integrity warning (live invoices only — released links on VOID are by
+    // design): a billed package without an active link means the invoice bills
+    // something the linked-packages view doesn't reflect (double-billing risk).
+    integrityWarning: b.header.status === 'VOID'
+      ? null
+      : (() => {
+          const activeLinks = new Set(b.packages.filter((p) => p.active !== false).map((p) => p.package_id))
+          const billedPkgs = new Set(b.lines.filter((l) => (l.line_type ?? 'freight') !== 'other' && l.package_id).map((l) => l.package_id))
+          return billedPkgs.size > activeLinks.size || [...billedPkgs].some((id) => !activeLinks.has(id))
+        })(),
   }
 }
 
@@ -456,26 +469,26 @@ export class BillingService {
     const activeLinks = await this.repo.getActivePackageLinks(packageIds)
     for (const id of packageIds) {
       const p = byId.get(id)
-      if (!p) throw new Error(`Package ${id} not found in your agency.`)
+      if (!p) throw new Error(`El paquete ${id} no existe en tu agencia.`)
       if (!invoiceable.has(p.effective_status)) {
-        throw new Error(`Package ${p.almacen_id} is not invoiceable (status: ${p.effective_status}).`)
+        throw new Error(`El paquete ${p.almacen_id} no está facturable (estado: ${p.effective_status}).`)
       }
       const refName = (p.referencia_name ?? '').trim() || null
       if (p.client_id && clientId && p.client_id !== clientId) {
-        throw new Error(`Package ${p.almacen_id} belongs to a different client.`)
+        throw new Error(`El paquete ${p.almacen_id} pertenece a otro cliente.`)
       }
       if (!p.client_id && (!clientName || !refName || refName !== clientName)) {
-        throw new Error(`Package ${p.almacen_id} has no client assigned to ${clientName ?? 'this invoice'}.`)
+        throw new Error(`El paquete ${p.almacen_id} no tiene cliente asignado para ${clientName ?? 'esta factura'}.`)
       }
       if (p.weight_lb == null || p.weight_lb <= 0) {
-        throw new Error(`Package ${p.almacen_id} has no weight.`)
+        throw new Error(`El paquete ${p.almacen_id} no tiene peso.`)
       }
       if (!p.effective_service_type && !p.service_type) {
-        throw new Error(`Package ${p.almacen_id} has no service type.`)
+        throw new Error(`El paquete ${p.almacen_id} no tiene tipo de servicio.`)
       }
       const active = activeLinks.get(id)
       if (active && active !== excludeInvoiceId) {
-        throw new Error(`Package ${p.almacen_id} is already invoiced (invoice ${active}).`)
+        throw new Error(`El paquete ${p.almacen_id} ya está facturado (factura ${active}).`)
       }
       result.set(id, {
         guia: p.almacen_id,
@@ -577,7 +590,7 @@ export class BillingService {
   }
 
   async createInvoice(input: CreateInvoiceInput, actor: string, organizationId: string = 'hit'): Promise<InvoiceView> {
-    if (!input.lines?.length) throw new Error('An invoice needs at least one line.')
+    if (!input.lines?.length) throw new Error('La factura necesita al menos una línea.')
     const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10)
     const fiscalYear = new Date(issueDate).getUTCFullYear()
 
@@ -589,7 +602,7 @@ export class BillingService {
     // Deactivated clients can't be billed again (historical invoices stay intact).
     const clientActive = await this.repo.getClientLifecycle(clientId)
     if (clientActive === false) {
-      throw new Error('Client is deactivated — reactivate it before billing.')
+      throw new Error('El cliente está desactivado — reactiva su cuenta antes de facturar.')
     }
 
     // Package links come from the per-line packageId (guided flow) or the
@@ -605,7 +618,7 @@ export class BillingService {
     for (let i = 0; i < input.lines.length; i++) {
       const l = input.lines[i]
       const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, l.rateTableId ?? defaultRateTableId)
-      if (!q) throw new Error(`Tier ${l.tier} is not offered for ${l.freightType}.`)
+      if (!q) throw new Error(`El nivel ${l.tier} no está disponible para ${l.freightType}.`)
       const info = l.packageId ? packageInfo.get(l.packageId) : undefined
       lineRows.push({
         line_no: i + 1,
@@ -640,9 +653,9 @@ export class BillingService {
     // concept template (validated against the agency) with extra free text.
     const otherLines = input.otherLines ?? []
     for (const o of otherLines) {
-      if (!(o.amount > 0)) throw new Error('Other charges need a positive amount.')
+      if (!(o.amount > 0)) throw new Error('Los cargos adicionales necesitan un monto mayor a cero.')
       if (o.conceptId && !(await this.repo.conceptBelongsToOrg(o.conceptId, organizationId))) {
-        throw new Error(`Charge concept ${o.conceptId} not found in your agency.`)
+        throw new Error(`El concepto ${o.conceptId} no existe en tu agencia.`)
       }
     }
     let lineNo = lineRows.length
@@ -762,9 +775,9 @@ export class BillingService {
     organizationId: string,
   ): Promise<InvoiceView> {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
-    if (!b) throw new Error('Invoice not found.')
-    if (b.header.status === 'VOID') throw new Error('Cannot edit a voided invoice.')
-    if (b.header.closed_at) throw new Error('Invoice is closed — editing is frozen.')
+    if (!b) throw new Error('Factura no encontrada.')
+    if (b.header.status === 'VOID') throw new Error('No se puede editar una factura anulada.')
+    if (b.header.closed_at) throw new Error('La factura está cerrada — la edición está bloqueada.')
 
     // Update header fields if provided.
     const headerPatch: Record<string, unknown> = { updated_at: new Date().toISOString() }
@@ -780,7 +793,7 @@ export class BillingService {
     let linePkgIds: string[] = []
     let packageInfo = new Map<string, { guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null }>()
     if (input.lines) {
-      if (input.lines.length === 0) throw new Error('An invoice needs at least one line.')
+      if (input.lines.length === 0) throw new Error('La factura necesita al menos una línea.')
       const clientId = b.header.client_id
       const defaultRateTableId = clientId ? (await this.repo.getClientDefaultRateCard(clientId)) ?? (await this.repo.getClientDefaultRateTable(clientId)) : null
       // Validate any per-line packages against this invoice (org, invoiceable,
@@ -791,7 +804,7 @@ export class BillingService {
       for (let i = 0; i < input.lines.length; i++) {
         const l = input.lines[i]
         const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, l.rateTableId ?? defaultRateTableId)
-        if (!q) throw new Error(`Tier ${l.tier} is not offered for ${l.freightType}.`)
+        if (!q) throw new Error(`El nivel ${l.tier} no está disponible para ${l.freightType}.`)
         const info = l.packageId ? packageInfo.get(l.packageId) : undefined
         lineRows.push({
           line_no: i + 1,
@@ -829,9 +842,9 @@ export class BillingService {
       otherRows = []
       let lineNo = (lineRows ?? []).length || b.lines.filter((l) => l.line_type === 'freight').length
       for (const o of input.otherLines) {
-        if (!(o.amount > 0)) throw new Error('Other charges need a positive amount.')
+        if (!(o.amount > 0)) throw new Error('Los cargos adicionales necesitan un monto mayor a cero.')
         if (o.conceptId && !(await this.repo.conceptBelongsToOrg(o.conceptId, organizationId))) {
-          throw new Error(`Charge concept ${o.conceptId} not found in your agency.`)
+          throw new Error(`El concepto ${o.conceptId} no existe en tu agencia.`)
         }
         lineNo++
         let name = (o.description ?? '').trim()
@@ -907,12 +920,12 @@ export class BillingService {
    */
   async closeInvoice(id: string, organizationId: string, actor: string | null): Promise<InvoiceView> {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
-    if (!b) throw new Error('Invoice not found.')
-    if (b.header.status === 'VOID') throw new Error('Cannot close a voided invoice.')
-    if (b.header.closed_at) throw new Error('Invoice is already closed.')
+    if (!b) throw new Error('Factura no encontrada.')
+    if (b.header.status === 'VOID') throw new Error('No se puede cerrar una factura anulada.')
+    if (b.header.closed_at) throw new Error('La factura ya está cerrada.')
     const status = b.header.status === 'DRAFT' ? 'ISSUED' : b.header.status
     const won = await this.repo.closeInvoiceIfOpen(id, organizationId, b.header.status, status, new Date().toISOString(), actor)
-    if (!won) throw new Error('Invoice is already closed or voided — reload it.')
+    if (!won) throw new Error('La factura ya fue cerrada o anulada — recarga la página.')
     const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
     await this.repo.insertInvoiceEvent(id, organizationId, 'Factura cerrada', `Total fijado en ${total.toFixed(2)} USD`, actor)
     for (const p of b.packages) {
@@ -925,11 +938,11 @@ export class BillingService {
 
   async applyPayment(id: string, input: ApplyPaymentInput, organizationId: string, actor?: string | null): Promise<InvoiceView> {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
-    if (!b) throw new Error('Invoice not found.')
-    if (b.header.status === 'VOID') throw new Error('Cannot pay a voided invoice.')
+    if (!b) throw new Error('Factura no encontrada.')
+    if (b.header.status === 'VOID') throw new Error('No se puede pagar una factura anulada.')
     // Financial lock: the total must be frozen before money starts flowing.
     // Legacy/import invoices with payments were already backfilled as closed.
-    if (!b.header.closed_at) throw new Error('Close the invoice before recording payments.')
+    if (!b.header.closed_at) throw new Error('Cierra la factura antes de registrar pagos.')
 
     const amountUsd = paymentUsd(input.currency, input.amount, input.fxRate)
     await this.repo.insertPayment(id, {
@@ -965,7 +978,7 @@ export class BillingService {
 
   async voidInvoice(id: string, reason?: string, organizationId?: string): Promise<InvoiceView> {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
-    if (!b) throw new Error('Invoice not found.')
+    if (!b) throw new Error('Factura no encontrada.')
     await this.repo.setInvoiceStatus(id, 'VOID', reason ? { observations: reason } : {})
     // Release all active package links so the packages can be re-invoiced.
     await this.repo.releasePackageLinksByInvoice(id, 'system:void')
@@ -990,7 +1003,7 @@ export class BillingService {
    */
   async archiveInvoice(id: string, reason: string | null, organizationId: string, actor: string): Promise<void> {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
-    if (!b) throw new Error('Invoice not found.')
+    if (!b) throw new Error('Factura no encontrada.')
     await this.repo.setInvoiceArchived(id, organizationId, actor, reason)
     await this.repo.releasePackageLinksByInvoice(id, 'system:archive')
     for (const p of b.packages) {
@@ -1004,23 +1017,23 @@ export class BillingService {
   async linkPackage(id: string, packageId: string, actor: string, organizationId: string): Promise<InvoiceView> {
     // Closed invoices are frozen: no package may be attached after the lock.
     const before = await this.repo.getInvoiceBundle(id, organizationId)
-    if (!before) throw new Error('Invoice not found.')
-    if (before.header.closed_at) throw new Error('Invoice is closed — package links are frozen.')
+    if (!before) throw new Error('Factura no encontrada.')
+    if (before.header.closed_at) throw new Error('La factura está cerrada — los vínculos de paquetes están congelados.')
     // Tenant pin (same rule as createInvoice's packageIds): a package from
     // another agency can never be attached to this invoice.
     if (!(await this.repo.packageBelongsToOrg(packageId, organizationId))) {
-      throw new Error(`Package ${packageId} not found in your agency.`)
+      throw new Error(`El paquete ${packageId} no existe en tu agencia.`)
     }
     // Active-link invariant: a package with an active invoice cannot be linked
     // to another invoice.
     const active = await this.repo.getActivePackageLink(packageId)
     if (active && active.invoiceId !== id) {
-      throw new Error(`Package ${packageId} is already invoiced (invoice ${active.invoiceId}).`)
+      throw new Error(`El paquete ${packageId} ya está facturado (factura ${active.invoiceId}).`)
     }
     const [pkg] = await this.repo.getPackagesForBulk([packageId], organizationId)
     await this.repo.linkPackage(id, packageId, 'manual', pkg?.almacen_id ?? null, actor, organizationId)
     const v = await this.get(id, organizationId)
-    if (!v) throw new Error('Invoice not found.')
+    if (!v) throw new Error('Factura no encontrada.')
     await this.repo.insertPackageEvent(packageId, `Factura #${v.invoiceNumber} enlazada`, new Date().toISOString())
     await this.repo.insertInvoiceEvent(id, organizationId, 'Paquete enlazado', packageId, actor)
     return v
@@ -1029,11 +1042,11 @@ export class BillingService {
   async unlinkPackage(id: string, packageId: string, organizationId?: string): Promise<InvoiceView> {
     // Same freeze as linking: links are frozen once the invoice is closed.
     const before = await this.repo.getInvoiceBundle(id, organizationId)
-    if (!before) throw new Error('Invoice not found.')
-    if (before.header.closed_at) throw new Error('Invoice is closed — package links are frozen.')
+    if (!before) throw new Error('Factura no encontrada.')
+    if (before.header.closed_at) throw new Error('La factura está cerrada — los vínculos de paquetes están congelados.')
     await this.repo.unlinkPackage(id, packageId)
     const v = await this.get(id, organizationId)
-    if (!v) throw new Error('Invoice not found.')
+    if (!v) throw new Error('Factura no encontrada.')
     await this.repo.insertPackageEvent(packageId, `Factura #${before.header.invoice_number} desenlazada`, new Date().toISOString())
     if (organizationId) {
       await this.repo.insertInvoiceEvent(id, organizationId, 'Paquete desenlazado', packageId, null)
@@ -1076,7 +1089,7 @@ export class BillingService {
   /** Get (or lazily create) the invoice's public share token. */
   async shareInvoice(id: string, organizationId?: string): Promise<string> {
     const b = await this.repo.getInvoiceBundle(id, organizationId)
-    if (!b) throw new Error('Invoice not found.')
+    if (!b) throw new Error('Factura no encontrada.')
     let token = b.header.public_token
     if (!token) {
       token = crypto.randomUUID()
@@ -1161,7 +1174,7 @@ export class BillingService {
     for (const p of pkgs) {
       // Status check
       if (!invoiceable.has(p.effective_status)) {
-        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_NOT_INVOICEABLE', message: `Package ${p.almacen_id} is not invoiceable (status: ${p.effective_status}).` })
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_NOT_INVOICEABLE', message: `El paquete ${p.almacen_id} no está facturable (estado: ${p.effective_status}).` })
       }
       // Client check
       const name = (p.referencia_name ?? '').trim() || null
@@ -1170,9 +1183,9 @@ export class BillingService {
       }
       // Mixed client check
       if (p.client_id && clientId && p.client_id !== clientId) {
-        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'BULK_MIXED_CLIENTS', message: `Package ${p.almacen_id} belongs to a different client.` })
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'BULK_MIXED_CLIENTS', message: `El paquete ${p.almacen_id} pertenece a otro cliente.` })
       } else if (name && clientName && name !== clientName && !p.client_id) {
-        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'BULK_MIXED_CLIENTS', message: `Package ${p.almacen_id} belongs to a different client.` })
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'BULK_MIXED_CLIENTS', message: `El paquete ${p.almacen_id} pertenece a otro cliente.` })
       }
       if (p.client_id) clientId = p.client_id
       if (name) clientName = name
@@ -1180,16 +1193,16 @@ export class BillingService {
       // Active invoice check
       const active = activeLinks.get(p.id)
       if (active) {
-        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_ALREADY_INVOICED', message: `Package ${p.almacen_id} is already invoiced.` })
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_ALREADY_INVOICED', message: `El paquete ${p.almacen_id} ya está facturado.` })
       }
 
       // Weight check
       if (p.weight_lb == null || p.weight_lb <= 0) {
-        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_MISSING_WEIGHT', message: `Package ${p.almacen_id} has no weight.` })
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_MISSING_WEIGHT', message: `El paquete ${p.almacen_id} no tiene peso.` })
       }
       // Service check
       if (!p.effective_service_type && !p.service_type) {
-        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_MISSING_SERVICE', message: `Package ${p.almacen_id} has no service type.` })
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_MISSING_SERVICE', message: `El paquete ${p.almacen_id} no tiene tipo de servicio.` })
       }
     }
 
@@ -1225,17 +1238,17 @@ export class BillingService {
     total: number
     profit: number
   }> {
-    if (!packageIds.length) throw new Error('No packages selected.')
-    if (packageIds.length > 100) throw new Error('Too many packages (max 100).')
+    if (!packageIds.length) throw new Error('No hay paquetes seleccionados.')
+    if (packageIds.length > 100) throw new Error('Demasiados paquetes (máximo 100).')
 
     const pkgs = await this.repo.getPackagesForBulk(packageIds, organizationId)
-    if (pkgs.length === 0) throw new Error('No packages found in your agency.')
+    if (pkgs.length === 0) throw new Error('No hay paquetes en tu agencia.')
 
     // Validate: all invoiceable (en_destino | entregado)
     const invoiceable = new Set(['en_destino', 'entregado'])
     const bad = pkgs.filter((p) => !invoiceable.has(p.effective_status))
     if (bad.length) {
-      throw new Error(`${bad.length} package(s) are not invoiceable (must be en destino or entregado).`)
+      throw new Error(`${bad.length} paquete(s) no están facturables (deben estar en destino o entregados).`)
     }
 
     // Validate: no package already has an active invoice link (one batched read).
@@ -1243,7 +1256,7 @@ export class BillingService {
     for (const p of pkgs) {
       const active = activeLinks.get(p.id)
       if (active) {
-        throw new Error(`Package ${p.almacen_id} is already invoiced (invoice ${active}).`)
+        throw new Error(`El paquete ${p.almacen_id} ya está facturado (factura ${active}).`)
       }
     }
 
@@ -1254,16 +1267,16 @@ export class BillingService {
     for (const p of pkgs) {
       const name = (p.referencia_name ?? '').trim() || null
       if (clientId && p.client_id && p.client_id !== clientId) {
-        throw new Error('Packages belong to different clients — select one client at a time.')
+        throw new Error('Los paquetes pertenecen a clientes distintos — facturá un cliente a la vez.')
       }
       if (clientName && name && name !== clientName && !p.client_id) {
-        throw new Error('Packages belong to different clients — select one client at a time.')
+        throw new Error('Los paquetes pertenecen a clientes distintos — facturá un cliente a la vez.')
       }
       if (p.client_id) clientId = p.client_id
       if (name) clientName = name
     }
     if (!clientName && !clientId) {
-      throw new Error('Packages have no client assigned — assign a client first.')
+      throw new Error('Los paquetes no tienen cliente asignado — asigna un cliente primero.')
     }
 
     // Get the client's default rate (card for migrated orgs, legacy table fallback).
@@ -1272,7 +1285,7 @@ export class BillingService {
     if (clientId) {
       const clientActive = await this.repo.getClientLifecycle(clientId)
       if (clientActive === false) {
-        throw new Error('Client is deactivated — reactivate it before billing.')
+        throw new Error('El cliente está desactivado — reactiva su cuenta antes de facturar.')
       }
     }
 
@@ -1324,7 +1337,7 @@ export class BillingService {
     actor: string,
     organizationId: string = 'hit',
   ): Promise<InvoiceView> {
-    if (!input.packageIds?.length) throw new Error('No packages selected.')
+    if (!input.packageIds?.length) throw new Error('No hay paquetes seleccionados.')
 
     // Re-validate + price via the preview path (single source of truth).
     const preview = await this.previewBulkPackages(input.packageIds, organizationId)
