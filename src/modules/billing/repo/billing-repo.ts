@@ -246,6 +246,17 @@ export interface BillingRepository {
   releasePackageLinksByInvoice(invoiceId: string, releasedBy: string): Promise<void>
   /** Check if a package has an active invoice link. Returns the invoice id or null. */
   getActivePackageLink(packageId: string): Promise<{ invoiceId: string } | null>
+  /** Active links for many packages in ONE query (subrequest budget: 1, not N).
+   *  Invariant (uniq_active_package_invoice): at most one active link per package. */
+  getActivePackageLinks(packageIds: string[]): Promise<Map<string, string>>
+  /** Active package ids for one invoice (integrity guard: links == packages). */
+  listActiveLinkedPackageIds(invoiceId: string): Promise<string[]>
+  /** Link many packages to one invoice in ONE POST (subrequest budget: 1, not N). */
+  linkPackages(invoiceId: string, rows: Array<{ packageId: string; matchedOc: string | null }>, source: 'auto' | 'manual', by: string, organizationId: string): Promise<void>
+  /** Emit many package timeline events in ONE POST (subrequest budget: 1, not N). */
+  insertPackageEvents(rows: Array<{ packageId: string; description: string; occurredAt: string }>): Promise<void>
+  /** Best-effort ops evidence on invoice creation failure (never on the happy path). */
+  insertAuditLog(row: { organizationId: string; actorEmail: string | null; action: string; entityType: string; entityId: string; metadata: unknown }): Promise<void>
 }
 
 // ─── InsForge adapter ─────────────────────────────────────────────────────────
@@ -642,7 +653,10 @@ export class InsforgeBillingRepo implements BillingRepository {
   }
 
   async listLinkedPackageIds(organizationId: string): Promise<string[]> {
-    const rows = await this.get<{ package_id: string }>('invoice_packages', `organization_id=eq.${encodeURIComponent(organizationId)}&select=package_id&limit=10000`)
+    // Active links only: released links mean the package was re-invoiced (or the
+    // invoice voided/archived) — counting them reports "facturado" without the
+    // invoice icon the panel actually reads.
+    const rows = await this.get<{ package_id: string }>('invoice_packages', `organization_id=eq.${encodeURIComponent(organizationId)}&active=eq.true&select=package_id&limit=10000`)
     return [...new Set(rows.map((r) => r.package_id))]
   }
 
@@ -662,6 +676,58 @@ export class InsforgeBillingRepo implements BillingRepository {
       `package_id=eq.${encodeURIComponent(packageId)}&active=eq.true&select=invoice_id&limit=1`,
     )
     return rows[0] ? { invoiceId: rows[0].invoice_id } : null
+  }
+
+  async getActivePackageLinks(packageIds: string[]): Promise<Map<string, string>> {
+    // uniq_active_package_invoice guarantees ≤1 active link per package, so the
+    // map is package_id → the single active invoice.
+    const map = new Map<string, string>()
+    if (packageIds.length === 0) return map
+    const ids = packageIds.map((id) => encodeURIComponent(id)).join(',')
+    const rows = await this.get<{ package_id: string; invoice_id: string }>(
+      'invoice_packages',
+      `package_id=in.(${ids})&active=eq.true&select=package_id,invoice_id&limit=${packageIds.length}`,
+    )
+    for (const r of rows) map.set(r.package_id, r.invoice_id)
+    return map
+  }
+
+  async listActiveLinkedPackageIds(invoiceId: string): Promise<string[]> {
+    const rows = await this.get<{ package_id: string }>(
+      'invoice_packages',
+      `invoice_id=eq.${encodeURIComponent(invoiceId)}&active=eq.true&select=package_id&limit=1000`,
+    )
+    return rows.map((r) => r.package_id)
+  }
+
+  async linkPackages(invoiceId: string, rows: Array<{ packageId: string; matchedOc: string | null }>, source: 'auto' | 'manual', by: string, organizationId: string): Promise<void> {
+    if (rows.length === 0) return
+    await this.post(
+      'invoice_packages',
+      rows.map((r) => ({ invoice_id: invoiceId, package_id: r.packageId, source, matched_oc: r.matchedOc, created_by: by, organization_id: organizationId })),
+      { onConflict: 'invoice_id,package_id' },
+    )
+  }
+
+  async insertPackageEvents(rows: Array<{ packageId: string; description: string; occurredAt: string }>): Promise<void> {
+    if (rows.length === 0) return
+    await this.post(
+      'events',
+      rows.map((r) => ({ package_id: r.packageId, occurred_at: r.occurredAt, office: null, description: r.description, status: null, source: 'panel' })),
+    )
+  }
+
+  async insertAuditLog(row: { organizationId: string; actorEmail: string | null; action: string; entityType: string; entityId: string; metadata: unknown }): Promise<void> {
+    await this.post('audit_logs', [{
+      organization_id: row.organizationId,
+      actor_id: null,
+      actor_email: row.actorEmail,
+      actor_type: 'system',
+      action: row.action,
+      entity_type: row.entityType,
+      entity_id: row.entityId,
+      metadata: row.metadata,
+    }])
   }
 
   async getAgencyInfo(organizationId: string): Promise<{ name: string; logoUrl: string | null; ruc: string | null; address: string | null; phone: string | null; currency: Currency; exchangeRateNioPerUsd: number | null } | null> {

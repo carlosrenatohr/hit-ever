@@ -16,9 +16,13 @@ import { billingAuth, type BillingEnv } from '../middleware/auth.js'
 import { getBillingRepo } from '../repo/billing-repo.js'
 import { getConfigRepo } from '../../config/repo/config-repo.js'
 import { BillingService } from '../service/billing-service.js'
+import { BillingError } from '../domain/errors.js'
 
 /** Map a service error to an HTTP status by its message. */
 function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
+  // Typed errors first: their code + status are the contract; the regex below
+  // only serves legacy throws (rewording one would otherwise drop it to a 500).
+  if (e instanceof BillingError) return Res.err(c, e.code, e.message, e.status)
   const msg = e instanceof Error ? e.message : 'Unexpected error.'
   if (/not found/i.test(msg)) return Res.err(c, 'NOT_FOUND', msg, 404)
   if (/already invoiced/i.test(msg)) return Res.err(c, 'PACKAGE_ALREADY_INVOICED', msg, 409)

@@ -37,10 +37,29 @@ function stubBackend(opts: { packages?: unknown[]; activeLinks?: Record<string, 
     }
     calls.push({ method, url, body: typeof init?.body === 'string' ? init.body : undefined })
     if (method === 'GET' && url.includes('/records/invoice_packages?') && url.includes('active=eq.true')) {
+      // Batched active-link check (package_id=in.(…)) and single (package_id=eq.)
+      const inMatch = url.match(/package_id=in\.\(([^)]*)\)/)
+      if (inMatch) {
+        const ids = inMatch[1].split(',').map((s) => decodeURIComponent(s.trim()))
+        const rows = ids
+          .map((pkgId) => ({ package_id: pkgId, invoice_id: opts.activeLinks?.[pkgId] }))
+          .filter((r) => r.invoice_id)
+        return new Response(JSON.stringify(rows), { status: 200 })
+      }
       const m = url.match(/package_id=eq\.([^&]+)/)
       if (m) {
         const invoiceId = opts.activeLinks?.[decodeURIComponent(m[1])]
         if (invoiceId) return new Response(JSON.stringify([{ invoice_id: invoiceId }]), { status: 200 })
+      }
+      // Creation guard: report the packages just POSTed to invoice_packages.
+      if (url.includes('invoice_id=eq.')) {
+        const linkedPost = [...calls].reverse().find((c) => c.method === 'POST' && c.url.includes('/records/invoice_packages') && c.body)
+        if (linkedPost?.body) {
+          try {
+            const rows = JSON.parse(linkedPost.body) as Array<{ package_id?: string }>
+            return new Response(JSON.stringify(rows.filter((r) => r.package_id)), { status: 200 })
+          } catch { /* fall through to empty */ }
+        }
       }
       return new Response(JSON.stringify([]), { status: 200 })
     }

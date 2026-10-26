@@ -77,6 +77,22 @@ export function resolveOrgRate(
 export class CatalogService {
   constructor(private readonly repo: BillingRepository) {}
 
+  /** Request-scoped rate cache. CatalogService lives one HTTP request (the
+   *  routes build it per call), so caching here keeps multi-line invoices from
+   *  paying 2 subrequests per line — the fetches that pushed an 11-package
+   *  invoice past the Workers free-plan 50-subrequest limit. Storing the
+   *  promise also dedupes concurrent quotes for the same org. */
+  private rateCache = new Map<string, Promise<[OrgRateCard[], OrgRateTable[]]>>()
+
+  private orgRates(organizationId: string): Promise<[OrgRateCard[], OrgRateTable[]]> {
+    let cached = this.rateCache.get(organizationId)
+    if (!cached) {
+      cached = Promise.all([this.repo.getOrgRateCards(organizationId), this.repo.getOrgRates(organizationId)]) as Promise<[OrgRateCard[], OrgRateTable[]]>
+      this.rateCache.set(organizationId, cached)
+    }
+    return cached
+  }
+
   /** All catalog entries (for GET /catalog and the panel's tier dropdown). */
   async entries(): Promise<CatalogEntry[]> {
     return this.repo.getCatalog()
@@ -113,7 +129,7 @@ export class CatalogService {
     quantityLbs: number,
     defaultRateId?: string | null,
   ): Promise<Quote | null> {
-    const [cards, legacy] = await Promise.all([this.repo.getOrgRateCards(organizationId), this.repo.getOrgRates(organizationId)])
+    const [cards, legacy] = await this.orgRates(organizationId)
     const rate = resolveOrgRate(cards, legacy, freightType, tier, defaultRateId)
     if (rate) {
       const amounts = computeAmountsByModel(quantityLbs, rate.price, rate.cost, (rate.priceModel ?? 'weight') as PriceModel)
