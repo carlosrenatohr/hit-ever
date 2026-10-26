@@ -10,7 +10,7 @@ import { CatalogService } from '../catalog/catalog.js'
 import { margin, round2 } from '../domain/calc.js'
 import type { Currency, FreightType, InvoiceStatus, PaymentBank, PaymentMethod, PriceTier } from '../domain/enums.js'
 import { SERVICE_TYPE_TO_FREIGHT } from '../domain/enums.js'
-import { normalizeClientName } from '../ingest/normalize/client.js'
+import { cleanClientDisplay, clientMatchKey, normalizeClientName } from '../ingest/normalize/client.js'
 import { BillingError } from '../domain/errors.js'
 import type { BillingRepository, ExceptionsPayload, InvoiceBundle } from '../repo/billing-repo.js'
 
@@ -477,7 +477,7 @@ export class BillingService {
       if (p.client_id && clientId && p.client_id !== clientId) {
         throw new Error(`El paquete ${p.almacen_id} pertenece a otro cliente.`)
       }
-      if (!p.client_id && (!clientName || !refName || refName !== clientName)) {
+      if (!p.client_id && (!clientName || !refName || clientMatchKey(refName) !== clientMatchKey(clientName))) {
         throw new Error(`El paquete ${p.almacen_id} no tiene cliente asignado para ${clientName ?? 'esta factura'}.`)
       }
       if (p.weight_lb == null || p.weight_lb <= 0) {
@@ -1163,7 +1163,7 @@ export class BillingService {
     // Missing or wrong-org packages
     for (const id of packageIds) {
       if (!foundIds.has(id)) {
-        reasons.push({ packageId: id, guia: null, code: 'PACKAGE_NOT_FOUND', message: 'Package not found in your agency.' })
+        reasons.push({ packageId: id, guia: null, code: 'PACKAGE_NOT_FOUND', message: 'El paquete no existe en tu agencia.' })
       }
     }
 
@@ -1179,12 +1179,12 @@ export class BillingService {
       // Client check
       const name = (p.referencia_name ?? '').trim() || null
       if (!p.client_id && !name) {
-        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_CLIENT_MISSING', message: `Package ${p.almacen_id} has no client assigned.` })
+        reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'PACKAGE_CLIENT_MISSING', message: `El paquete ${p.almacen_id} no tiene cliente asignado.` })
       }
       // Mixed client check
       if (p.client_id && clientId && p.client_id !== clientId) {
         reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'BULK_MIXED_CLIENTS', message: `El paquete ${p.almacen_id} pertenece a otro cliente.` })
-      } else if (name && clientName && name !== clientName && !p.client_id) {
+      } else if (name && clientName && clientMatchKey(name) !== clientMatchKey(clientName) && !p.client_id) {
         reasons.push({ packageId: p.id, guia: p.almacen_id, code: 'BULK_MIXED_CLIENTS', message: `El paquete ${p.almacen_id} pertenece a otro cliente.` })
       }
       if (p.client_id) clientId = p.client_id
@@ -1269,7 +1269,7 @@ export class BillingService {
       if (clientId && p.client_id && p.client_id !== clientId) {
         throw new Error('Los paquetes pertenecen a clientes distintos — facturá un cliente a la vez.')
       }
-      if (clientName && name && name !== clientName && !p.client_id) {
+      if (clientName && name && clientMatchKey(name) !== clientMatchKey(clientName) && !p.client_id) {
         throw new Error('Los paquetes pertenecen a clientes distintos — facturá un cliente a la vez.')
       }
       if (p.client_id) clientId = p.client_id
@@ -1323,7 +1323,7 @@ export class BillingService {
 
     const total = round2(lines.reduce((s, l) => s + l.total, 0))
     const profit = round2(lines.reduce((s, l) => s + l.profit, 0))
-    return { clientName: clientName ?? clientId!, clientId, lines, total, profit }
+    return { clientName: clientName ? cleanClientDisplay(clientName) : clientId!, clientId, lines, total, profit }
   }
 
   /**
@@ -1344,7 +1344,8 @@ export class BillingService {
 
     const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10)
     const fiscalYear = new Date(issueDate).getUTCFullYear()
-    const clientId = await this.repo.upsertClient(preview.clientName, preview.clientName.toLowerCase(), organizationId)
+    const { display, key } = normalizeClientName(preview.clientName)
+    const clientId = await this.repo.upsertClient(display, key, organizationId)
     const invoiceNumber = await this.repo.nextInvoiceNumber(fiscalYear, organizationId)
 
     // Build line rows — one freight line per package with snapshots.
@@ -1385,7 +1386,7 @@ export class BillingService {
       invoice_number: invoiceNumber,
       fiscal_year: fiscalYear,
       client_id: clientId,
-      client_name_raw: preview.clientName,
+      client_name_raw: display,
       issue_date: issueDate,
       status: 'DRAFT',
       closed_at: null,
