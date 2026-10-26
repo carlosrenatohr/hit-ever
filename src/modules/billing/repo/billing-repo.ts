@@ -157,6 +157,8 @@ export interface PackageBulkRow {
   effective_status: string
   service_type: string | null
   effective_service_type: string | null
+  /** Effective weight (packages.effective_weight_lb aliased): staff override when set,
+   *  else scraped — the weight the invoice bills. */
   weight_lb: number | null
   client_id: string | null
   referencia_name: string | null
@@ -584,12 +586,12 @@ export class InsforgeBillingRepo implements BillingRepository {
   async getPackagesForBulk(packageIds: string[], organizationId: string): Promise<PackageBulkRow[]> {
     if (packageIds.length === 0) return []
     const ids = packageIds.map((id) => encodeURIComponent(id)).join(',')
-    const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb,client_id,referencia_name,organization_id&limit=${packageIds.length}`
+    const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,effective_weight_lb as weight_lb,client_id,referencia_name,organization_id&limit=${packageIds.length}`
     return this.get<PackageBulkRow>('packages', q)
   }
 
   async getPackagesForClient(clientId: string, organizationId: string): Promise<PackageBulkRow[]> {
-    const q = `client_id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb,client_id,referencia_name,organization_id&limit=1000`
+    const q = `client_id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,effective_weight_lb as weight_lb,client_id,referencia_name,organization_id&limit=1000`
     return this.get<PackageBulkRow>('packages', q)
   }
 
