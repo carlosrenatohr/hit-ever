@@ -123,3 +123,29 @@ describe('InsforgeBillingRepo client reads — org scoped', () => {
     expect(q.get('order')).toBe('name.asc')
   })
 })
+
+describe('InsforgeBillingRepo.insertLineItems — uniform row shape', () => {
+  it('rejects a heterogeneous batch locally, before any request is sent', async () => {
+    const calls = mockFetch([{ id: 'l1' }])
+    const repo = new InsforgeBillingRepo('https://x.test', 'k')
+    await expect(
+      repo.insertLineItems('i1', [
+        { line_no: 1, line_type: 'freight', package_id: 'p1', total: 10 },
+        { line_no: 2, line_type: 'other', total: 3 },
+      ]),
+    ).rejects.toThrow(/invoice_line_items.*different keys/)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('sends a uniform batch in one POST', async () => {
+    const calls = mockFetch([])
+    const repo = new InsforgeBillingRepo('https://x.test', 'k')
+    const row = { line_no: 1, line_type: 'freight', package_id: null, total: 10 }
+    await repo.insertLineItems('i1', [row, { ...row, line_no: 2 }])
+    expect(calls).toHaveLength(1)
+    expect(JSON.parse(calls[0].body!)).toEqual([
+      { ...row, invoice_id: 'i1' },
+      { ...row, line_no: 2, invoice_id: 'i1' },
+    ])
+  })
+})
