@@ -195,6 +195,8 @@ describe('createInvoice — package links', () => {
       getClientDefaultRateTable: async () => null,
       getClientDefaultRateCard: async () => null,
       getClientLifecycle: async () => clientActive,
+      getClientForBilling: async () => ({ id: 'c1', name: 'Ana', active: clientActive, default_rate_card_id: null, default_rate_id: null }),
+      listClientsForBilling: async () => [{ id: 'c1', name: 'Ana', active: clientActive, default_rate_card_id: null, default_rate_id: null }],
       getActivePackageLink: async () => null,
       getActivePackageLinks: async () => new Map<string, string>(),
       getPackagesForBulk: async (ids: string[]) =>
@@ -461,6 +463,8 @@ describe('createInvoice — other charges', () => {
       getClientDefaultRateTable: async () => null,
       getClientDefaultRateCard: async () => null,
       getClientLifecycle: async () => true,
+      getClientForBilling: async () => ({ id: 'c1', name: 'Ana', active: true, default_rate_card_id: null, default_rate_id: null }),
+      listClientsForBilling: async () => [{ id: 'c1', name: 'Ana', active: true, default_rate_card_id: null, default_rate_id: null }],
       conceptBelongsToOrg: async () => conceptInOrg,
       getChargeConcept: async () => ({ id: 'cc1', name: 'Delivery' }),
       nextInvoiceNumber: async () => 1,
@@ -607,6 +611,8 @@ describe('createInvoice — initial lock state', () => {
       getClientDefaultRateTable: async () => null,
       getClientDefaultRateCard: async () => null,
       getClientLifecycle: async () => true,
+      getClientForBilling: async () => ({ id: 'c1', name: 'Ana', active: true, default_rate_card_id: null, default_rate_id: null }),
+      listClientsForBilling: async () => [{ id: 'c1', name: 'Ana', active: true, default_rate_card_id: null, default_rate_id: null }],
       nextInvoiceNumber: async () => 1,
       createInvoiceHeader,
       insertLineItems: async () => {},
@@ -664,6 +670,8 @@ function bulkRepo(pkgs: Array<{ id: string; almacen_id: string; effective_status
     getClientDefaultRateTable: async () => defaultRateTableId,
     getClientDefaultRateCard: async () => null,
     getClientLifecycle: async () => true,
+    getClientForBilling: async (id: string) => ({ id, name: 'Ana', active: true, default_rate_card_id: null, default_rate_id: defaultRateTableId }),
+    listClientsForBilling: async () => [{ id: 'c1', name: 'Ana', active: true, default_rate_card_id: null, default_rate_id: defaultRateTableId }],
     getOrgRateCards: async () => [],
       getOrgRates: async () => [
         { id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] },
@@ -786,5 +794,121 @@ describe('linkedPackageIds', () => {
     expect(repo.listLinkedPackageIds).toHaveBeenCalledWith('hit')
     // dedup handled by the repo (Set in the impl), but the service passes through
     expect(ids).toEqual(['p1', 'p2', 'p1'])
+  })
+})
+
+// ─── Client resolution + the client's default rate (individual invoice) ──────
+
+describe('createInvoice — client + default rate', () => {
+  const ana: import('../repo/billing-repo.js').BillingClientRow = {
+    id: 'c-ana', name: 'María José', active: true, default_rate_card_id: 'card-orig', default_rate_id: null,
+  }
+
+  function repoFor(clientName: string, opts: {
+    clientRow?: import('../repo/billing-repo.js').BillingClientRow | null
+    clients?: import('../repo/billing-repo.js').BillingClientRow[]
+    packageClientId?: string | null
+    referencia?: string | null
+    cardPrice?: number
+  } = {}) {
+    const upsertClient = vi.fn(async () => 'created-by-name')
+    const createInvoiceHeader = vi.fn(async () => 'i1')
+    const insertLineItems = vi.fn(async () => {})
+    const repo = {
+      getOrgRateCards: async () => [{
+        id: 'card-orig', name: 'Original Express', priceModel: 'weight', currency: 'USD', versionId: 'v1',
+        entries: [{ id: 'e1', serviceType: 'AIR', name: 'REGULAR', unit: 'lb', price: opts.cardPrice ?? 12, cost: 6 }],
+      }],
+      getOrgRates: async () => [],
+      getCatalog: async () => [{ freightType: 'AIR', cost: 3, tiers: { REGULAR: 5 } }],
+      getClientForBilling: async (id: string, org: string) =>
+        opts.clientRow && opts.clientRow.id === id && org === 'solo-guegue' ? opts.clientRow : null,
+      listClientsForBilling: async (org: string) => (org === 'solo-guegue' ? (opts.clients ?? []) : []),
+      upsertClient,
+      getClientDefaultRateCard: async () => null,
+      getClientDefaultRateTable: async () => null,
+      getClientLifecycle: async () => true,
+      getPackagesForBulk: async (ids: string[]) => ids.map((id) => ({
+        id, almacen_id: `G-${id}`, tracking_number: null, effective_status: 'entregado',
+        service_type: 'aereo', effective_service_type: 'aereo', weight_lb: 5,
+        client_id: opts.packageClientId ?? null, referencia_name: opts.referencia ?? clientName,
+        organization_id: 'solo-guegue',
+      })),
+      getActivePackageLinks: async () => new Map<string, string>(),
+      nextInvoiceNumber: async () => 1,
+      createInvoiceHeader,
+      insertLineItems,
+      linkPackages: async () => {},
+      insertPackageEvents: async () => {},
+      insertAuditLog: async () => {},
+      insertInvoiceEvent: async () => {},
+      listActiveLinkedPackageIds: async () => ['pkg-1'],
+      getInvoiceBundle: async () => bundle({ client_id: 'c-ana', client_name_raw: 'María José' }),
+    } as unknown as BillingRepository
+    return { repo, upsertClient, createInvoiceHeader, insertLineItems }
+  }
+
+  const line = { freightType: 'AIR' as const, tier: 'REGULAR', quantityLbs: 5, packageId: 'pkg-1' }
+
+  it('prices with the explicit clientId default card, not the catalog, and never creates a duplicate client', async () => {
+    const { repo, upsertClient, createInvoiceHeader, insertLineItems } = repoFor('ORIGINAL EXPRESS', {
+      clientRow: ana, packageClientId: 'c-ana', referencia: 'ORIGINAL EXPRESS', cardPrice: 12,
+    })
+    await new BillingService(repo).createInvoice({ clientId: 'c-ana', clientName: 'ORIGINAL EXPRESS', lines: [line] }, 'tester', 'solo-guegue')
+
+    expect(upsertClient).not.toHaveBeenCalled()
+    const header = createInvoiceHeader.mock.calls[0][0] as Record<string, unknown>
+    expect(header.client_id).toBe('c-ana')
+    expect(header.client_name_raw).toBe('María José')
+    const row = (insertLineItems.mock.calls[0] as unknown[][])[1][0] as Record<string, unknown>
+    expect(row.unit_price).toBe(12)
+    expect(row.rate_card_id).toBe('card-orig')
+    expect(row.pricing_source).toBe('rate_card')
+  })
+
+  it('rejects a clientId from another org instead of silently resolving by name', async () => {
+    const { repo, createInvoiceHeader } = repoFor('Ana', { clientRow: null, packageClientId: 'c-ana' })
+    await expect(
+      new BillingService(repo).createInvoice({ clientId: 'c-foreign', clientName: 'Ana', lines: [line] }, 'tester', 'solo-guegue'),
+    ).rejects.toThrow(/no existe en tu agencia/)
+    expect(createInvoiceHeader).not.toHaveBeenCalled()
+  })
+
+  it('rejects an explicit client that is deactivated', async () => {
+    const { repo } = repoFor('Ana', { clientRow: { ...ana, active: false }, packageClientId: 'c-ana' })
+    await expect(
+      new BillingService(repo).createInvoice({ clientId: 'c-ana', clientName: 'Ana', lines: [line] }, 'tester', 'solo-guegue'),
+    ).rejects.toThrow(/desactivado/)
+  })
+
+  it('matches a legacy free-text referencia (accents/HAZMAT/case) to the existing client and its rate', async () => {
+    const { repo, upsertClient, createInvoiceHeader } = repoFor('HAZMAT MARIA JOSE', {
+      clients: [ana], packageClientId: null, referencia: 'HAZMAT MARIA JOSE', cardPrice: 12,
+    })
+    await new BillingService(repo).createInvoice({ clientName: 'HAZMAT MARIA JOSE', lines: [line] }, 'tester', 'solo-guegue')
+
+    expect(upsertClient).not.toHaveBeenCalled()
+    const header = createInvoiceHeader.mock.calls[0][0] as Record<string, unknown>
+    expect(header.client_id).toBe('c-ana')
+    expect(header.client_name_raw).toBe('María José')
+  })
+
+  it('creates a client only when no name matches, preserving the old fallback', async () => {
+    const { repo, upsertClient, createInvoiceHeader } = repoFor('Cliente Nuevo', { clients: [], packageClientId: null })
+    await new BillingService(repo).createInvoice({ clientName: 'Cliente Nuevo', lines: [line] }, 'tester', 'solo-guegue')
+    expect(upsertClient).toHaveBeenCalledWith('Cliente Nuevo', 'cliente nuevo', 'solo-guegue')
+    const header = createInvoiceHeader.mock.calls[0][0] as Record<string, unknown>
+    expect(header.client_id).toBe('created-by-name')
+  })
+
+  it('refuses to guess when several clients fuzzy-match without a configured rate', async () => {
+    const duplicates = [
+      { ...ana, id: 'c-ana-1', name: 'María José', default_rate_card_id: null },
+      { ...ana, id: 'c-ana-2', name: 'Maria Jose', default_rate_card_id: null },
+    ]
+    const { repo } = repoFor('Maria Jose', { clients: duplicates, packageClientId: null, referencia: 'MARIA JOSE' })
+    await expect(
+      new BillingService(repo).createInvoice({ clientName: 'MARIA JOSE', lines: [line] }, 'tester', 'solo-guegue'),
+    ).rejects.toThrow(/varios clientes/)
   })
 })

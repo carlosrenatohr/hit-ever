@@ -38,6 +38,9 @@ export interface CreateOtherLineInput {
 }
 export interface CreateInvoiceInput {
   clientName: string
+  /** Explicit billing client (panel picks the package's assigned client). When
+   *  present it wins over clientName and drives the client's default rate. */
+  clientId?: string | null
   issueDate?: string | null
   address?: string | null
   specialPrice?: boolean
@@ -589,22 +592,68 @@ export class BillingService {
     return b ? toView(b) : null
   }
 
+  /**
+   * Resolve the invoice's client and its default rate in one pass.
+   *
+   * - An explicit clientId (the package's assigned client, sent by the panel)
+   *   is read org-scoped: a foreign/unknown id is rejected, never silently
+   *   re-resolved by name (that is how an invoice used to land on a duplicate
+   *   client with no rate).
+   * - Without an id, the free-text name is matched against the org's clients
+   *   with clientMatchKey (case/accent/HAZMAT tolerant). Providers ship
+   *   "MARIA JOSE" while the client row is "María José": a plain upsert by
+   *   normalized key created a second client with no default rate, so the
+   *   invoice silently fell back to the catalog price. Only when nobody matches
+   *   is a new client created.
+   */
+  private async resolveInvoiceClient(
+    input: Pick<CreateInvoiceInput, 'clientId' | 'clientName'>,
+    organizationId: string,
+  ): Promise<{ id: string; name: string; defaultRateTableId: string | null }> {
+    if (input.clientId) {
+      const client = await this.repo.getClientForBilling(input.clientId, organizationId)
+      if (!client) throw new Error('El cliente seleccionado no existe en tu agencia.')
+      if (client.active === false) throw new Error('El cliente está desactivado — reactiva su cuenta antes de facturar.')
+      return { id: client.id, name: client.name, defaultRateTableId: client.default_rate_card_id ?? client.default_rate_id ?? null }
+    }
+
+    const { display, key } = normalizeClientName(input.clientName)
+    const wanted = clientMatchKey(display)
+    const clients = await this.repo.listClientsForBilling(organizationId)
+    const matches = clients.filter((c) => clientMatchKey(c.name) === wanted)
+    if (matches.length > 1) {
+      // Ambiguous fuzzy match: prefer the client staff actually configured
+      // (default rate set) and never guess between two configured rows.
+      const configured = matches.filter((c) => c.default_rate_card_id || c.default_rate_id)
+      if (configured.length === 1) {
+        const c = configured[0]
+        if (c.active === false) throw new Error('El cliente está desactivado — reactiva su cuenta antes de facturar.')
+        return { id: c.id, name: c.name, defaultRateTableId: c.default_rate_card_id ?? c.default_rate_id ?? null }
+      }
+      throw new Error(`Hay varios clientes que coinciden con «${display}» — elegí el cliente en Facturación.`)
+    }
+    if (matches.length === 1) {
+      const c = matches[0]
+      if (c.active === false) throw new Error('El cliente está desactivado — reactiva su cuenta antes de facturar.')
+      return { id: c.id, name: c.name, defaultRateTableId: c.default_rate_card_id ?? c.default_rate_id ?? null }
+    }
+
+    const clientId = await this.repo.upsertClient(display, key, organizationId)
+    return { id: clientId, name: display, defaultRateTableId: null }
+  }
+
   async createInvoice(input: CreateInvoiceInput, actor: string, organizationId: string = 'hit'): Promise<InvoiceView> {
     if (!input.lines?.length) throw new Error('La factura necesita al menos una línea.')
     const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10)
     const fiscalYear = new Date(issueDate).getUTCFullYear()
 
-    // Resolve the client first: its default rate drives per-tenant pricing
-    // (rate card for migrated orgs, legacy table fallback).
-    const { display, key } = normalizeClientName(input.clientName)
-    const clientId = await this.repo.upsertClient(display, key, organizationId)
-    const defaultRateTableId = clientId ? (await this.repo.getClientDefaultRateCard(clientId)) ?? (await this.repo.getClientDefaultRateTable(clientId)) : null
-    // Deactivated clients can't be billed again (historical invoices stay intact).
-    const clientActive = await this.repo.getClientLifecycle(clientId)
-    if (clientActive === false) {
-      throw new Error('El cliente está desactivado — reactiva su cuenta antes de facturar.')
-    }
-
+    // Resolve the client first: its identity and default rate drive pricing
+    // (rate card for migrated orgs, legacy table fallback). An explicit
+    // clientId is authoritative; a free-text name is matched tolerantly.
+    const client = await this.resolveInvoiceClient(input, organizationId)
+    const display = client.name
+    const clientId = client.id
+    const defaultRateTableId = client.defaultRateTableId
     // Package links come from the per-line packageId (guided flow) or the
     // legacy packageIds array. Validate them together (org, invoiceable,
     // client match, active-link) and resolve the guía/tracking snapshot.
@@ -1344,8 +1393,12 @@ export class BillingService {
 
     const issueDate = input.issueDate ?? new Date().toISOString().slice(0, 10)
     const fiscalYear = new Date(issueDate).getUTCFullYear()
-    const { display, key } = normalizeClientName(preview.clientName)
-    const clientId = await this.repo.upsertClient(display, key, organizationId)
+    // Reuse the client the preview resolved (assigned client_id when present):
+    // upserting by referencia_name here filed the header under a duplicate
+    // client that had no default rate.
+    const client = await this.resolveInvoiceClient({ clientId: preview.clientId, clientName: preview.clientName }, organizationId)
+    const clientId = client.id
+    const display = client.name
     const invoiceNumber = await this.repo.nextInvoiceNumber(fiscalYear, organizationId)
 
     // Build line rows — one freight line per package with snapshots.

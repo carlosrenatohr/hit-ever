@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Facturación bloqueada (400 de InsForge)**: las lecturas de paquetes usaban
+  `effective_weight_lb as weight_lb`, sintaxis SQL que PostgREST rechaza. Ahora usan
+  el alias correcto `weight_lb:effective_weight_lb`; afectaba la creación de facturas
+  (individual, guiada y bulk) y la lista de guías de un cliente.
+- **Tarifa del cliente en facturas individuales**: el POST acepta `clientId` y lo
+  resuelve dentro de la organización. Sin id, el nombre libre se compara con
+  `clientMatchKey` antes de crear un cliente, así una referencia
+  «HAZMAT MARIA JOSE» no abre un cliente duplicado sin tarifa por defecto (que caía
+  al catálogo general). El bulk reutiliza el cliente que ya resolvió el preview.
 - **Facturas parciales (incidente 2026-10-24)**: el bulk de facturación dejaba facturas
   vivas a medias al explotar el límite de 50 subrequests (POSTs por paquete, `8+5N`).
   Reparación idempotente de vínculos (`20261026214605`), presupuesto de subrequests

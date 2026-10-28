@@ -165,6 +165,15 @@ export interface PackageBulkRow {
   organization_id: string
 }
 
+/** Minimal client shape used to resolve an invoice's client + its default rate. */
+export interface BillingClientRow {
+  id: string
+  name: string
+  active: boolean
+  default_rate_card_id: string | null
+  default_rate_id: string | null
+}
+
 export interface ExceptionRow {
   invoiceId: string
   invoiceNumber: number
@@ -192,6 +201,11 @@ export interface BillingRepository {
   getClientDefaultRateCard(clientId: string): Promise<string | null>
   /** The client's lifecycle state (active) by id; null if the client doesn't exist. */
   getClientLifecycle(clientId: string): Promise<boolean | null>
+  /** Org-scoped client read (identity + defaults) for an explicit client pick. */
+  getClientForBilling(clientId: string, organizationId: string): Promise<BillingClientRow | null>
+  /** Every live client of the org — one read used to match a free-text name
+   *  (accent/HAZMAT/case tolerant) before creating a duplicate row. */
+  listClientsForBilling(organizationId: string): Promise<BillingClientRow[]>
   upsertClient(display: string, key: string, organizationId: string): Promise<string>
   // Import (idempotent upsert path):
   upsertInvoiceHeader(row: Row): Promise<string>
@@ -394,6 +408,24 @@ export class InsforgeBillingRepo implements BillingRepository {
     return rows[0] ? rows[0].active : null
   }
 
+  async getClientForBilling(clientId: string, organizationId: string): Promise<BillingClientRow | null> {
+    const rows = await this.get<BillingClientRow>(
+      'billing_clients',
+      `id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,name,active,default_rate_card_id,default_rate_id&limit=1`,
+    )
+    return rows[0] ?? null
+  }
+
+  async listClientsForBilling(organizationId: string): Promise<BillingClientRow[]> {
+    // One read per invoice that arrives without an explicit client id. Client
+    // counts per agency stay in the hundreds; the payload is identity + defaults
+    // only, and it spares the old 3-read upsert/lifecycle/rate dance.
+    return this.get<BillingClientRow>(
+      'billing_clients',
+      `organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,name,active,default_rate_card_id,default_rate_id&order=name.asc&limit=5000`,
+    )
+  }
+
   async upsertClient(display: string, key: string, organizationId: string): Promise<string> {
     const rows = await this.post<{ id: string }>(
       'billing_clients',
@@ -586,12 +618,12 @@ export class InsforgeBillingRepo implements BillingRepository {
   async getPackagesForBulk(packageIds: string[], organizationId: string): Promise<PackageBulkRow[]> {
     if (packageIds.length === 0) return []
     const ids = packageIds.map((id) => encodeURIComponent(id)).join(',')
-    const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,effective_weight_lb as weight_lb,client_id,referencia_name,organization_id&limit=${packageIds.length}`
+    const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb:effective_weight_lb,client_id,referencia_name,organization_id&limit=${packageIds.length}`
     return this.get<PackageBulkRow>('packages', q)
   }
 
   async getPackagesForClient(clientId: string, organizationId: string): Promise<PackageBulkRow[]> {
-    const q = `client_id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,effective_weight_lb as weight_lb,client_id,referencia_name,organization_id&limit=1000`
+    const q = `client_id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb:effective_weight_lb,client_id,referencia_name,organization_id&limit=1000`
     return this.get<PackageBulkRow>('packages', q)
   }
 
