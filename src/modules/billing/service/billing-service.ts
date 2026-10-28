@@ -16,6 +16,47 @@ import type { BillingRepository, ExceptionsPayload, InvoiceBundle } from '../rep
 
 const EPS = 0.01
 
+/**
+ * Every invoice_line_items row must carry the SAME key set.
+ *
+ * The repo inserts lines in one bulk POST, and PostgREST rejects a batch whose
+ * objects have different shapes (`PGRST102 "All object keys must match"`). That
+ * is how an invoice mixing freight lines with an "other charge" died with a 500
+ * *after* deleting the existing lines. `lineRow()` is the single place that
+ * defines the full shape; each line type only overrides its own values.
+ */
+const LINE_ROW_DEFAULTS = {
+  line_no: 1,
+  description: null as string | null,
+  freight_type: null as string | null,
+  line_type: 'freight' as 'freight' | 'other',
+  concept_id: null as string | null,
+  quantity_lbs: null as number | null,
+  unit: 'lbs',
+  unit_price: 0,
+  total: 0,
+  list_price: null as number | null,
+  freight_cost: 0,
+  profit: 0,
+  price_tier: null as string | null,
+  price_off_catalog: false,
+  package_id: null as string | null,
+  package_guia: null as string | null,
+  package_tracking: null as string | null,
+  organization_id: '',
+  rate_card_id: null as string | null,
+  rate_card_version_id: null as string | null,
+  rate_card_entry_id: null as string | null,
+  base_unit_price: null as number | null,
+  discount_amount: 0,
+  surcharge_amount: 0,
+  pricing_source: null as string | null,
+}
+
+function lineRow(overrides: Partial<typeof LINE_ROW_DEFAULTS>): typeof LINE_ROW_DEFAULTS {
+  return { ...LINE_ROW_DEFAULTS, ...overrides }
+}
+
 export interface CreateLineInput {
   freightType: FreightType
   tier: PriceTier
@@ -95,6 +136,11 @@ export interface InvoiceView {
     profit: number
     priceTier: PriceTier | null
     priceOffCatalog: boolean
+    /** Card that priced this line (frozen snapshot) — lets the panel keep the
+     *  original tariff when editing instead of falling back to the client's
+     *  current default. */
+    rateCardId: string | null
+    pricingSource: string | null
     packageId: string | null
     packageGuia: string | null
     packageTracking: string | null
@@ -243,6 +289,8 @@ export function toView(b: InvoiceBundle): InvoiceView {
       profit: l.profit,
       priceTier: (l.price_tier as PriceTier | null) ?? null,
       priceOffCatalog: l.price_off_catalog,
+      rateCardId: l.rate_card_id ?? null,
+      pricingSource: l.pricing_source ?? null,
     })),
     payments: b.payments.map((p) => ({
       method: p.method,
@@ -669,7 +717,7 @@ export class BillingService {
       const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, l.rateTableId ?? defaultRateTableId)
       if (!q) throw new Error(`El nivel ${l.tier} no está disponible para ${l.freightType}.`)
       const info = l.packageId ? packageInfo.get(l.packageId) : undefined
-      lineRows.push({
+      lineRows.push(lineRow({
         line_no: i + 1,
         description: l.description ?? null,
         freight_type: l.freightType,
@@ -696,7 +744,7 @@ export class BillingService {
         discount_amount: 0,
         surcharge_amount: 0,
         pricing_source: q.pricingSource,
-      })
+      }))
     }
     // "Other" charges: admin-set amounts (never quoted). Each may reference a
     // concept template (validated against the agency) with extra free text.
@@ -715,7 +763,7 @@ export class BillingService {
         const concept = await this.repo.getChargeConcept(o.conceptId, organizationId)
         if (concept) name = name ? `${concept.name} — ${name}` : concept.name
       }
-      lineRows.push({
+      lineRows.push(lineRow({
         line_no: lineNo,
         description: name || 'Otro cargo',
         freight_type: null,
@@ -731,7 +779,10 @@ export class BillingService {
         price_tier: null,
         price_off_catalog: false,
         organization_id: organizationId,
-      })
+        base_unit_price: round2(o.amount),
+        // Other charges are admin-set: no rate card priced them.
+        pricing_source: null,
+      }))
     }
     const total = round2(lineRows.reduce((s, r) => s + r.total, 0))
     const profit = round2(lineRows.reduce((s, r) => s + r.profit, 0))
@@ -763,7 +814,6 @@ export class BillingService {
       profit,
       paid_usd: 0,
     })
-    await this.repo.insertLineItems(invoiceId, lineRows)
     // Everything from here on is post-header work that must complete together:
     // lines, links, package events and the invoice event. If any step fails the
     // invoice is compensated (archived + links released) so no half-invoice
@@ -771,6 +821,7 @@ export class BillingService {
     const supportCode = `F-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
     let linkedCount: number | null = null
     try {
+      await this.repo.insertLineItems(invoiceId, lineRows)
       // matched_oc carries the guía: the linked-packages view must show the
       // guía, never a raw UUID. Batched posts keep the fetch budget constant.
       await this.repo.linkPackages(
@@ -855,7 +906,7 @@ export class BillingService {
         const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, l.rateTableId ?? defaultRateTableId)
         if (!q) throw new Error(`El nivel ${l.tier} no está disponible para ${l.freightType}.`)
         const info = l.packageId ? packageInfo.get(l.packageId) : undefined
-        lineRows.push({
+        lineRows.push(lineRow({
           line_no: i + 1,
           description: l.description ?? null,
           freight_type: l.freightType,
@@ -881,7 +932,7 @@ export class BillingService {
           discount_amount: 0,
           surcharge_amount: 0,
           pricing_source: q.pricingSource,
-        })
+        }))
       }
     }
 
@@ -901,7 +952,7 @@ export class BillingService {
           const concept = await this.repo.getChargeConcept(o.conceptId, organizationId)
           if (concept) name = name ? `${concept.name} — ${name}` : concept.name
         }
-        otherRows.push({
+        otherRows.push(lineRow({
           line_no: lineNo,
           description: name || 'Otro cargo',
           freight_type: null,
@@ -917,7 +968,9 @@ export class BillingService {
           price_tier: null,
           price_off_catalog: false,
           organization_id: organizationId,
-        })
+          base_unit_price: round2(o.amount),
+          pricing_source: null,
+        }))
       }
     }
 
@@ -1402,7 +1455,7 @@ export class BillingService {
     const invoiceNumber = await this.repo.nextInvoiceNumber(fiscalYear, organizationId)
 
     // Build line rows — one freight line per package with snapshots.
-    const lineRows = preview.lines.map((l, i) => ({
+    const lineRows = preview.lines.map((l, i) => lineRow({
       line_no: i + 1,
       description: `${l.serviceType ?? 'paquete'}`,
       freight_type: l.freightType,
@@ -1453,14 +1506,14 @@ export class BillingService {
       paid_usd: 0,
     })
 
-    await this.repo.insertLineItems(invoiceId, lineRows)
-
     // Link every package + emit timeline events, batched and guarded like the
-    // guided flow: any failure compensates the whole invoice (archive + release).
+    // guided flow: any failure (including the line insert) compensates the whole
+    // invoice (archive + release) instead of leaving a zero-line ghost draft.
     const supportCode = `F-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
     const bulkPackageIds = preview.lines.map((l) => l.packageId)
     let linkedCount: number | null = null
     try {
+      await this.repo.insertLineItems(invoiceId, lineRows)
       // matched_oc carries the guía so the linked-packages view shows the guide,
       // never a raw UUID.
       await this.repo.linkPackages(

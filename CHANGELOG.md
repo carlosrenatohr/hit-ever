@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Editar o cerrar facturas con «otros cargos» (500)**: PostgREST rechaza un POST
+  masivo cuyos objetos no tienen exactamente las mismas columnas
+  (`400 PGRST102 "All object keys must match"`). Las líneas de flete y las de «otro
+  cargo» no compartían forma, así que toda factura mixta explotaba — y al editar lo
+  hacía *después* de borrar las líneas existentes. Ahora todas las filas se construyen
+  con `lineRow()` (mismo set de claves) y `insertLineItems` valida la forma antes de
+  enviar. La inserción de líneas entró al guard de rollback de la creación (individual,
+  guiada y bulk): si falla, la factura se revierte en vez de quedar como borrador sin
+  líneas (caso de las facturas 6029, 6030 y 6032).
+- **La vista de factura expone la tarifa que fijó el precio** (`rateCardId`,
+  `pricingSource` por línea): el panel conserva la tarjeta original al editar un
+  borrador en vez de recalcular con la tarifa por defecto actual del cliente.
 - **Facturación bloqueada (400 de InsForge)**: las lecturas de paquetes usaban
   `effective_weight_lb as weight_lb`, sintaxis SQL que PostgREST rechaza. Ahora usan
   el alias correcto `weight_lb:effective_weight_lb`; afectaba la creación de facturas

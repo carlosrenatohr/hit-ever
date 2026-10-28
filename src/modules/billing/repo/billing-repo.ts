@@ -66,6 +66,12 @@ export interface LineItemDbRow {
   profit: number
   price_tier: string | null
   price_off_catalog: boolean
+  /** Pricing provenance snapshot (v2 cards): the card/version/entry that priced
+   *  this line, frozen at creation so edits never silently re-price it. */
+  rate_card_id: string | null
+  rate_card_version_id: string | null
+  rate_card_entry_id: string | null
+  pricing_source: string | null
   // Bulk-invoicing per-line snapshot: the package this freight line bills and
   // its guide/tracking text frozen at billing time (NULL on manual/import lines).
   package_id: string | null
@@ -130,6 +136,27 @@ function rowToCatalog(r: PricingCatalogRow): CatalogEntry {
 }
 
 export type Row = Record<string, unknown>
+
+/**
+ * PostgREST bulk inserts require every object in the array to carry the SAME
+ * keys; mixing shapes returns `PGRST102 "All object keys must match"` (the
+ * 2026-10-28 outage: freight lines had `package_id`, "otro cargo" rows did not).
+ * Bulk line inserts go through `lineRow()` so this should never trip — but a
+ * local, explicit failure here beats a remote 400 that can arrive after the
+ * caller already deleted the previous rows.
+ */
+export function assertUniformKeys(table: string, rows: Row[]): void {
+  if (rows.length < 2) return
+  const expected = Object.keys(rows[0]).sort().join(',')
+  for (let i = 1; i < rows.length; i++) {
+    const got = Object.keys(rows[i]).sort().join(',')
+    if (got !== expected) {
+      throw new Error(
+        `InsForge POST ${table} refused locally: row 0 and row ${i} have different keys (PGRST102 would reject the batch).`,
+      )
+    }
+  }
+}
 
 /** One org rate table with its rows (config module's rate_tables/rate_rows). */
 export interface OrgRateTable {
@@ -453,7 +480,9 @@ export class InsforgeBillingRepo implements BillingRepository {
   }
 
   async insertLineItems(invoiceId: string, rows: Row[]): Promise<void> {
-    await this.post('invoice_line_items', rows.map((r) => ({ ...r, invoice_id: invoiceId })))
+    const full = rows.map((r) => ({ ...r, invoice_id: invoiceId }))
+    assertUniformKeys('invoice_line_items', full)
+    await this.post('invoice_line_items', full)
   }
 
   async replacePayments(invoiceId: string, rows: Row[]): Promise<void> {

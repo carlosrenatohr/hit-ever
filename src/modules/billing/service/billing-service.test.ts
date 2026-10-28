@@ -912,3 +912,140 @@ describe('createInvoice — client + default rate', () => {
     ).rejects.toThrow(/varios clientes/)
   })
 })
+
+// ─── Line row shape (PostgREST rejects heterogeneous bulk inserts) ────────────
+// Incident 2026-10-28: an invoice with freight lines + an "otro cargo" sent one
+// bulk POST whose objects had different keys → 400 PGRST102 "All object keys
+// must match" → 500, after the edit had already deleted the existing lines.
+
+describe('invoice line rows — uniform key set', () => {
+  const keysOf = (rows: unknown[]) => rows.map((r) => Object.keys(r as object).sort().join(','))
+
+  function repoForLines(over: Record<string, unknown> = {}) {
+    const insertLineItems = vi.fn(async () => {})
+    const replaceLineItems = vi.fn(async () => {})
+    const setInvoiceArchived = vi.fn(async () => {})
+    const bundle: InvoiceBundle = {
+      header: {
+        id: 'i1', invoice_number: 1, fiscal_year: 2026, client_id: 'c1', client_name_raw: 'Ana',
+        issue_date: '2026-10-28', status: 'DRAFT', address: null, special_price: false, observations: null,
+        tracking_orders: [], agent_id: null, created_at: '', updated_at: '', total: 0, profit: 0, paid_usd: 0,
+        closed_at: null, closed_by: null,
+      } as unknown as InvoiceBundle['header'],
+      lines: [],
+      payments: [],
+      packages: [],
+    }
+    const repo = {
+      getOrgRateCards: async () => [],
+      getOrgRates: async () => [
+        { id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] },
+      ],
+      getCatalog: async () => [],
+      upsertClient: async () => 'c1',
+      getClientForBilling: async () => ({ id: 'c1', name: 'Ana', active: true, default_rate_card_id: null, default_rate_id: null }),
+      listClientsForBilling: async () => [{ id: 'c1', name: 'Ana', active: true, default_rate_card_id: null, default_rate_id: null }],
+      getClientDefaultRateTable: async () => null,
+      getClientDefaultRateCard: async () => null,
+      getClientLifecycle: async () => true,
+      getActivePackageLinks: async () => new Map<string, string>(),
+      getPackagesForBulk: async (ids: string[]) => ids.map((id) => ({
+        id, almacen_id: `G-${id}`, tracking_number: null, effective_status: 'entregado',
+        service_type: 'aereo', effective_service_type: 'aereo', weight_lb: 2,
+        client_id: 'c1', referencia_name: 'Ana', organization_id: 'solo-guegue',
+      })),
+      conceptBelongsToOrg: async () => true,
+      getChargeConcept: async () => ({ id: 'cc1', name: 'Delivery' }),
+      nextInvoiceNumber: async () => 1,
+      createInvoiceHeader: async () => 'i1',
+      insertLineItems,
+      replaceLineItems,
+      patchInvoiceHeader: async () => {},
+      linkPackages: async () => {},
+      linkPackage: async () => {},
+      unlinkPackage: async () => {},
+      insertPackageEvents: async () => {},
+      insertPackageEvent: async () => {},
+      insertInvoiceEvent: async () => {},
+      insertAuditLog: async () => {},
+      releasePackageLinksByInvoice: async () => {},
+      setInvoiceArchived,
+      listActiveLinkedPackageIds: async () => ['pkg-1'],
+      getInvoiceBundle: async () => bundle,
+      getActivePackageLink: async () => null,
+      ...over,
+    } as unknown as BillingRepository
+    return { repo, insertLineItems, replaceLineItems, setInvoiceArchived }
+  }
+
+  const freight = { freightType: 'AIR' as const, tier: 'REGULAR', quantityLbs: 5, packageId: 'pkg-1' }
+  const other = { conceptId: 'cc1', description: null, amount: 3 }
+
+  it('createInvoice: freight + other lines share every key', async () => {
+    const { repo, insertLineItems } = repoForLines()
+    await new BillingService(repo).createInvoice(
+      { clientName: 'Ana', lines: [freight], otherLines: [other] },
+      'tester',
+      'solo-guegue',
+    )
+    const rows = insertLineItems.mock.calls[0][1] as unknown[]
+    expect(rows).toHaveLength(2)
+    const [a, b] = keysOf(rows)
+    expect(a).toBe(b)
+    expect(a).toContain('rate_card_id')
+    expect(a).toContain('package_id')
+    expect(a).toContain('concept_id')
+  })
+
+  it('updateInvoice: freight + other lines share every key (the edit that used to 500)', async () => {
+    const { repo, replaceLineItems } = repoForLines()
+    await new BillingService(repo).updateInvoice(
+      'i1',
+      { lines: [freight], otherLines: [other] },
+      'tester',
+      'solo-guegue',
+    )
+    const rows = replaceLineItems.mock.calls[0][1] as unknown[]
+    expect(rows).toHaveLength(2)
+    const [a, b] = keysOf(rows)
+    expect(a).toBe(b)
+  })
+
+  it('createInvoice: a failed line insert reverts the invoice instead of leaving a zero-line draft', async () => {
+    const { repo, insertLineItems, setInvoiceArchived } = repoForLines()
+    insertLineItems.mockRejectedValueOnce(new Error('InsForge POST invoice_line_items → 400'))
+    await expect(
+      new BillingService(repo).createInvoice({ clientName: 'Ana', lines: [freight], otherLines: [other] }, 'tester', 'solo-guegue'),
+    ).rejects.toMatchObject({ code: 'INVOICE_CREATION_REVERTED', status: 422 })
+    expect(setInvoiceArchived).toHaveBeenCalledWith('i1', 'solo-guegue', 'system:creation-failed', expect.stringContaining('F-'))
+  })
+})
+
+describe('invoice view — pricing snapshot', () => {
+  it('exposes the card that priced each line so the panel can keep it on edit', async () => {
+    const bundle: InvoiceBundle = {
+      header: {
+        id: 'i1', invoice_number: 7, fiscal_year: 2026, client_id: 'c1', client_name_raw: 'Ana',
+        issue_date: '2026-10-28', status: 'DRAFT', address: null, special_price: false, observations: null,
+        tracking_orders: [], agent_id: null, created_at: '', updated_at: '', total: 27.5, profit: 8, paid_usd: 0,
+        closed_at: null, closed_by: null,
+      } as unknown as InvoiceBundle['header'],
+      lines: [
+        {
+          id: 'l1', invoice_id: 'i1', line_no: 1, description: null, freight_type: 'AIR', line_type: 'freight',
+          concept_id: null, quantity_lbs: 5, unit: 'lbs', unit_price: 5.5, total: 27.5, list_price: null,
+          freight_cost: 22.5, profit: 5, price_tier: 'VIP', price_off_catalog: false,
+          rate_card_id: 'card-vip', rate_card_version_id: 'v1', rate_card_entry_id: 'e1',
+          pricing_source: 'rate_card', package_id: null, package_guia: null, package_tracking: null,
+        } as unknown as InvoiceBundle['lines'][number],
+      ],
+      payments: [],
+      packages: [],
+    }
+    const repo = {
+      getInvoiceBundle: async () => bundle,
+    } as unknown as BillingRepository
+    const view = await new BillingService(repo).get('i1', 'hit')
+    expect(view!.lines[0]).toMatchObject({ rateCardId: 'card-vip', pricingSource: 'rate_card', priceTier: 'VIP' })
+  })
+})
