@@ -26,7 +26,7 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   const msg = e instanceof Error ? e.message : 'Error inesperado.'
   if (/ya está facturado/i.test(msg)) return Res.err(c, 'PACKAGE_ALREADY_INVOICED', msg, 409)
   if (/no existe en tu agencia|no encontrada/i.test(msg)) return Res.err(c, 'NOT_FOUND', msg, 404)
-  if (/anulada|al menos una|no está disponible|ya está cerrada|ya fue cerrada|cierra la factura|vínculos de paquetes están congelados|no está[n]? facturable[s]?|pertenece a otro cliente|pertenecen a clientes distintos|no tiene cliente asignado|no tienen cliente asignado|no hay paquetes|demasiados|edición está bloqueada|no se puede editar|desactivado|cargos adicionales|no tiene peso|no tiene tipo de servicio/i.test(msg)) return Res.err(c, 'INVALID_REQUEST', msg, 422)
+  if (/anulada|al menos una|no está disponible|ya está cerrada|ya fue cerrada|cierra la factura|vínculos de paquetes están congelados|no está[n]? facturable[s]?|pertenece a otro cliente|pertenecen a clientes distintos|no tiene cliente asignado|no tienen cliente asignado|no hay paquetes|demasiados|varios clientes|edición está bloqueada|no se puede editar|desactivado|cargos adicionales|no tiene peso|no tiene tipo de servicio/i.test(msg)) return Res.err(c, 'INVALID_REQUEST', msg, 422)
   return Res.err(c, 'BILLING_ERROR', msg, 500)
 }
 
@@ -200,6 +200,9 @@ billing.post(
     'json',
     z.object({
       clientName: z.string().min(1),
+      // Optional explicit client: the panel sends the package's assigned client
+      // so the invoice prices with that client's default rate.
+      clientId: z.string().uuid().nullish(),
       issueDate: z.string().optional(),
       address: z.string().nullish(),
       specialPrice: z.boolean().optional(),
