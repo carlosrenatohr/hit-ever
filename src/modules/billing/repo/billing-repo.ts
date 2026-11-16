@@ -173,6 +173,10 @@ export interface OrgRateCard {
   priceModel: string
   currency: string
   versionId: string
+  /** Flexible pricing kind (weight|fixed|volume) — undefined = pre-schema card. */
+  pricingKind?: string
+  isDefault?: boolean
+  active?: boolean
   entries: { id: string; serviceType: FreightType; name: string; unit: string; price: number; cost: number | null }[]
 }
 
@@ -392,10 +396,10 @@ export class InsforgeBillingRepo implements BillingRepository {
       status: string
       rate_card_entries: { id: string; service_type: string; name: string; unit: string; price: number; cost: number | null }[]
     }
-    type CardDb = { id: string; name: string; structure: string; rate_card_versions: VersionDb[] }
+    type CardDb = { id: string; name: string; structure: string; pricing_kind?: string; is_default?: boolean; active?: boolean; rate_card_versions: VersionDb[] }
     const rows = await this.get<CardDb>(
       'rate_cards',
-      `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,structure,rate_card_versions(id,version,price_model,currency,status,rate_card_entries(id,service_type,name,unit,price,cost))`,
+      `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,structure,pricing_kind,is_default,active,rate_card_versions(id,version,price_model,currency,status,rate_card_entries(id,service_type,name,unit,price,cost))`,
     )
     return rows.map((r) => {
       const versions = (r.rate_card_versions ?? []).sort((a, b) => b.version - a.version)
@@ -406,6 +410,9 @@ export class InsforgeBillingRepo implements BillingRepository {
         priceModel: v?.price_model ?? 'weight',
         currency: v?.currency ?? 'USD',
         versionId: v?.id ?? '',
+        pricingKind: r.pricing_kind,
+        isDefault: r.is_default,
+        active: r.active,
         entries: (v?.rate_card_entries ?? [])
           .sort((a, b) => (a.service_type < b.service_type ? -1 : 1))
           .map((e) => ({

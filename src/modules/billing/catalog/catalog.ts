@@ -20,6 +20,10 @@ export interface Quote extends LineAmounts {
   rateCardId?: string | null
   rateCardVersionId?: string | null
   rateCardEntryId?: string | null
+  /** Billing unit ('lb' legacy, 'package' fixed) and pricing kind of the source card. */
+  unit?: string
+  pricingKind?: string
+  cardName?: string
 }
 
 export interface ResolvedRate {
@@ -30,6 +34,12 @@ export interface ResolvedRate {
   rateCardId?: string | null
   rateCardVersionId?: string | null
   rateCardEntryId?: string | null
+  /** Billing unit of the entry ('lb' legacy, 'package' for fixed services). */
+  unit?: string
+  /** Flexible pricing kind of the source card ('weight' legacy). */
+  pricingKind?: string
+  /** Card/service name — the label invoices show for fixed services. */
+  cardName?: string
 }
 
 /**
@@ -54,7 +64,7 @@ export function resolveOrgRate(
     const card = cards.find((c) => c.id === defaultRateId)
     if (card) {
       const entry = entryFor(card)
-      if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id }
+      if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id, unit: entry.unit, pricingKind: card.pricingKind ?? 'weight', cardName: card.name }
     } else {
       // Legacy default (billing_clients.default_rate_id) for an unmigrated org.
       const t = legacyTables.find((x) => x.id === defaultRateId && x.freightType === freightType)
@@ -64,7 +74,7 @@ export function resolveOrgRate(
   }
   for (const card of cards) {
     const entry = entryFor(card)
-    if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id }
+    if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id, unit: entry.unit, pricingKind: card.pricingKind ?? 'weight', cardName: card.name }
   }
   for (const t of legacyTables) {
     if (t.freightType !== freightType) continue
@@ -141,6 +151,9 @@ export class CatalogService {
         rateCardId: rate.rateCardId ?? null,
         rateCardVersionId: rate.rateCardVersionId ?? null,
         rateCardEntryId: rate.rateCardEntryId ?? null,
+        unit: rate.unit,
+        pricingKind: rate.pricingKind,
+        cardName: rate.cardName,
         ...amounts,
       }
     }

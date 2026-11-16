@@ -47,13 +47,16 @@ export function computeAmounts(quantityLbs: number, unitPrice: number, cost: num
   return { unitPrice, total, freightCost, profit }
 }
 
-// Price model: weight (lbs × price), volume (ft³ × price), fixed (flat per package).
+// Price model: weight (lbs × price), volume (ft³ × price), fixed (flat per guía).
 export type PriceModel = 'weight' | 'volume' | 'fixed'
 
 /**
- * Compute line amounts respecting the price model of the rate row. Only
- * 'weight' is implemented (quantity × price); volume/fixed are explicitly
- * rejected — never silently treated as weight.
+ * Compute line amounts respecting the price model of the rate row.
+ *   weight → quantity = lbs; total and freight cost scale with weight.
+ *   fixed  → quantity = guía/package count (NEVER pieces — one guía is one
+ *            package regardless of pieces); price and provider cost are the
+ *            flat configured amounts, weight plays no part in the money math.
+ *   volume → not implemented yet (explicitly rejected; never treated as weight).
  */
 export function computeAmountsByModel(
   quantity: number,
@@ -61,11 +64,16 @@ export function computeAmountsByModel(
   cost: number,
   priceModel: PriceModel = 'weight',
 ): LineAmounts {
-  if (priceModel !== 'weight') {
+  if (priceModel === 'volume') {
     throw new Error(`Price model "${priceModel}" is not implemented yet.`)
   }
+  if (priceModel === 'fixed') {
+    const total = round2(unitPrice * quantity)
+    const freightCost = round2(cost * quantity)
+    return { unitPrice, total, freightCost, profit: round2(total - freightCost) }
+  }
   const total = round2(quantity * unitPrice)
-  // freight_cost scales with weight regardless of how the customer is billed.
+  // Weight model: freight cost scales with weight like the customer total.
   const freightCost = round2(quantity * cost)
   const profit = round2(total - freightCost)
   return { unitPrice, total, freightCost, profit }

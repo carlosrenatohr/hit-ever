@@ -37,7 +37,7 @@ const base = { pricingSource: 'rate_card' } as const
 describe('resolveOrgRate (v2 cards)', () => {
   it('uses the explicit card entry matching the service (AIR)', () => {
     const r = resolveOrgRate(cards, [], 'AIR', 'Regular', 'c-vip')
-    expect(r).toEqual({ price: 5.5, cost: 4.5, priceModel: 'weight', ...base, rateCardId: 'c-vip', rateCardVersionId: 'v-vip', rateCardEntryId: 'e-vip-air' })
+    expect(r).toMatchObject({ price: 5.5, cost: 4.5, priceModel: 'weight', ...base, rateCardId: 'c-vip', rateCardVersionId: 'v-vip', rateCardEntryId: 'e-vip-air', unit: 'lb', pricingKind: 'weight', cardName: 'VIP' })
   })
 
   it('resolves MAR within the same card (service-based, not tier)', () => {
