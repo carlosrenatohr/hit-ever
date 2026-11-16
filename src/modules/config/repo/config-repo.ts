@@ -109,6 +109,8 @@ export interface ConfigRepository {
   setPackageRateOverrideCard(packageId: string, rateCardId: string | null, by: string | null): Promise<void>
   findPackageIdByToken(token: string): Promise<string | null>
   getAgencyInfo(slug: string): Promise<AgencyInfo | null>
+  /** Whether the flexible pricing feature is switched on for the agency. */
+  getFlexiblePricingFlag(organizationId: string): Promise<boolean>
   listChargeConcepts(organizationId: string): Promise<ChargeConcept[]>
   createChargeConcept(organizationId: string, name: string, suggestedPrice: number | null): Promise<ChargeConcept>
   updateChargeConcept(organizationId: string, id: string, patch: { name?: string; active?: boolean; suggestedPrice?: number | null }): Promise<void>
@@ -407,6 +409,14 @@ export class InsforgeConfigRepo implements ConfigRepository {
       `slug=eq.${encodeURIComponent(slug)}&select=slug,name,ruc,address,phone,currency,is_scrapable,exchange_rate_nio_per_usd,exchange_rate_source,exchange_rate_updated_at,name_last_updated&limit=1`,
     )
     return rows[0] ? toAgencyInfo(rows[0]) : null
+  }
+
+  async getFlexiblePricingFlag(organizationId: string): Promise<boolean> {
+    const rows = await this.get<{ flexible_pricing_enabled: boolean }>(
+      'agencies',
+      `slug=eq.${encodeURIComponent(organizationId)}&select=flexible_pricing_enabled&limit=1`,
+    )
+    return rows[0]?.flexible_pricing_enabled === true
   }
 
   async listPaymentMethods(organizationId: string): Promise<PaymentCatalogItem[]> {

@@ -24,6 +24,7 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   if (/not authorized|forbidden/i.test(msg)) return Res.err(c, 'FORBIDDEN', msg, 403)
   if (/under construction/i.test(msg)) return Res.err(c, 'PRICE_MODEL_UNDER_CONSTRUCTION', msg, 422)
   if (/once per month/i.test(msg)) return Res.err(c, 'NAME_CHANGE_COOLDOWN', msg, 409)
+  if (/flexible pricing is not enabled/i.test(msg)) return Res.err(c, 'FEATURE_NOT_ENABLED', 'El precio flexible no está habilitado para esta agencia.', 403)
   if (/in use/i.test(msg)) return Res.err(c, 'IN_USE', 'No se puede eliminar: el recurso está en uso.', 409)
   if (/duplicate|unique/i.test(msg)) return Res.err(c, 'CONFLICT', 'A resource with those values already exists.', 409)
   console.error('config error:', msg, 'requestId:', c.get('requestId') ?? null)
@@ -85,6 +86,22 @@ config.get('/info', configAuth('config:read'), async (c) => {
   const svc = new ConfigService(getConfigRepo(c.env))
   try {
     return Res.ok(c, await svc.getInfo(c.get('configSession')))
+  } catch (e) {
+    return fail(c, e)
+  }
+})
+
+/**
+ * GET /api/config/features — which opt-in features are on for the caller's
+ * agency. Always self-scoped: the flag comes from the session agency and
+ * ?organizationId= is deliberately ignored (the panel only uses this to
+ * show/hide UI; enabling is a server-side data/ops decision).
+ */
+config.get('/features', configAuth('config:read'), async (c) => {
+  const svc = new ConfigService(getConfigRepo(c.env))
+  try {
+    const session = c.get('configSession')
+    return Res.ok(c, { flexiblePricing: await svc.isFlexiblePricingEnabled(session.agency) })
   } catch (e) {
     return fail(c, e)
   }

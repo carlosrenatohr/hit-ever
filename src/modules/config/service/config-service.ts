@@ -323,6 +323,25 @@ export class ConfigService {
     return this.repo.getAgencyInfo(session.agency) as Promise<AgencyInfo>
   }
 
+  // ─── Feature flags (flexible pricing pilot) ──────────────────────────────────
+
+  /**
+   * Whether flexible pricing is switched on for the caller's agency. Always
+   * resolved from the SESSION agency — never from a query param — so the flag
+   * cannot be spoofed by the client. The flag is a kill-switch; the security
+   * boundary is RLS + this server-side gate.
+   */
+  async isFlexiblePricingEnabled(organizationId: string): Promise<boolean> {
+    return this.repo.getFlexiblePricingFlag(organizationId)
+  }
+
+  /** Gate for every flexible-pricing route: throws unless the agency is opted in. */
+  async assertFlexiblePricing(organizationId: string): Promise<void> {
+    if (!(await this.isFlexiblePricingEnabled(organizationId))) {
+      throw new Error('Flexible pricing is not enabled for this agency.')
+    }
+  }
+
   // ─── Payment catalogs (Config > Pagos) ───────────────────────────────────────
 
   async listPaymentCatalogs(org: string): Promise<{ methods: PaymentCatalogItem[]; banks: PaymentCatalogItem[] }> {
