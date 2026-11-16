@@ -12,7 +12,10 @@ import type { CustomerStatus } from '../domain/types.js'
 function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   const message = e instanceof Error ? e.message : 'Unexpected error.'
   if (/not found/i.test(message)) return Res.err(c, 'NOT_FOUND', message, 404)
-  if (/required|duplicate|unique|409/i.test(message)) return Res.err(c, 'INVALID_REQUEST', message, 422)
+  if (/flexible pricing is not enabled/i.test(message)) return Res.err(c, 'FEATURE_NOT_ENABLED', 'El precio flexible no está habilitado para esta agencia.', 403)
+  if (/not authorized|forbidden/i.test(message)) return Res.err(c, 'FORBIDDEN', message, 403)
+  if (/under construction/i.test(message)) return Res.err(c, 'PRICE_MODEL_UNDER_CONSTRUCTION', message, 422)
+  if (/required|duplicate|unique|409|does not price/i.test(message)) return Res.err(c, 'INVALID_REQUEST', message, 422)
   return Res.err(c, 'CUSTOMER_ERROR', message, 500)
 }
 
@@ -41,6 +44,48 @@ const DATE_QUERY = {
 
 const customer = new Hono<BillingEnv>()
 customer.use('*', billingAuth('clients:read'))
+
+// ─── Flexible pricing: per-client rate assignments ────────────────────────────
+const RATE_ASSIGNMENT_INPUT = z.object({
+  rateCardId: z.string().min(1),
+  pricingKind: z.enum(['weight', 'fixed', 'volume']),
+  transportMode: z.enum(['AIR', 'MAR']).nullable().optional(),
+})
+
+/** GET /api/customer/clients/:id/rate-assignments — the client's active assignments. */
+customer.get('/clients/:id/rate-assignments', async (c) => {
+  const svc = new CustomerService(getCustomerRepo(c.env))
+  try {
+    const session = c.get('billingSession')
+    return Res.ok(c, await svc.listRateAssignments(session.agency, c.req.param('id')))
+  } catch (e) {
+    return fail(c, e)
+  }
+})
+
+/** PUT /api/customer/clients/:id/rate-assignments — replace the active set. */
+customer.put(
+  '/clients/:id/rate-assignments',
+  billingAuth('clients:write'),
+  zValidator('json', z.object({ assignments: z.array(RATE_ASSIGNMENT_INPUT) }), (r, c) => {
+    if (!r.success) return Res.err(c, 'INVALID_BODY', 'assignments (rateCardId, pricingKind, transportMode?) are required.', 422)
+  }),
+  async (c) => {
+    const svc = new CustomerService(getCustomerRepo(c.env))
+    try {
+      const session = c.get('billingSession')
+      const assignments = c.req.valid('json').assignments.map((a) => ({
+        rateCardId: a.rateCardId,
+        pricingKind: a.pricingKind,
+        transportMode: a.transportMode ?? null,
+      }))
+      const result = await svc.replaceRateAssignments(session.agency, c.req.param('id'), assignments, actorOf(c), c.get('requestId') ?? undefined)
+      return Res.ok(c, result)
+    } catch (e) {
+      return fail(c, e)
+    }
+  },
+)
 
 customer.get(
   '/clients',

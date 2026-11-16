@@ -601,6 +601,8 @@ config.post(
     z.object({
       name: z.string().min(1).max(80),
       priceModel: z.enum(['weight', 'volume', 'fixed']),
+      // Flexible pricing: create the card as the org default for its kind.
+      isDefault: z.boolean().optional(),
       entries: z
         .array(RATE_CARD_ENTRY_SCHEMA)
         .length(2)
@@ -615,8 +617,8 @@ config.post(
     try {
       const session = c.get('configSession')
       const org = svc.resolveOrg(session, c.req.valid('query').organizationId)
-      const { name, priceModel, entries } = c.req.valid('json')
-      const card = await svc.createRateCard(org, name, priceModel, entries, session, c.get('requestId'))
+      const { name, priceModel, entries, isDefault } = c.req.valid('json')
+      const card = await svc.createRateCard(org, name, priceModel, entries, session, c.get('requestId'), isDefault ?? false)
       return Res.ok(c, card, undefined, 201)
     } catch (e) {
       return fail(c, e)
@@ -624,22 +626,38 @@ config.post(
   },
 )
 
-/** PATCH /api/config/rates/v2/:id — rename a rate card. */
+/**
+ * PATCH /api/config/rates/v2/:id — rename a rate card and/or set it as the org
+ * default for its pricing kind (flexible pricing).
+ */
 config.patch(
   '/rates/v2/:id',
   configAuth('rates:write'),
   zValidator('query', ORG_QUERY, (r, c) => {
     if (!r.success) return Res.err(c, 'INVALID_QUERY', 'Invalid query parameters.', 422)
   }),
-  zValidator('json', z.object({ name: z.string().min(1).max(80) }), (r, c) => {
-    if (!r.success) return Res.err(c, 'INVALID_BODY', 'name is required.', 422)
-  }),
+  zValidator(
+    'json',
+    z
+      .object({
+        name: z.string().min(1).max(80).optional(),
+        isDefault: z.boolean().optional(),
+      })
+      .refine((b) => b.name !== undefined || b.isDefault !== undefined, 'name or isDefault is required.'),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_BODY', 'name or isDefault is required.', 422)
+    },
+  ),
   async (c) => {
     const svc = new ConfigService(getConfigRepo(c.env))
     try {
       const session = c.get('configSession')
       const org = svc.resolveOrg(session, c.req.valid('query').organizationId)
-      return Res.ok(c, await svc.renameRateCard(org, c.req.param('id'), c.req.valid('json').name, session, c.get('requestId')))
+      const { name, isDefault } = c.req.valid('json')
+      let card = null as Awaited<ReturnType<ConfigService['renameRateCard']>> | null
+      if (name !== undefined) card = await svc.renameRateCard(org, c.req.param('id'), name, session, c.get('requestId'))
+      if (isDefault) card = await svc.setRateCardDefault(org, c.req.param('id'), session, c.get('requestId'))
+      return Res.ok(c, card)
     } catch (e) {
       return fail(c, e)
     }

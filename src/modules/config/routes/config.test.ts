@@ -798,3 +798,39 @@ describe('DELETE payment methods / banks / concepts', () => {
     expect(res.status).toBe(403)
   })
 })
+
+// ─── Flexible pricing: fixed rate cards (Stage 4) ────────────────────────────
+describe('POST /api/config/rates/v2 — fixed cards (flexible pricing)', () => {
+  it('creates a fixed card when the agency flag is on (unit = package)', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { agencies: [{ flexible_pricing_enabled: true }], rate_cards: [hitCardRow] },
+    })
+    const res = await call(
+      '/api/config/rates/v2',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'POST', body: { name: 'Documentos', priceModel: 'fixed', isDefault: true, entries: twoEntries } },
+    )
+    expect(res.status).toBe(201)
+    const audit = JSON.parse(postedAudits.find((a) => a.includes('rate_card.create'))!) as Array<{ metadata: { price_model: string; is_default: boolean } }>
+    expect(audit[0].metadata.price_model).toBe('fixed')
+    expect(audit[0].metadata.is_default).toBe(true)
+  })
+
+  it('403 FEATURE_NOT_ENABLED when the agency flag is off', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { agencies: [{ flexible_pricing_enabled: false }] },
+    })
+    const res = await call(
+      '/api/config/rates/v2',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'POST', body: { name: 'Documentos', priceModel: 'fixed', entries: twoEntries } },
+    )
+    expect(res.status).toBe(403)
+    const body = (await res.json()) as { error?: { code?: string } }
+    expect(body.error?.code).toBe('FEATURE_NOT_ENABLED')
+  })
+})

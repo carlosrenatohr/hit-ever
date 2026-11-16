@@ -2,7 +2,7 @@ import type { CloudflareBindings } from '../../../types/index.js'
 import { foldAccents } from '../../../lib/text.js'
 import type { BillingClient } from '../../billing/domain/types.js'
 import type { AuditFilter, AuditLogEntry } from '../../config/domain/types.js'
-import type { CreateCustomerInput, CustomerAggregateStats, CustomerDeletePreview, CustomerEventsPage, CustomerListFilter, CustomerPage, CustomerStatus, CustomerWeightStats, CustomerWithStats, UpdateCustomerInput } from '../domain/types.js'
+import type { CreateCustomerInput, CustomerAggregateStats, CustomerDeletePreview, CustomerEventsPage, CustomerListFilter, CustomerPage, CustomerStatus, CustomerWeightStats, CustomerWithStats, RateAssignment, RateAssignmentView, UpdateCustomerInput } from '../domain/types.js'
 
 interface BillingClientDbRow {
   id: string
@@ -49,6 +49,15 @@ export interface CustomerAuditEntry {
   entityId: string | null
   requestId: string | null
   metadata?: Record<string, unknown>
+}
+
+export interface RateAssignmentRow {
+  id: string
+  rate_card_id: string
+  pricing_kind: string
+  transport_mode: string | null
+  active: boolean
+  rate_cards: { name: string; pricing_kind: string } | null
 }
 
 export interface CustomerRepository {
@@ -98,6 +107,14 @@ export interface CustomerRepository {
   /** Impact summary (packages + invoices, capped samples) for the delete confirmation. */
   deletePreview(id: string, organizationId: string): Promise<CustomerDeletePreview | null>
   insertAudit(entry: CustomerAuditEntry): Promise<void>
+  /** Flexible pricing: the client's active rate assignments (enriched). */
+  listRateAssignments(organizationId: string, clientId: string): Promise<RateAssignmentView[]>
+  /** Replace the client's active assignments: deactivate current, insert new. */
+  replaceRateAssignments(organizationId: string, clientId: string, assignments: RateAssignment[], by: string | null): Promise<void>
+  /** Active rate cards of the org — assignment validation source. */
+  listAssignableCards(organizationId: string): Promise<Array<{ id: string; name: string; pricingKind: string; active: boolean }>>
+  /** Whether flexible pricing is switched on for the org (gates non-weight kinds). */
+  getFlexiblePricingFlag(organizationId: string): Promise<boolean>
 }
 
 function toDomain(row: BillingClientDbRow): BillingClient {
@@ -401,6 +418,72 @@ export class InsforgeCustomerRepo implements CustomerRepository {
     row.updated_at = new Date().toISOString()
     const updated = await this.patch(id, row, organizationId)
     return updated ? toDomain(updated) : null
+  }
+
+  async listAssignableCards(organizationId: string): Promise<Array<{ id: string; name: string; pricingKind: string; active: boolean }>> {
+    const res = await fetch(
+      `${this.base}/rate_cards?organization_id=eq.${encodeURIComponent(organizationId)}&active=eq.true&select=id,name,pricing_kind,active&order=name`,
+      { headers: this.headers },
+    )
+    if (!res.ok) throw new Error(`InsForge GET rate_cards → ${res.status}`)
+    const rows = (await res.json()) as Array<{ id: string; name: string; pricing_kind: string; active: boolean }>
+    return rows.map((r) => ({ id: r.id, name: r.name, pricingKind: r.pricing_kind, active: r.active !== false }))
+  }
+
+  async getFlexiblePricingFlag(organizationId: string): Promise<boolean> {
+    const res = await fetch(
+      `${this.base}/agencies?slug=eq.${encodeURIComponent(organizationId)}&select=flexible_pricing_enabled&limit=1`,
+      { headers: this.headers },
+    )
+    if (!res.ok) throw new Error(`InsForge GET agencies → ${res.status}`)
+    const rows = (await res.json()) as Array<{ flexible_pricing_enabled: boolean }>
+    return rows[0]?.flexible_pricing_enabled === true
+  }
+
+  async listRateAssignments(organizationId: string, clientId: string): Promise<RateAssignmentView[]> {
+    const res = await fetch(
+      `${this.base}/client_rate_assignments?organization_id=eq.${encodeURIComponent(organizationId)}&client_id=eq.${encodeURIComponent(clientId)}&active=eq.true&select=id,rate_card_id,pricing_kind,transport_mode,active,rate_cards(name,pricing_kind)`,
+      { headers: this.headers },
+    )
+    if (!res.ok) throw new Error(`InsForge GET client_rate_assignments → ${res.status}`)
+    const rows = (await res.json()) as RateAssignmentRow[]
+    return rows.map((r) => ({
+      rateCardId: r.rate_card_id,
+      pricingKind: r.pricing_kind as RateAssignment['pricingKind'],
+      transportMode: (r.transport_mode as RateAssignment['transportMode']) ?? null,
+      rateCardName: r.rate_cards?.name ?? '',
+      rateCardKind: r.rate_cards?.pricing_kind ?? r.pricing_kind,
+    }))
+  }
+
+  async replaceRateAssignments(organizationId: string, clientId: string, assignments: RateAssignment[], by: string | null): Promise<void> {
+    // Deactivate the current set (assignment history is never deleted), then
+    // insert the new ones in one array write. The DB's unique active index +
+    // org-guard trigger backstop any drift.
+    await fetch(`${this.base}/client_rate_assignments?organization_id=eq.${encodeURIComponent(organizationId)}&client_id=eq.${encodeURIComponent(clientId)}&active=eq.true`, {
+      method: 'PATCH',
+      headers: { ...this.headers, Prefer: 'return=minimal' },
+      body: JSON.stringify({ active: false, updated_at: new Date().toISOString() }),
+    }).then(async (res) => {
+      if (!res.ok) throw new Error(`InsForge PATCH client_rate_assignments → ${res.status}`)
+    })
+    if (assignments.length === 0) return
+    const res = await fetch(`${this.base}/client_rate_assignments`, {
+      method: 'POST',
+      headers: { ...this.headers, Prefer: 'return=minimal' },
+      body: JSON.stringify(
+        assignments.map((a) => ({
+          organization_id: organizationId,
+          client_id: clientId,
+          rate_card_id: a.rateCardId,
+          pricing_kind: a.pricingKind,
+          transport_mode: a.transportMode,
+          active: true,
+          created_by: by,
+        })),
+      ),
+    })
+    if (!res.ok) throw new Error(`InsForge POST client_rate_assignments → ${res.status}: ${(await res.text()).slice(0, 300)}`)
   }
 
   async insertAudit(entry: CustomerAuditEntry): Promise<void> {

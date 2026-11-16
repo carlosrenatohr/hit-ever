@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildFixedPackageSnapshot, resolvePackageCard, type OrgRateCard, type RateAssignment } from './pricing.js'
+import { buildFixedPackageSnapshot, resolvePackageCard, type RateAssignment } from './pricing.js'
+import type { OrgRateCard } from '../repo/billing-repo.js'
 
 function card(id: string, name: string, kind: string, entries: { mode: 'AIR' | 'MAR'; price: number; cost: number | null }[], extra?: Partial<OrgRateCard>): OrgRateCard {
   return {
