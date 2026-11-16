@@ -328,10 +328,10 @@ export class InsforgeConfigRepo implements ConfigRepository {
   async setDefaultRateCard(organizationId: string, rateCardId: string, pricingKind: string): Promise<void> {
     await this.patch(
       'rate_cards',
-      `organization_id=eq.${encodeURIComponent(organizationId)}&pricing_kind=eq.${pricingKind}&id=neq.${encodeURIComponent(rateCardId)}`,
+      `organization_id=eq.${encodeURIComponent(organizationId)}&pricing_kind=eq.${encodeURIComponent(pricingKind)}&id=neq.${encodeURIComponent(rateCardId)}`,
       { is_default: false },
     )
-    await this.patch('rate_cards', `id=eq.${encodeURIComponent(rateCardId)}`, { is_default: true, updated_at: new Date().toISOString() })
+    await this.patch('rate_cards', `id=eq.${encodeURIComponent(rateCardId)}&organization_id=eq.${encodeURIComponent(organizationId)}`, { is_default: true, updated_at: new Date().toISOString() })
   }
 
   async deleteRateCard(id: string): Promise<void> {

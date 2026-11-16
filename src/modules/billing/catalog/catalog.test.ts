@@ -81,3 +81,20 @@ describe('resolveOrgRate (v2 cards)', () => {
     expect(resolveOrgRate([], [], 'AIR', 'REGULAR', null)).toBeNull()
   })
 })
+// ─── Flexible pricing: fixed cards never price weight lines (security fix 1) ──
+describe('resolveOrgRate — fixed-card exclusion', () => {
+  const fixedCard = {
+    id: 'c-fix', name: 'Documentos', priceModel: 'fixed', currency: 'USD', versionId: 'v-fix', pricingKind: 'fixed',
+    entries: [{ id: 'e-fix-air', serviceType: 'AIR', name: 'Documentos', unit: 'package', price: 25, cost: 8 }],
+  } as never
+
+  it('skips a client default that is a fixed card (weight quoting falls through)', () => {
+    const r = resolveOrgRate([fixedCard], [], 'AIR', 'REGULAR', 'c-fix')
+    expect(r).toBeNull()
+  })
+
+  it('skips fixed cards in the any-card stage too', () => {
+    const r = resolveOrgRate([fixedCard], [], 'AIR', 'REGULAR', null)
+    expect(r).toBeNull()
+  })
+})

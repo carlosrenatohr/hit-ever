@@ -155,7 +155,7 @@ billing.get(
       transportMode: mode,
       explicitCardId: rateCardId ?? null,
       clientAssignments,
-      orgDefaultCardId: null,
+      orgDefaultCardId: asCards.find((c) => c.isDefault && c.pricingKind === 'fixed')?.id ?? null,
     })
     const snapshot = fixedCard ? buildFixedPackageSnapshot(fixedCard, mode) : null
     if (!fixedCard) return Res.err(c, 'NO_RATE_CONFIGURED', 'No hay servicio fijo configurado para este tipo de cobro.', 404)

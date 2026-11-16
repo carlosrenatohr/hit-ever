@@ -965,7 +965,12 @@ export class BillingService {
     // Re-quote freight lines if provided.
     let lineRows: Array<Record<string, unknown>> | null = null
     let linePkgIds: string[] = []
-    let packageInfo = new Map<string, { guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null }>()
+    let packageInfo = new Map<string, {
+      guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null
+      pricingKind: string | null; customerCharge: number | null; customerRate: number | null
+      providerCost: number | null; customerUnit: string | null
+      rateCardId: string | null; rateCardVersionId: string | null; rateCardEntryId: string | null
+    }>()
     if (input.lines) {
       if (input.lines.length === 0) throw new Error('La factura necesita al menos una línea.')
       const clientId = b.header.client_id
@@ -975,11 +980,49 @@ export class BillingService {
       linePkgIds = input.lines.filter((l) => l.packageId).map((l) => l.packageId as string)
       packageInfo = await this.resolveInvoicePackages(linePkgIds, b.header.client_id, b.header.client_name_raw, organizationId, id)
       lineRows = []
+      let fixedLines = 0
+      let weightLines = 0
       for (let i = 0; i < input.lines.length; i++) {
         const l = input.lines[i]
+        const info = l.packageId ? packageInfo.get(l.packageId) : undefined
+        // Fixed package: the stored snapshot is the ONLY input (same rule as
+        // creation) — a payload tier/lbs can never re-price a fixed line.
+        if (info?.pricingKind === 'fixed' && info.customerCharge != null) {
+          fixedLines++
+          const charge = info.customerCharge
+          const cost = info.providerCost ?? 0
+          lineRows.push(lineRow({
+            line_no: i + 1,
+            description: l.description ?? `${info.serviceType ?? 'paquete'} (cuota fija)`,
+            freight_type: l.freightType,
+            line_type: 'freight',
+            concept_id: null,
+            quantity_lbs: 0,
+            unit: info.customerUnit ?? 'package',
+            unit_price: info.customerRate ?? charge,
+            total: charge,
+            list_price: null,
+            freight_cost: cost,
+            profit: round2(charge - cost),
+            price_tier: null,
+            price_off_catalog: false,
+            package_id: l.packageId ?? null,
+            package_guia: info.guia,
+            package_tracking: info.tracking,
+            organization_id: organizationId,
+            rate_card_id: info.rateCardId,
+            rate_card_version_id: info.rateCardVersionId,
+            rate_card_entry_id: info.rateCardEntryId,
+            base_unit_price: info.customerRate ?? charge,
+            discount_amount: 0,
+            surcharge_amount: 0,
+            pricing_source: 'package_snapshot',
+          }))
+          continue
+        }
+        weightLines++
         const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, l.rateTableId ?? defaultRateTableId)
         if (!q) throw new Error(`El nivel ${l.tier} no está disponible para ${l.freightType}.`)
-        const info = l.packageId ? packageInfo.get(l.packageId) : undefined
         lineRows.push(lineRow({
           line_no: i + 1,
           description: l.description ?? null,
@@ -1007,6 +1050,9 @@ export class BillingService {
           surcharge_amount: 0,
           pricing_source: q.pricingSource,
         }))
+      }
+      if (fixedLines > 0 && weightLines > 0) {
+        throw new Error('No se pueden mezclar paquetes por peso con paquetes de cuota fija en la misma factura — generá una factura por tipo de servicio.')
       }
     }
 

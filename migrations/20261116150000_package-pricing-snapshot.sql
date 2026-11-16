@@ -149,6 +149,7 @@ begin
         where v.rate_card_id = v_card_id
           and v.status = 'published'
           and e.service_type = v_mode
+        order by v.version desc
         limit 1;
       if v_entry_id is null then
         -- La tarjeta elegida no cubre este modo: accionable, sin fallback.

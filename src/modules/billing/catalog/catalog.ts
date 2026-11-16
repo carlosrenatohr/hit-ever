@@ -57,7 +57,11 @@ export function resolveOrgRate(
   tier: string,
   defaultRateId?: string | null,
 ): ResolvedRate | null {
-  const entryFor = (c: OrgRateCard) => c.entries.find((e) => e.serviceType === freightType && e.price != null)
+  // Fixed cards NEVER price weight lines: their flat per-guía entry would
+  // otherwise be multiplied by pounds in the weight quoting path. Fixed money
+  // flows only through the package snapshot (pricing.ts + create_package).
+  const entryFor = (c: OrgRateCard) =>
+    c.pricingKind === 'fixed' ? undefined : c.entries.find((e) => e.serviceType === freightType && e.price != null)
   const tierRow = (t: OrgRateTable) => t.rows.find((r) => r.tier === tier && r.price != null)
 
   if (defaultRateId) {
