@@ -194,6 +194,16 @@ export interface PackageBulkRow {
   client_id: string | null
   referencia_name: string | null
   organization_id: string
+  /** Flexible pricing snapshot (NULL = legacy weight billing). */
+  pricing_kind: string | null
+  customer_charge: number | null
+  customer_rate: number | null
+  customer_unit: string | null
+  provider_cost: number | null
+  pricing_currency: string | null
+  rate_card_id: string | null
+  rate_card_version_id: string | null
+  rate_card_entry_id: string | null
 }
 
 /** Minimal client shape used to resolve an invoice's client + its default rate. */
@@ -654,12 +664,12 @@ export class InsforgeBillingRepo implements BillingRepository {
   async getPackagesForBulk(packageIds: string[], organizationId: string): Promise<PackageBulkRow[]> {
     if (packageIds.length === 0) return []
     const ids = packageIds.map((id) => encodeURIComponent(id)).join(',')
-    const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb:effective_weight_lb,client_id,referencia_name,organization_id&limit=${packageIds.length}`
+    const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb:effective_weight_lb,client_id,referencia_name,organization_id,pricing_kind,customer_charge,customer_rate,customer_unit,provider_cost,pricing_currency,rate_card_id,rate_card_version_id,rate_card_entry_id&limit=${packageIds.length}`
     return this.get<PackageBulkRow>('packages', q)
   }
 
   async getPackagesForClient(clientId: string, organizationId: string): Promise<PackageBulkRow[]> {
-    const q = `client_id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb:effective_weight_lb,client_id,referencia_name,organization_id&limit=1000`
+    const q = `client_id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb:effective_weight_lb,client_id,referencia_name,organization_id,pricing_kind,customer_charge,customer_rate,customer_unit,provider_cost,pricing_currency,rate_card_id,rate_card_version_id,rate_card_entry_id&limit=1000`
     return this.get<PackageBulkRow>('packages', q)
   }
 
