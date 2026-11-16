@@ -15,7 +15,9 @@ import { CURRENCIES, FREIGHT_TYPES, INVOICE_STATUSES } from '../domain/enums.js'
 import { billingAuth, type BillingEnv } from '../middleware/auth.js'
 import { getBillingRepo } from '../repo/billing-repo.js'
 import { getConfigRepo } from '../../config/repo/config-repo.js'
+import { getCustomerRepo } from '../../customer/repo/customer-repo.js'
 import { BillingService } from '../service/billing-service.js'
+import { resolvePackageCard, buildFixedPackageSnapshot } from '../pricing/pricing.js'
 import { BillingError } from '../domain/errors.js'
 
 /** Map a service error to an HTTP status by its message (messages are Spanish). */
@@ -99,8 +101,81 @@ billing.get(
   },
 )
 
-// ─── Invoices ─────────────────────────────────────────────────────────────────
+/**
+ * GET /api/billing/pricing-preview — what the create-package form shows.
+ * Resolves the rate card with the SAME order as create_package (explicit pick →
+ * client assignment → org default) and returns the fixed snapshot fields.
+ * Provider cost / profit are included ONLY for admin|billing — staff and
+ * viewers never see internal costs (plan requirement).
+ */
+billing.get(
+  '/pricing-preview',
+  zValidator(
+    'query',
+    z.object({
+      serviceType: z.string().min(1),
+      clientId: z.string().min(1).optional(),
+      rateCardId: z.string().min(1).optional(),
+      pieces: z.coerce.number().int().positive().optional(),
+      weightLb: z.coerce.number().nonnegative().optional(),
+    }),
+    (r, c) => {
+      if (!r.success) return Res.err(c, 'INVALID_QUERY', 'serviceType is required; clientId/rateCardId/pieces/weightLb optional.', 422)
+    },
+  ),
+  async (c) => {
+    const session = c.get('billingSession')
+    const org = session.agency
+    const { serviceType, clientId, rateCardId, pieces, weightLb } = c.req.valid('query')
+    const mode = serviceType === 'aereo' ? 'AIR' : serviceType === 'maritimo' ? 'MAR' : null
+    if (!mode) return Res.err(c, 'INVALID_QUERY', 'serviceType must be aereo or maritimo.', 422)
 
+    const configRepo = getConfigRepo(c.env)
+    const customerRepo = getCustomerRepo(c.env)
+    const flag = await configRepo.getFlexiblePricingFlag(org)
+    if (!flag) return Res.err(c, 'FEATURE_NOT_ENABLED', 'El precio flexible no está habilitado para esta agencia.', 403)
+
+    const cards = await configRepo.listRateCards(org)
+    const asCards = cards.map((card) => ({
+      id: card.id,
+      name: card.name,
+      priceModel: card.currentVersion.priceModel,
+      currency: card.currentVersion.currency,
+      versionId: card.currentVersion.id,
+      pricingKind: card.pricingKind,
+      isDefault: card.isDefault,
+      active: card.active,
+      entries: card.currentVersion.entries.map((e) => ({ id: e.id, serviceType: e.serviceType, name: e.name, unit: e.unit, price: e.price, cost: e.cost })),
+    }))
+    const clientAssignments = clientId
+      ? (await customerRepo.listRateAssignments(org, clientId)).map((a) => ({ rateCardId: a.rateCardId, pricingKind: a.pricingKind, transportMode: a.transportMode, active: true }))
+      : []
+    const fixedCard = resolvePackageCard(asCards, {
+      pricingKind: 'fixed',
+      transportMode: mode,
+      explicitCardId: rateCardId ?? null,
+      clientAssignments,
+      orgDefaultCardId: null,
+    })
+    const snapshot = fixedCard ? buildFixedPackageSnapshot(fixedCard, mode) : null
+    if (!fixedCard) return Res.err(c, 'NO_RATE_CONFIGURED', 'No hay servicio fijo configurado para este tipo de cobro.', 404)
+
+    const isFinance = session.role === 'admin' || session.role === 'billing'
+    return Res.ok(c, {
+      cardName: fixedCard.name,
+      pricingKind: 'fixed',
+      customerCharge: snapshot!.customerCharge,
+      customerUnit: snapshot!.customerUnit,
+      currency: snapshot!.currency,
+      // Fixed rule: one guía = one charge; pieces never multiply it.
+      quantity: 1,
+      ...(isFinance ? { providerCost: snapshot!.providerCost, grossProfit: Math.round((snapshot!.customerCharge - snapshot!.providerCost) * 100) / 100 } : {}),
+      inputs: { pieces: pieces ?? null, weightLb: weightLb ?? null },
+    })
+  },
+)
+
+// ─── Invoices ─────────────────────────────────────────────────────────────────
 /** GET /api/billing/invoices — filtered, paginated list (mirrors the packages list). */
 billing.get(
   '/invoices',
