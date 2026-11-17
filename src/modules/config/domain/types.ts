@@ -73,6 +73,11 @@ export interface RateCard {
   organizationId: string
   name: string
   structure: RateCardStructure
+  /** Flexible pricing kind ('weight' legacy; 'fixed' = per guía service). */
+  pricingKind: 'weight' | 'fixed' | 'volume'
+  /** Org default for its pricing kind (flexible pricing only). */
+  isDefault: boolean
+  active: boolean
   currentVersion: RateCardVersion
   createdAt: string
   updatedAt: string

@@ -98,3 +98,17 @@ export interface CustomerRateDefaults {
   /** Default rate card (v2 plan) — takes precedence over defaultRateTableId. */
   defaultRateCardId?: string | null
 }
+
+/** Flexible pricing — one client rate assignment (per-client default per pricing kind). */
+export interface RateAssignment {
+  rateCardId: string
+  pricingKind: 'weight' | 'fixed' | 'volume'
+  /** NULL = applies to any transport mode. */
+  transportMode: 'AIR' | 'MAR' | null
+}
+
+/** Read-side assignment enriched with the card label/kind for the panel. */
+export interface RateAssignmentView extends RateAssignment {
+  rateCardName: string
+  rateCardKind: string
+}

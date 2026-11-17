@@ -177,10 +177,17 @@ export class ConfigService {
     return this.repo.listRateCards(org)
   }
 
-  async createRateCard(org: string, name: string, priceModel: string, entries: RateCardEntryInput[], session: ConfigSession, requestId: string): Promise<RateCard> {
-    assertWeightOnly(priceModel)
+  async createRateCard(org: string, name: string, priceModel: string, entries: RateCardEntryInput[], session: ConfigSession, requestId: string, isDefault = false): Promise<RateCard> {
     assertSimplePair(entries)
-    const card = await this.repo.createRateCard({ organizationId: org, name, priceModel: 'weight', currency: 'USD', entries, by: session.userId })
+    // Fixed services are a flexible-pricing capability: gated server-side on the
+    // agency flag. Weight stays universally available; volume stays under
+    // construction (422 PRICE_MODEL_UNDER_CONSTRUCTION).
+    if (priceModel === 'fixed') {
+      await this.assertFlexiblePricing(org)
+    } else if (priceModel !== 'weight') {
+      throw new Error(`Price model "${priceModel}" is under construction.`)
+    }
+    const card = await this.repo.createRateCard({ organizationId: org, name, priceModel, currency: 'USD', entries, by: session.userId, isDefault })
     await this.audit({
       organizationId: org,
       actorId: session.userId,
@@ -190,9 +197,33 @@ export class ConfigService {
       entityType: 'rate_card',
       entityId: card.id,
       requestId,
-      metadata: { name, price_model: 'weight', entries: entries.map((e) => ({ service_type: e.serviceType, name: e.name })) },
+      metadata: { name, price_model: priceModel, is_default: isDefault, entries: entries.map((e) => ({ service_type: e.serviceType, name: e.name })) },
     })
     return card
+  }
+
+  /**
+   * Mark one card as the org default for its pricing kind. The unique partial
+   * index (organization_id, pricing_kind) makes two defaults impossible at the
+   * DB level; the service also validates ownership and kind consistency.
+   */
+  async setRateCardDefault(org: string, id: string, session: ConfigSession, requestId: string): Promise<RateCard> {
+    const card = await this.requireRateCardInOrg(org, id)
+    if (card.pricingKind !== 'weight') await this.assertFlexiblePricing(org)
+    if (!card.active) throw new Error('rate card not found')
+    await this.repo.setDefaultRateCard(org, id, card.pricingKind)
+    await this.audit({
+      organizationId: org,
+      actorId: session.userId,
+      actorEmail: session.email,
+      actorType: 'user',
+      action: 'rate_card.default.set',
+      entityType: 'rate_card',
+      entityId: id,
+      requestId,
+      metadata: { pricing_kind: card.pricingKind, name: card.name },
+    })
+    return (await this.repo.getRateCard(id))!
   }
 
   async renameRateCard(org: string, id: string, name: string, session: ConfigSession, requestId: string): Promise<RateCard> {
@@ -323,6 +354,25 @@ export class ConfigService {
     return this.repo.getAgencyInfo(session.agency) as Promise<AgencyInfo>
   }
 
+  // ─── Feature flags (flexible pricing pilot) ──────────────────────────────────
+
+  /**
+   * Whether flexible pricing is switched on for the caller's agency. Always
+   * resolved from the SESSION agency — never from a query param — so the flag
+   * cannot be spoofed by the client. The flag is a kill-switch; the security
+   * boundary is RLS + this server-side gate.
+   */
+  async isFlexiblePricingEnabled(organizationId: string): Promise<boolean> {
+    return this.repo.getFlexiblePricingFlag(organizationId)
+  }
+
+  /** Gate for every flexible-pricing route: throws unless the agency is opted in. */
+  async assertFlexiblePricing(organizationId: string): Promise<void> {
+    if (!(await this.isFlexiblePricingEnabled(organizationId))) {
+      throw new Error('Flexible pricing is not enabled for this agency.')
+    }
+  }
+
   // ─── Payment catalogs (Config > Pagos) ───────────────────────────────────────
 
   async listPaymentCatalogs(org: string): Promise<{ methods: PaymentCatalogItem[]; banks: PaymentCatalogItem[] }> {
@@ -441,11 +491,6 @@ function stripStorageKey(a: { slug: string; name: string; logoUrl: string | null
 }
 
 // ─── Rate card validation helpers ────────────────────────────────────────────
-
-/** Only weight is implemented; volume/fixed are blocked until their engine lands. */
-function assertWeightOnly(priceModel: string): void {
-  if (priceModel !== 'weight') throw new Error('price model under construction')
-}
 
 /** simple_pair: exactly two entries, one AIR and one MAR, with valid money fields. */
 function assertSimplePair(entries: RateCardEntryInput[]): void {

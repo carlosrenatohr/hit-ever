@@ -78,8 +78,15 @@ describe('computeAmountsByModel', () => {
     expect(a).toEqual({ unitPrice: 6.5, total: 32.5, freightCost: 22.5, profit: 10 })
   })
 
-  it('throws for volume and fixed — never silently treated as weight', () => {
+  it('throws for volume — never silently treated as weight', () => {
     expect(() => computeAmountsByModel(5, 6.5, 4.5, 'volume')).toThrow(/not implemented/)
-    expect(() => computeAmountsByModel(5, 6.5, 4.5, 'fixed')).toThrow(/not implemented/)
+  })
+
+  it('prices fixed as flat per guía: quantity = guía count, weight plays no part', () => {
+    const one = computeAmountsByModel(1, 25, 8, 'fixed')
+    expect(one).toEqual({ unitPrice: 25, total: 25, freightCost: 8, profit: 17 })
+    // Two guías in one line: 2 × flat price — pieces never multiply the charge.
+    const two = computeAmountsByModel(2, 25, 8, 'fixed')
+    expect(two).toEqual({ unitPrice: 25, total: 50, freightCost: 16, profit: 34 })
   })
 })

@@ -73,7 +73,7 @@ function receiptHtml(r: PublicReceipt): string {
       return `<tr>
       <td>${firstCell}</td>
       <td>${l.freightType ? esc(FREIGHT_ES[l.freightType]) : '-'}</td>
-      <td class="num">${l.quantityLbs != null ? esc(l.quantityLbs) : '-'}</td>
+      <td class="num">${l.unit === 'package' ? '1 envío' : l.quantityLbs != null ? esc(l.quantityLbs) : '-'}</td>
       <td class="num">${money(l.unitPrice, r.agency.currency)}</td>
       <td class="num">${money(l.total, r.agency.currency)}</td>
     </tr>`
@@ -154,7 +154,7 @@ function receiptHtml(r: PublicReceipt): string {
     ${r.clientAddress ? `<div class="client-details">${esc(r.clientAddress)}</div>` : ''}
   </div>
   <table>
-    <thead><tr><th>Guía / Concepto</th><th>Flete</th><th class="num">Libras</th><th class="num">P. unit.</th><th class="num">Total</th></tr></thead>
+    <thead><tr><th>Guía / Concepto</th><th>Flete</th><th class="num">${r.lines.some((l) => l.unit === 'package') ? 'Cant.' : 'Libras'}</th><th class="num">P. unit.</th><th class="num">Total</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
   <div class="totals">

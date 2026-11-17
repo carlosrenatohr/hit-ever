@@ -20,6 +20,10 @@ export interface Quote extends LineAmounts {
   rateCardId?: string | null
   rateCardVersionId?: string | null
   rateCardEntryId?: string | null
+  /** Billing unit ('lb' legacy, 'package' fixed) and pricing kind of the source card. */
+  unit?: string
+  pricingKind?: string
+  cardName?: string
 }
 
 export interface ResolvedRate {
@@ -30,6 +34,12 @@ export interface ResolvedRate {
   rateCardId?: string | null
   rateCardVersionId?: string | null
   rateCardEntryId?: string | null
+  /** Billing unit of the entry ('lb' legacy, 'package' for fixed services). */
+  unit?: string
+  /** Flexible pricing kind of the source card ('weight' legacy). */
+  pricingKind?: string
+  /** Card/service name — the label invoices show for fixed services. */
+  cardName?: string
 }
 
 /**
@@ -47,14 +57,18 @@ export function resolveOrgRate(
   tier: string,
   defaultRateId?: string | null,
 ): ResolvedRate | null {
-  const entryFor = (c: OrgRateCard) => c.entries.find((e) => e.serviceType === freightType && e.price != null)
+  // Fixed cards NEVER price weight lines: their flat per-guía entry would
+  // otherwise be multiplied by pounds in the weight quoting path. Fixed money
+  // flows only through the package snapshot (pricing.ts + create_package).
+  const entryFor = (c: OrgRateCard) =>
+    c.pricingKind === 'fixed' ? undefined : c.entries.find((e) => e.serviceType === freightType && e.price != null)
   const tierRow = (t: OrgRateTable) => t.rows.find((r) => r.tier === tier && r.price != null)
 
   if (defaultRateId) {
     const card = cards.find((c) => c.id === defaultRateId)
     if (card) {
       const entry = entryFor(card)
-      if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id }
+      if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id, unit: entry.unit, pricingKind: card.pricingKind ?? 'weight', cardName: card.name }
     } else {
       // Legacy default (billing_clients.default_rate_id) for an unmigrated org.
       const t = legacyTables.find((x) => x.id === defaultRateId && x.freightType === freightType)
@@ -64,7 +78,7 @@ export function resolveOrgRate(
   }
   for (const card of cards) {
     const entry = entryFor(card)
-    if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id }
+    if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id, unit: entry.unit, pricingKind: card.pricingKind ?? 'weight', cardName: card.name }
   }
   for (const t of legacyTables) {
     if (t.freightType !== freightType) continue
@@ -141,6 +155,9 @@ export class CatalogService {
         rateCardId: rate.rateCardId ?? null,
         rateCardVersionId: rate.rateCardVersionId ?? null,
         rateCardEntryId: rate.rateCardEntryId ?? null,
+        unit: rate.unit,
+        pricingKind: rate.pricingKind,
+        cardName: rate.cardName,
         ...amounts,
       }
     }

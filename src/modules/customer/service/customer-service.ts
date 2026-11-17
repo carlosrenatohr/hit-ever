@@ -2,7 +2,7 @@ import { normalizeClientName } from '../../billing/ingest/normalize/client.js'
 import type { BillingClient } from '../../billing/domain/types.js'
 import type { CustomerRepository } from '../repo/customer-repo.js'
 import type { AuditFilter } from '../../config/domain/types.js'
-import type { CreateCustomerInput, CustomerAggregateStats, CustomerDeletePreview, CustomerEventsPage, CustomerListFilter, CustomerPage, CustomerStatus, UpdateCustomerInput } from '../domain/types.js'
+import type { CreateCustomerInput, CustomerAggregateStats, CustomerDeletePreview, CustomerEventsPage, CustomerListFilter, CustomerPage, CustomerStatus, RateAssignment, RateAssignmentView, UpdateCustomerInput } from '../domain/types.js'
 
 function requireName(name: string): string {
   const trimmed = (name ?? '').trim()
@@ -35,6 +35,57 @@ export class CustomerService {
 
   get(id: string, organizationId?: string): Promise<BillingClient | null> {
     return this.repo.get(id, organizationId).then((c) => (c && !c.deletedAt ? c : null))
+  }
+
+  // ─── Flexible pricing: per-client rate assignments ───────────────────────────
+
+  async listRateAssignments(organizationId: string, clientId: string): Promise<RateAssignmentView[]> {
+    await this.requireClientInOrg(organizationId, clientId)
+    return this.repo.listRateAssignments(organizationId, clientId)
+  }
+
+  /**
+   * Replace the client's active assignments. Validations (all server-side):
+   * the client and every card belong to the org, each assignment's kind matches
+   * the card's own kind, fixed assignments require the agency flag, volume is
+   * not implemented, and one active assignment per (kind, mode) scope.
+   */
+  async replaceRateAssignments(organizationId: string, clientId: string, assignments: RateAssignment[], actor: CustomerActor, requestId?: string): Promise<RateAssignmentView[]> {
+    await this.requireClientInOrg(organizationId, clientId)
+    if (assignments.some((a) => a.pricingKind === 'volume')) {
+      throw new Error('price model under construction')
+    }
+    if (assignments.some((a) => a.pricingKind === 'fixed') && !(await this.repo.getFlexiblePricingFlag(organizationId))) {
+      throw new Error('Flexible pricing is not enabled for this agency.')
+    }
+    const cards = await this.repo.listAssignableCards(organizationId)
+    const seen = new Set<string>()
+    for (const a of assignments) {
+      const card = cards.find((c) => c.id === a.rateCardId)
+      if (!card) throw new Error(`Rate card not found in this agency: ${a.rateCardId}`)
+      if (card.pricingKind !== a.pricingKind) throw new Error(`Rate card "${card.name}" does not price kind "${a.pricingKind}".`)
+      const scope = `${a.pricingKind}:${a.transportMode ?? 'ANY'}`
+      if (seen.has(scope)) throw new Error(`Duplicate rate assignment for ${scope}.`)
+      seen.add(scope)
+    }
+    await this.repo.replaceRateAssignments(organizationId, clientId, assignments, actor.userId)
+    await this.repo.insertAudit({
+      organizationId,
+      actorId: actor.userId,
+      actorEmail: actor.email,
+      actorType: 'user',
+      action: 'client.rate_assignments.replace',
+      entityType: 'billing_client',
+      entityId: clientId,
+      requestId: requestId ?? null,
+      metadata: { assignments: assignments.map((a) => ({ rate_card_id: a.rateCardId, pricing_kind: a.pricingKind, transport_mode: a.transportMode })) },
+    })
+    return this.repo.listRateAssignments(organizationId, clientId)
+  }
+
+  private async requireClientInOrg(organizationId: string, clientId: string): Promise<void> {
+    const client = await this.repo.get(clientId, organizationId)
+    if (!client || client.deletedAt) throw new Error('Customer not found.')
   }
 
   deletePreview(id: string, organizationId: string): Promise<CustomerDeletePreview | null> {

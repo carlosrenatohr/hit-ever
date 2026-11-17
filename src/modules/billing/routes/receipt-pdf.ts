@@ -308,7 +308,8 @@ export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = d
   const HEADER_SIZE = 7.5
   draw(page, font.semibold, HEADER_SIZE, MUTED, colFirst, thY, 'GUIA / CONCEPTO')
   draw(page, font.semibold, HEADER_SIZE, MUTED, colFreight, thY, 'FLETE')
-  draw(page, font.semibold, HEADER_SIZE, MUTED, colLbsRight - font.semibold.widthOfTextAtSize('LIBRAS', HEADER_SIZE), thY, 'LIBRAS')
+  const hasFixedLines = r.lines.some((l) => l.unit === 'package')
+  draw(page, font.semibold, HEADER_SIZE, MUTED, colLbsRight - font.semibold.widthOfTextAtSize(hasFixedLines ? 'CANT.' : 'LIBRAS', HEADER_SIZE), thY, hasFixedLines ? 'CANT.' : 'LIBRAS')
   draw(page, font.semibold, HEADER_SIZE, MUTED, colUnitRight - font.semibold.widthOfTextAtSize('P. UNIT.', HEADER_SIZE), thY, 'P. UNIT.')
   drawRight(page, font.semibold, HEADER_SIZE, MUTED, 'TOTAL', thY)
   // border-y: line above the header and below it
@@ -329,7 +330,8 @@ export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = d
     })
     cellLines.forEach((ln, i) => draw(page, i === 0 ? font.semibold : font.regular, i === 0 ? 10.5 : 7.5, i === 0 ? INK : MUTED, colFirst, rowY - i * 12, ln))
     draw(page, font.regular, 10.5, INK, colFreight, rowY, l.freightType ? FREIGHT_ES[l.freightType] : '-')
-    draw(page, font.regular, 10.5, INK, colLbsRight - font.regular.widthOfTextAtSize(sanitizePdfText(String(l.quantityLbs ?? '-')), 10.5), rowY, String(l.quantityLbs ?? '-'))
+    const qtyLabel = l.unit === 'package' ? '1 envío' : String(l.quantityLbs ?? '-')
+    draw(page, font.regular, 10.5, INK, colLbsRight - font.regular.widthOfTextAtSize(sanitizePdfText(qtyLabel), 10.5), rowY, qtyLabel)
     draw(page, font.regular, 10.5, INK, colUnitRight - font.regular.widthOfTextAtSize(sanitizePdfText(money(l.unitPrice, currency)), 10.5), rowY, money(l.unitPrice, currency))
     drawRight(page, font.medium, 10.5, INK, money(l.total, currency), rowY)
     // Row separator with balanced air: 9pt below the LAST text baseline of the

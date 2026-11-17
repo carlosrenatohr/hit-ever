@@ -173,6 +173,10 @@ export interface OrgRateCard {
   priceModel: string
   currency: string
   versionId: string
+  /** Flexible pricing kind (weight|fixed|volume) — undefined = pre-schema card. */
+  pricingKind?: string
+  isDefault?: boolean
+  active?: boolean
   entries: { id: string; serviceType: FreightType; name: string; unit: string; price: number; cost: number | null }[]
 }
 
@@ -190,6 +194,16 @@ export interface PackageBulkRow {
   client_id: string | null
   referencia_name: string | null
   organization_id: string
+  /** Flexible pricing snapshot (NULL = legacy weight billing). */
+  pricing_kind: string | null
+  customer_charge: number | null
+  customer_rate: number | null
+  customer_unit: string | null
+  provider_cost: number | null
+  pricing_currency: string | null
+  rate_card_id: string | null
+  rate_card_version_id: string | null
+  rate_card_entry_id: string | null
 }
 
 /** Minimal client shape used to resolve an invoice's client + its default rate. */
@@ -392,10 +406,10 @@ export class InsforgeBillingRepo implements BillingRepository {
       status: string
       rate_card_entries: { id: string; service_type: string; name: string; unit: string; price: number; cost: number | null }[]
     }
-    type CardDb = { id: string; name: string; structure: string; rate_card_versions: VersionDb[] }
+    type CardDb = { id: string; name: string; structure: string; pricing_kind?: string; is_default?: boolean; active?: boolean; rate_card_versions: VersionDb[] }
     const rows = await this.get<CardDb>(
       'rate_cards',
-      `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,structure,rate_card_versions(id,version,price_model,currency,status,rate_card_entries(id,service_type,name,unit,price,cost))`,
+      `organization_id=eq.${encodeURIComponent(organizationId)}&select=id,name,structure,pricing_kind,is_default,active,rate_card_versions(id,version,price_model,currency,status,rate_card_entries(id,service_type,name,unit,price,cost))`,
     )
     return rows.map((r) => {
       const versions = (r.rate_card_versions ?? []).sort((a, b) => b.version - a.version)
@@ -406,6 +420,9 @@ export class InsforgeBillingRepo implements BillingRepository {
         priceModel: v?.price_model ?? 'weight',
         currency: v?.currency ?? 'USD',
         versionId: v?.id ?? '',
+        pricingKind: r.pricing_kind,
+        isDefault: r.is_default,
+        active: r.active,
         entries: (v?.rate_card_entries ?? [])
           .sort((a, b) => (a.service_type < b.service_type ? -1 : 1))
           .map((e) => ({
@@ -647,12 +664,12 @@ export class InsforgeBillingRepo implements BillingRepository {
   async getPackagesForBulk(packageIds: string[], organizationId: string): Promise<PackageBulkRow[]> {
     if (packageIds.length === 0) return []
     const ids = packageIds.map((id) => encodeURIComponent(id)).join(',')
-    const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb:effective_weight_lb,client_id,referencia_name,organization_id&limit=${packageIds.length}`
+    const q = `id=in.(${ids})&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb:effective_weight_lb,client_id,referencia_name,organization_id,pricing_kind,customer_charge,customer_rate,customer_unit,provider_cost,pricing_currency,rate_card_id,rate_card_version_id,rate_card_entry_id&limit=${packageIds.length}`
     return this.get<PackageBulkRow>('packages', q)
   }
 
   async getPackagesForClient(clientId: string, organizationId: string): Promise<PackageBulkRow[]> {
-    const q = `client_id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb:effective_weight_lb,client_id,referencia_name,organization_id&limit=1000`
+    const q = `client_id=eq.${encodeURIComponent(clientId)}&organization_id=eq.${encodeURIComponent(organizationId)}&deleted_at=is.null&select=id,almacen_id,tracking_number,effective_status,service_type,effective_service_type,weight_lb:effective_weight_lb,client_id,referencia_name,organization_id,pricing_kind,customer_charge,customer_rate,customer_unit,provider_cost,pricing_currency,rate_card_id,rate_card_version_id,rate_card_entry_id&limit=1000`
     return this.get<PackageBulkRow>('packages', q)
   }
 

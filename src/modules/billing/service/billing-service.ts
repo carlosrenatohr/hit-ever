@@ -179,7 +179,7 @@ export interface PublicReceipt {
   clientName: string | null
   clientAddress: string | null
   status: InvoiceStatus
-  lines: Array<{ lineType: 'freight' | 'other'; description: string | null; freightType: FreightType | null; quantityLbs: number | null; unitPrice: number; total: number; guia: string | null; tracking: string | null }>
+  lines: Array<{ lineType: 'freight' | 'other'; description: string | null; freightType: FreightType | null; quantityLbs: number | null; unit: string | null; unitPrice: number; total: number; guia: string | null; tracking: string | null }>
   total: number
   paidUsd: number
   outstanding: number
@@ -509,9 +509,19 @@ export class BillingService {
     clientName: string | null,
     organizationId: string,
     excludeInvoiceId?: string,
-  ): Promise<Map<string, { guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null }>> {
+  ): Promise<Map<string, {
+    guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null
+    pricingKind: string | null; customerCharge: number | null; customerRate: number | null
+    providerCost: number | null; customerUnit: string | null
+    rateCardId: string | null; rateCardVersionId: string | null; rateCardEntryId: string | null
+  }>> {
     const invoiceable = new Set(['en_destino', 'entregado'])
-    const result = new Map<string, { guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null }>()
+    const result = new Map<string, {
+      guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null
+      pricingKind: string | null; customerCharge: number | null; customerRate: number | null
+      providerCost: number | null; customerUnit: string | null
+      rateCardId: string | null; rateCardVersionId: string | null; rateCardEntryId: string | null
+    }>()
     if (packageIds.length === 0) return result
     const pkgs = await this.repo.getPackagesForBulk(packageIds, organizationId)
     const byId = new Map(pkgs.map((p) => [p.id, p]))
@@ -531,7 +541,10 @@ export class BillingService {
       if (!p.client_id && (!clientName || !refName || clientMatchKey(refName) !== clientMatchKey(clientName))) {
         throw new Error(`El paquete ${p.almacen_id} no tiene cliente asignado para ${clientName ?? 'esta factura'}.`)
       }
-      if (p.weight_lb == null || p.weight_lb <= 0) {
+      // Fixed packages bill their stored charge — weight is not a billing
+      // input, so the "must have weight" rule only applies to weight billing.
+      const isFixed = p.pricing_kind === 'fixed' && p.customer_charge != null
+      if (!isFixed && (p.weight_lb == null || p.weight_lb <= 0)) {
         throw new Error(`El paquete ${p.almacen_id} no tiene peso.`)
       }
       if (!p.effective_service_type && !p.service_type) {
@@ -547,6 +560,14 @@ export class BillingService {
         serviceType: p.effective_service_type ?? p.service_type,
         freightType: SERVICE_TYPE_TO_FREIGHT[p.effective_service_type ?? p.service_type ?? ''] ?? 'AIR',
         weightLb: p.weight_lb,
+        pricingKind: p.pricing_kind,
+        customerCharge: p.customer_charge,
+        customerRate: p.customer_rate,
+        providerCost: p.provider_cost,
+        customerUnit: p.customer_unit,
+        rateCardId: p.rate_card_id,
+        rateCardVersionId: p.rate_card_version_id,
+        rateCardEntryId: p.rate_card_entry_id,
       })
     }
     return result
@@ -567,6 +588,9 @@ export class BillingService {
       serviceType: string | null
       freightType: FreightType | null
       weightLb: number | null
+      pricingKind: string | null
+      customerCharge: number | null
+      customerUnit: string | null
       eligible: boolean
       reason: string | null
     }>
@@ -583,14 +607,19 @@ export class BillingService {
       serviceType: string | null
       freightType: FreightType | null
       weightLb: number | null
+      pricingKind: string | null
+      customerCharge: number | null
+      customerUnit: string | null
       eligible: boolean
       reason: string | null
     }> = []
     for (const p of pkgs) {
       let reason: string | null = null
+      // Fixed packages bill their stored charge — weight is not a billing input.
+      const isFixed = p.pricing_kind === 'fixed' && p.customer_charge != null
       if (!invoiceable.has(p.effective_status)) {
         reason = `Estado ${p.effective_status} no facturable`
-      } else if (p.weight_lb == null || p.weight_lb <= 0) {
+      } else if (!isFixed && (p.weight_lb == null || p.weight_lb <= 0)) {
         reason = 'Sin peso'
       } else if (!p.effective_service_type && !p.service_type) {
         reason = 'Sin servicio'
@@ -602,6 +631,9 @@ export class BillingService {
         packageId: p.id,
         guia: p.almacen_id,
         tracking: p.tracking_number,
+        pricingKind: p.pricing_kind,
+        customerCharge: p.customer_charge,
+        customerUnit: p.customer_unit,
         status: p.effective_status,
         serviceType: p.effective_service_type ?? p.service_type,
         freightType: (p.effective_service_type ?? p.service_type) ? (SERVICE_TYPE_TO_FREIGHT[p.effective_service_type ?? p.service_type ?? ''] ?? null) : null,
@@ -709,14 +741,53 @@ export class BillingService {
     const packageIds = [...new Set([...(input.packageIds ?? []), ...linePkgIds])]
     const packageInfo = await this.resolveInvoicePackages(packageIds, clientId, display, organizationId)
 
-    // Price every line from the org's rate tables (per-line table overrides the
-    // client's default; legacy catalog fallback); rejects a tier the org does not offer.
+    // Price every line. A line linked to a FIXED package uses the package's
+    // stored customer charge (the snapshot — never a re-quote, never weight);
+    // weight lines quote from the org's rate tables (per-line table overrides
+    // the client's default; legacy catalog fallback). Mixing fixed and weight
+    // packages in one invoice is rejected: one invoice = one pricing kind.
     const lineRows = []
+    let fixedLines = 0
+    let weightLines = 0
     for (let i = 0; i < input.lines.length; i++) {
       const l = input.lines[i]
+      const info = l.packageId ? packageInfo.get(l.packageId) : undefined
+      if (info?.pricingKind === 'fixed' && info.customerCharge != null) {
+        fixedLines++
+        const charge = info.customerCharge
+        const cost = info.providerCost ?? 0
+        lineRows.push(lineRow({
+          line_no: i + 1,
+          description: l.description ?? `${info.serviceType ?? 'paquete'} (cuota fija)`,
+          freight_type: l.freightType,
+          line_type: 'freight',
+          concept_id: null,
+          quantity_lbs: 0, // Σ quantity_lbs must never absorb fixed charges
+          unit: info.customerUnit ?? 'package',
+          unit_price: info.customerRate ?? charge,
+          total: charge,
+          list_price: null,
+          freight_cost: cost,
+          profit: round2(charge - cost),
+          price_tier: null,
+          price_off_catalog: false,
+          package_id: l.packageId ?? null,
+          package_guia: info.guia,
+          package_tracking: info.tracking,
+          organization_id: organizationId,
+          rate_card_id: info.rateCardId,
+          rate_card_version_id: info.rateCardVersionId,
+          rate_card_entry_id: info.rateCardEntryId,
+          base_unit_price: info.customerRate ?? charge,
+          discount_amount: 0,
+          surcharge_amount: 0,
+          pricing_source: 'package_snapshot',
+        }))
+        continue
+      }
+      weightLines++
       const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, l.rateTableId ?? defaultRateTableId)
       if (!q) throw new Error(`El nivel ${l.tier} no está disponible para ${l.freightType}.`)
-      const info = l.packageId ? packageInfo.get(l.packageId) : undefined
       lineRows.push(lineRow({
         line_no: i + 1,
         description: l.description ?? null,
@@ -745,6 +816,9 @@ export class BillingService {
         surcharge_amount: 0,
         pricing_source: q.pricingSource,
       }))
+    }
+    if (fixedLines > 0 && weightLines > 0) {
+      throw new Error('No se pueden mezclar paquetes por peso con paquetes de cuota fija en la misma factura — generá una factura por tipo de servicio.')
     }
     // "Other" charges: admin-set amounts (never quoted). Each may reference a
     // concept template (validated against the agency) with extra free text.
@@ -891,7 +965,12 @@ export class BillingService {
     // Re-quote freight lines if provided.
     let lineRows: Array<Record<string, unknown>> | null = null
     let linePkgIds: string[] = []
-    let packageInfo = new Map<string, { guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null }>()
+    let packageInfo = new Map<string, {
+      guia: string; tracking: string | null; serviceType: string | null; freightType: FreightType; weightLb: number | null
+      pricingKind: string | null; customerCharge: number | null; customerRate: number | null
+      providerCost: number | null; customerUnit: string | null
+      rateCardId: string | null; rateCardVersionId: string | null; rateCardEntryId: string | null
+    }>()
     if (input.lines) {
       if (input.lines.length === 0) throw new Error('La factura necesita al menos una línea.')
       const clientId = b.header.client_id
@@ -901,11 +980,49 @@ export class BillingService {
       linePkgIds = input.lines.filter((l) => l.packageId).map((l) => l.packageId as string)
       packageInfo = await this.resolveInvoicePackages(linePkgIds, b.header.client_id, b.header.client_name_raw, organizationId, id)
       lineRows = []
+      let fixedLines = 0
+      let weightLines = 0
       for (let i = 0; i < input.lines.length; i++) {
         const l = input.lines[i]
+        const info = l.packageId ? packageInfo.get(l.packageId) : undefined
+        // Fixed package: the stored snapshot is the ONLY input (same rule as
+        // creation) — a payload tier/lbs can never re-price a fixed line.
+        if (info?.pricingKind === 'fixed' && info.customerCharge != null) {
+          fixedLines++
+          const charge = info.customerCharge
+          const cost = info.providerCost ?? 0
+          lineRows.push(lineRow({
+            line_no: i + 1,
+            description: l.description ?? `${info.serviceType ?? 'paquete'} (cuota fija)`,
+            freight_type: l.freightType,
+            line_type: 'freight',
+            concept_id: null,
+            quantity_lbs: 0,
+            unit: info.customerUnit ?? 'package',
+            unit_price: info.customerRate ?? charge,
+            total: charge,
+            list_price: null,
+            freight_cost: cost,
+            profit: round2(charge - cost),
+            price_tier: null,
+            price_off_catalog: false,
+            package_id: l.packageId ?? null,
+            package_guia: info.guia,
+            package_tracking: info.tracking,
+            organization_id: organizationId,
+            rate_card_id: info.rateCardId,
+            rate_card_version_id: info.rateCardVersionId,
+            rate_card_entry_id: info.rateCardEntryId,
+            base_unit_price: info.customerRate ?? charge,
+            discount_amount: 0,
+            surcharge_amount: 0,
+            pricing_source: 'package_snapshot',
+          }))
+          continue
+        }
+        weightLines++
         const q = await this.catalog.quoteOrg(organizationId, l.freightType, l.tier, l.quantityLbs, l.rateTableId ?? defaultRateTableId)
         if (!q) throw new Error(`El nivel ${l.tier} no está disponible para ${l.freightType}.`)
-        const info = l.packageId ? packageInfo.get(l.packageId) : undefined
         lineRows.push(lineRow({
           line_no: i + 1,
           description: l.description ?? null,
@@ -933,6 +1050,9 @@ export class BillingService {
           surcharge_amount: 0,
           pricing_source: q.pricingSource,
         }))
+      }
+      if (fixedLines > 0 && weightLines > 0) {
+        throw new Error('No se pueden mezclar paquetes por peso con paquetes de cuota fija en la misma factura — generá una factura por tipo de servicio.')
       }
     }
 
@@ -1223,7 +1343,7 @@ export class BillingService {
         if (!guia && pkg) guia = pkg.packages?.almacen_id ?? pkg.matched_oc ?? null
         if (!tracking && pkg) tracking = pkg.packages?.tracking_number ?? null
         if (l.line_type === 'other') { guia = null; tracking = null }
-        return { lineType: (l.line_type as 'freight' | 'other') ?? 'freight', description: l.description, freightType: l.freight_type, quantityLbs: l.quantity_lbs, unitPrice: l.unit_price, total: l.total, guia, tracking }
+        return { lineType: (l.line_type as 'freight' | 'other') ?? 'freight', description: l.description, freightType: l.freight_type, quantityLbs: l.quantity_lbs, unit: l.unit, unitPrice: l.unit_price, total: l.total, guia, tracking }
       }),
       total,
       paidUsd,
@@ -1391,17 +1511,51 @@ export class BillingService {
       }
     }
 
-    // Price each line (one line per package, freight from effective_service_type, tier = REGULAR).
+    // Price each line (one line per package). Fixed-priced packages (pricing
+    // snapshot at creation) use their STORED customer charge — never a re-quote;
+    // weight packages quote exactly as always. Mixing the two kinds in one
+    // invoice is rejected (one invoice = one pricing kind).
     const lines: Array<{
       packageId: string; guia: string; tracking: string | null; serviceType: string | null
       freightType: FreightType; weightLb: number | null; tier: string
       unitPrice: number; total: number; freightCost: number; profit: number
       rateCardId: string | null; rateCardVersionId: string | null; rateCardEntryId: string | null
       pricingSource: string
+      pricingKind: 'weight' | 'fixed' | null
+      unit: string
+      quantity: number
     }> = []
+    let fixedCount = 0
+    let weightCount = 0
     for (const p of pkgs) {
       const effectiveService = p.effective_service_type ?? p.service_type
       const freightType = SERVICE_TYPE_TO_FREIGHT[effectiveService ?? ''] ?? 'AIR'
+      // Fixed: the ONLY money input is the snapshot written at creation.
+      if (p.pricing_kind === 'fixed' && p.customer_charge != null) {
+        fixedCount++
+        lines.push({
+          packageId: p.id,
+          guia: p.almacen_id,
+          tracking: p.tracking_number,
+          serviceType: effectiveService,
+          freightType,
+          weightLb: p.weight_lb,
+          tier: 'FIXED',
+          unitPrice: p.customer_rate ?? p.customer_charge,
+          total: p.customer_charge,
+          freightCost: p.provider_cost ?? 0,
+          profit: round2(p.customer_charge - (p.provider_cost ?? 0)),
+          rateCardId: p.rate_card_id,
+          rateCardVersionId: p.rate_card_version_id,
+          rateCardEntryId: p.rate_card_entry_id,
+          pricingSource: 'package_snapshot',
+          pricingKind: 'fixed',
+          unit: p.customer_unit ?? 'package',
+          quantity: 1, // one guía = one charge; pieces never multiply
+        })
+        continue
+      }
+      weightCount++
       const weightLb = p.weight_lb ?? 1 // minimum 1 lb for pricing
       const q = await this.catalog.quoteOrg(organizationId, freightType, 'REGULAR', weightLb, defaultRateTableId)
       lines.push({
@@ -1420,7 +1574,13 @@ export class BillingService {
         rateCardVersionId: q?.rateCardVersionId ?? null,
         rateCardEntryId: q?.rateCardEntryId ?? null,
         pricingSource: q?.pricingSource ?? 'catalog',
+        pricingKind: 'weight',
+        unit: 'lbs',
+        quantity: weightLb,
       })
+    }
+    if (fixedCount > 0 && weightCount > 0) {
+      throw new Error('No se pueden mezclar paquetes por peso con paquetes de cuota fija en la misma factura — generá una factura por tipo de servicio.')
     }
 
     const total = round2(lines.reduce((s, l) => s + l.total, 0))
@@ -1454,22 +1614,24 @@ export class BillingService {
     const display = client.name
     const invoiceNumber = await this.repo.nextInvoiceNumber(fiscalYear, organizationId)
 
-    // Build line rows — one freight line per package with snapshots.
+    // Build line rows — one freight line per package with snapshots. Fixed
+    // lines carry quantity 1 (guías) with the real unit so weight aggregates
+    // (Σ quantity_lbs) never absorb fixed charges.
     const lineRows = preview.lines.map((l, i) => lineRow({
       line_no: i + 1,
-      description: `${l.serviceType ?? 'paquete'}`,
+      description: l.pricingKind === 'fixed' ? `${l.serviceType ?? 'paquete'} (cuota fija)` : `${l.serviceType ?? 'paquete'}`,
       freight_type: l.freightType,
       line_type: 'freight',
       concept_id: null,
-      quantity_lbs: l.weightLb ?? 1,
-      unit: 'lbs',
+      quantity_lbs: l.pricingKind === 'fixed' ? 0 : (l.weightLb ?? 1),
+      unit: l.pricingKind === 'fixed' ? l.unit : 'lbs',
       unit_price: l.unitPrice,
       total: l.total,
       list_price: null,
       freight_cost: l.freightCost,
       profit: l.profit,
-      price_tier: l.tier,
-      price_off_catalog: l.unitPrice === 0,
+      price_tier: l.tier === 'FIXED' ? null : l.tier,
+      price_off_catalog: l.unitPrice === 0 && l.pricingKind !== 'fixed',
       package_id: l.packageId,
       package_guia: l.guia,
       package_tracking: l.tracking,

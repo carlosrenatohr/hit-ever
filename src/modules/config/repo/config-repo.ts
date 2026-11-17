@@ -62,6 +62,9 @@ interface RateCardRow {
   organization_id: string
   name: string
   structure: string
+  pricing_kind?: string
+  is_default?: boolean
+  active?: boolean
   created_at: string
   updated_at: string
   rate_card_versions: RateCardVersionDb[]
@@ -101,14 +104,17 @@ export interface ConfigRepository {
   // Rate cards v2 (plan -> version -> entries):
   listRateCards(organizationId: string): Promise<RateCard[]>
   getRateCard(id: string): Promise<RateCard | null>
-  createRateCard(input: { organizationId: string; name: string; priceModel: PriceModel; currency: string; entries: RateCardEntryInput[]; by: string | null }): Promise<RateCard>
+  createRateCard(input: { organizationId: string; name: string; priceModel: PriceModel; currency: string; entries: RateCardEntryInput[]; by: string | null; isDefault?: boolean }): Promise<RateCard>
   updateRateCard(id: string, patch: Row): Promise<void>
+  setDefaultRateCard(organizationId: string, rateCardId: string, pricingKind: string): Promise<void>
   deleteRateCard(id: string): Promise<void>
   replaceCardEntries(rateCardId: string, entries: RateCardEntryInput[]): Promise<void>
   setClientDefaultRateCard(clientId: string, rateCardId: string | null): Promise<void>
   setPackageRateOverrideCard(packageId: string, rateCardId: string | null, by: string | null): Promise<void>
   findPackageIdByToken(token: string): Promise<string | null>
   getAgencyInfo(slug: string): Promise<AgencyInfo | null>
+  /** Whether the flexible pricing feature is switched on for the agency. */
+  getFlexiblePricingFlag(organizationId: string): Promise<boolean>
   listChargeConcepts(organizationId: string): Promise<ChargeConcept[]>
   createChargeConcept(organizationId: string, name: string, suggestedPrice: number | null): Promise<ChargeConcept>
   updateChargeConcept(organizationId: string, id: string, patch: { name?: string; active?: boolean; suggestedPrice?: number | null }): Promise<void>
@@ -255,7 +261,7 @@ export class InsforgeConfigRepo implements ConfigRepository {
 
   // ─── Rate cards v2 ───────────────────────────────────────────────────────────
 
-  private static readonly RATE_CARD_SELECT = `id,organization_id,name,structure,created_at,updated_at,rate_card_versions(id,version,price_model,currency,status,created_at,updated_at,rate_card_entries(id,service_type,name,unit,price,cost))`
+  private static readonly RATE_CARD_SELECT = `id,organization_id,name,structure,pricing_kind,is_default,active,created_at,updated_at,rate_card_versions(id,version,price_model,currency,status,created_at,updated_at,rate_card_entries(id,service_type,name,unit,price,cost))`
 
   async listRateCards(organizationId: string): Promise<RateCard[]> {
     const rows = await this.get<RateCardRow>(
@@ -277,8 +283,10 @@ export class InsforgeConfigRepo implements ConfigRepository {
     currency: string
     entries: RateCardEntryInput[]
     by: string | null
+    /** Flexible pricing: mark the new card as the org default for its kind. */
+    isDefault?: boolean
   }): Promise<RateCard> {
-    const card = await this.post<{ id: string }>('rate_cards', [{ organization_id: input.organizationId, name: input.name, created_by: input.by }], {
+    const card = await this.post<{ id: string }>('rate_cards', [{ organization_id: input.organizationId, name: input.name, created_by: input.by, pricing_kind: input.priceModel }], {
       representation: true,
     })
     if (!card[0]) throw new Error('rate card was not created')
@@ -288,24 +296,42 @@ export class InsforgeConfigRepo implements ConfigRepository {
       { representation: true },
     )
     if (!version[0]) throw new Error('rate card version was not created')
+    // Billing unit follows the model: weight bills per lb, fixed per guía/package.
+    const unit = input.priceModel === 'fixed' ? 'package' : 'lb'
     await this.post(
       'rate_card_entries',
       input.entries.map((e) => ({
         rate_card_version_id: version[0].id,
         service_type: e.serviceType,
         name: e.name,
-        unit: 'lb',
+        unit,
         price: e.price,
         cost: e.cost,
       })),
     )
     const created = await this.getRateCard(card[0].id)
     if (!created) throw new Error('rate card was not created')
+    if (input.isDefault) await this.setDefaultRateCard(input.organizationId, card[0].id, input.priceModel)
     return created
   }
 
   async updateRateCard(id: string, patch: Row): Promise<void> {
     await this.patch('rate_cards', `id=eq.${encodeURIComponent(id)}`, { ...patch, updated_at: new Date().toISOString() })
+  }
+
+  /**
+   * Org default for one pricing kind: clears the flag from every other active
+   * card of the kind, then sets it on the target. Two REST writes (not atomic,
+   * but the unique partial index in the schema makes a half-state impossible:
+   * two defaults of the same kind cannot coexist).
+   */
+  async setDefaultRateCard(organizationId: string, rateCardId: string, pricingKind: string): Promise<void> {
+    await this.patch(
+      'rate_cards',
+      `organization_id=eq.${encodeURIComponent(organizationId)}&pricing_kind=eq.${encodeURIComponent(pricingKind)}&id=neq.${encodeURIComponent(rateCardId)}`,
+      { is_default: false },
+    )
+    await this.patch('rate_cards', `id=eq.${encodeURIComponent(rateCardId)}&organization_id=eq.${encodeURIComponent(organizationId)}`, { is_default: true, updated_at: new Date().toISOString() })
   }
 
   async deleteRateCard(id: string): Promise<void> {
@@ -316,6 +342,7 @@ export class InsforgeConfigRepo implements ConfigRepository {
     const card = await this.getRateCard(rateCardId)
     if (!card) throw new Error('rate card not found')
     const versionId = card.currentVersion.id
+    const unit = card.currentVersion.priceModel === 'fixed' ? 'package' : 'lb'
     if (entries.length === 0) {
       await this.del('rate_card_entries', `rate_card_version_id=eq.${encodeURIComponent(versionId)}`)
       return
@@ -326,7 +353,7 @@ export class InsforgeConfigRepo implements ConfigRepository {
         rate_card_version_id: versionId,
         service_type: e.serviceType,
         name: e.name,
-        unit: 'lb',
+        unit,
         price: e.price,
         cost: e.cost,
       })),
@@ -407,6 +434,14 @@ export class InsforgeConfigRepo implements ConfigRepository {
       `slug=eq.${encodeURIComponent(slug)}&select=slug,name,ruc,address,phone,currency,is_scrapable,exchange_rate_nio_per_usd,exchange_rate_source,exchange_rate_updated_at,name_last_updated&limit=1`,
     )
     return rows[0] ? toAgencyInfo(rows[0]) : null
+  }
+
+  async getFlexiblePricingFlag(organizationId: string): Promise<boolean> {
+    const rows = await this.get<{ flexible_pricing_enabled: boolean }>(
+      'agencies',
+      `slug=eq.${encodeURIComponent(organizationId)}&select=flexible_pricing_enabled&limit=1`,
+    )
+    return rows[0]?.flexible_pricing_enabled === true
   }
 
   async listPaymentMethods(organizationId: string): Promise<PaymentCatalogItem[]> {
@@ -515,6 +550,9 @@ function toRateCard(r: RateCardRow): RateCard {
     organizationId: r.organization_id,
     name: r.name,
     structure: (r.structure ?? 'simple_pair') as RateCardStructure,
+    pricingKind: ((r.pricing_kind ?? 'weight') as RateCard['pricingKind']),
+    isDefault: r.is_default === true,
+    active: r.active !== false,
     currentVersion: current ?? { id: '', version: 0, priceModel: 'weight', currency: 'USD', status: 'published', entries: [] },
     createdAt: r.created_at,
     updatedAt: r.updated_at,
