@@ -63,7 +63,34 @@ const WEIGHT_CARD_ROW = {
   ],
 }
 
-function stubBackend(opts: { role?: string; flag?: boolean; cards?: unknown[]; assignments?: unknown[] } = {}) {
+const VIP_WEIGHT_CARD_ROW = {
+  id: 'card-vip',
+  organization_id: 'suite',
+  name: 'Cliente VIP',
+  structure: 'simple_pair',
+  pricing_kind: 'weight',
+  is_default: false,
+  active: true,
+  created_at: '2026-11-16T00:00:00.000Z',
+  updated_at: '2026-11-16T00:00:00.000Z',
+  rate_card_versions: [
+    {
+      id: 'ver-vip-1',
+      version: 1,
+      price_model: 'weight',
+      currency: 'USD',
+      status: 'published',
+      created_at: '2026-11-16T00:00:00.000Z',
+      updated_at: '2026-11-16T00:00:00.000Z',
+      rate_card_entries: [
+        { id: 'ent-vip-air', service_type: 'AIR', name: 'Regular', unit: 'lb', price: 5, cost: 3 },
+        { id: 'ent-vip-mar', service_type: 'MAR', name: 'Regular', unit: 'lb', price: 2, cost: 1 },
+      ],
+    },
+  ],
+}
+
+function stubBackend(opts: { role?: string; flag?: boolean; cards?: unknown[]; assignments?: unknown[]; clientDefaultCardId?: string | null } = {}) {
   return vi.stubGlobal('fetch', async (input: Request | string) => {
     const url = typeof input === 'string' ? input : input.url
     const auth = url.includes('/api/auth/sessions/current') ? '' : ''
@@ -82,6 +109,15 @@ function stubBackend(opts: { role?: string; flag?: boolean; cards?: unknown[]; a
     }
     if (url.includes('/api/database/records/client_rate_assignments')) {
       return new Response(JSON.stringify(opts.assignments ?? []), { status: 200 })
+    }
+    if (url.includes('/api/database/records/billing_clients')) {
+      const row = {
+        id: 'c1', name: 'Ana', name_normalized: 'ana', casillero: null, to_review: false,
+        email: null, phone: null, address: null, company_name: null, tax_id: null,
+        active: true, deleted_at: null, default_rate_id: null,
+        default_rate_card_id: opts.clientDefaultCardId ?? null,
+      }
+      return new Response(JSON.stringify([row]), { status: 200 })
     }
     return new Response('not found', { status: 404 })
   })
@@ -162,6 +198,16 @@ describe('GET /api/billing/pricing-preview', () => {
     stubBackend({ role: 'admin', cards: [WEIGHT_CARD_ROW] })
     const res = await worker.fetch(new Request(`${URL}&pricingKind=weight`, { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
     expect(res.status).toBe(422)
+  })
+
+  it('uses the client profile default weight tariff over the agency default', async () => {
+    stubBackend({ role: 'admin', cards: [WEIGHT_CARD_ROW, VIP_WEIGHT_CARD_ROW], clientDefaultCardId: 'card-vip' })
+    const res = await worker.fetch(new Request(`${URL}&pricingKind=weight&weightLb=10`, { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { data: { cardName: string; customerRate: number; customerCharge: number } }
+    expect(body.data.cardName).toBe('Cliente VIP')
+    expect(body.data.customerRate).toBe(5)
+    expect(body.data.customerCharge).toBe(50)
   })
 
   it('never prices a weight preview with a fixed card', async () => {
