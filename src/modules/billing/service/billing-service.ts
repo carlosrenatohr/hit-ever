@@ -834,7 +834,7 @@ export class BillingService {
       }))
     }
     if (fixedLines > 0 && weightLines > 0) {
-      throw new Error('No se pueden mezclar paquetes por peso con paquetes de cuota fija en la misma factura — generá una factura por tipo de servicio.')
+      throw new Error('No se pueden mezclar paquetes por peso con paquetes de cuota fija en la misma factura. Generá una factura por tipo de servicio.')
     }
     // "Other" charges: admin-set amounts (never quoted). Each may reference a
     // concept template (validated against the agency) with extra free text.
@@ -1068,7 +1068,7 @@ export class BillingService {
         }))
       }
       if (fixedLines > 0 && weightLines > 0) {
-        throw new Error('No se pueden mezclar paquetes por peso con paquetes de cuota fija en la misma factura — generá una factura por tipo de servicio.')
+        throw new Error('No se pueden mezclar paquetes por peso con paquetes de cuota fija en la misma factura. Generá una factura por tipo de servicio.')
       }
     }
 
@@ -1629,7 +1629,7 @@ export class BillingService {
       })
     }
     if (fixedCount > 0 && weightCount > 0) {
-      throw new Error('No se pueden mezclar paquetes por peso con paquetes de cuota fija en la misma factura — generá una factura por tipo de servicio.')
+      throw new Error('No se pueden mezclar paquetes por peso con paquetes de cuota fija en la misma factura. Generá una factura por tipo de servicio.')
     }
 
     const total = round2(lines.reduce((s, l) => s + l.total, 0))
