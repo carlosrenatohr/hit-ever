@@ -159,6 +159,17 @@ billing.get(
     const clientAssignments = clientId
       ? (await customerRepo.listRateAssignments(org, clientId)).map((a) => ({ rateCardId: a.rateCardId, pricingKind: a.pricingKind, transportMode: a.transportMode, active: true }))
       : []
+    // A client's profile default (billing_clients.default_rate_card_id) is the
+    // weight tariff the invoice quote uses. The weight preview must resolve the
+    // same card, or the create-package summary would show the agency default
+    // while the invoice bills the client's tariff.
+    if (clientId && kind === 'weight') {
+      const client = await customerRepo.get(clientId, org)
+      const profileDefault = client?.defaultRateCardId ?? null
+      if (profileDefault) {
+        clientAssignments.unshift({ rateCardId: profileDefault, pricingKind: 'weight', transportMode: null, active: true })
+      }
+    }
     const card = resolvePackageCard(asCards, {
       pricingKind: kind,
       transportMode: mode,
