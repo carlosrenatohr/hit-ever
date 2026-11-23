@@ -21,7 +21,7 @@ import {
   POPPINS_EXTRABOLD_B64,
 } from './poppins-b64.js'
 import type { PublicReceipt } from '../service/billing-service.js'
-import { money, formatPhone, shortDateEs, FREIGHT_ES } from './public.js'
+import { money, formatPhone, shortDateEs, FREIGHT_ES, lineQtyLabel } from './public.js'
 
 // Palette mirrors InvoicePrint / the brand book (Tailwind values → rgb 0-1).
 const INK = rgb(0.07, 0.07, 0.07) // gray-900
@@ -309,7 +309,7 @@ export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = d
   draw(page, font.semibold, HEADER_SIZE, MUTED, colFirst, thY, 'GUIA / CONCEPTO')
   draw(page, font.semibold, HEADER_SIZE, MUTED, colFreight, thY, 'FLETE')
   const hasFixedLines = r.lines.some((l) => l.unit === 'package')
-  draw(page, font.semibold, HEADER_SIZE, MUTED, colLbsRight - font.semibold.widthOfTextAtSize(hasFixedLines ? 'CANT.' : 'LIBRAS', HEADER_SIZE), thY, hasFixedLines ? 'CANT.' : 'LIBRAS')
+  draw(page, font.semibold, HEADER_SIZE, MUTED, colLbsRight - font.semibold.widthOfTextAtSize(hasFixedLines ? 'CANTIDAD' : 'LIBRAS', HEADER_SIZE), thY, hasFixedLines ? 'CANTIDAD' : 'LIBRAS')
   draw(page, font.semibold, HEADER_SIZE, MUTED, colUnitRight - font.semibold.widthOfTextAtSize('P. UNIT.', HEADER_SIZE), thY, 'P. UNIT.')
   drawRight(page, font.semibold, HEADER_SIZE, MUTED, 'TOTAL', thY)
   // border-y: line above the header and below it
@@ -330,7 +330,7 @@ export async function buildReceiptPdf(r: PublicReceipt, logoFetcher: Fetcher = d
     })
     cellLines.forEach((ln, i) => draw(page, i === 0 ? font.semibold : font.regular, i === 0 ? 10.5 : 7.5, i === 0 ? INK : MUTED, colFirst, rowY - i * 12, ln))
     draw(page, font.regular, 10.5, INK, colFreight, rowY, l.freightType ? FREIGHT_ES[l.freightType] : '-')
-    const qtyLabel = l.unit === 'package' ? '1 envío' : String(l.quantityLbs ?? '-')
+    const qtyLabel = lineQtyLabel(l)
     draw(page, font.regular, 10.5, INK, colLbsRight - font.regular.widthOfTextAtSize(sanitizePdfText(qtyLabel), 10.5), rowY, qtyLabel)
     draw(page, font.regular, 10.5, INK, colUnitRight - font.regular.widthOfTextAtSize(sanitizePdfText(money(l.unitPrice, currency)), 10.5), rowY, money(l.unitPrice, currency))
     drawRight(page, font.medium, 10.5, INK, money(l.total, currency), rowY)
