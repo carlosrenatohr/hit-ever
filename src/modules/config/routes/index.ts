@@ -26,6 +26,7 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
   if (/once per month/i.test(msg)) return Res.err(c, 'NAME_CHANGE_COOLDOWN', msg, 409)
   if (/flexible pricing is not enabled/i.test(msg)) return Res.err(c, 'FEATURE_NOT_ENABLED', 'El precio flexible no está habilitado para esta agencia.', 403)
   if (/in use/i.test(msg)) return Res.err(c, 'IN_USE', 'No se puede eliminar: el recurso está en uso.', 409)
+  if (/está en cero/i.test(msg)) return Res.err(c, 'RATE_CARD_ZERO_PRICE', msg, 422)
   if (/duplicate|unique/i.test(msg)) return Res.err(c, 'CONFLICT', 'A resource with those values already exists.', 409)
   console.error('config error:', msg, 'requestId:', c.get('requestId') ?? null)
   return Res.err(c, 'CONFIG_ERROR', 'Unexpected error.', 500)

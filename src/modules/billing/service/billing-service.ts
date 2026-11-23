@@ -1182,14 +1182,47 @@ export class BillingService {
     // Legacy/import invoices with payments were already backfilled as closed.
     if (!b.header.closed_at) throw new Error('Cierra la factura antes de registrar pagos.')
 
-    const amountUsd = paymentUsd(input.currency, input.amount, input.fxRate)
+    // Balance guard: a payment can never exceed what the invoice still owes.
+    // The header stores the frozen total (setInvoiceTotals); fall back to the
+    // line sum for invoices that predate it.
+    const linesTotal = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
+    const billedTotal = round2(b.header.total ?? linesTotal) || linesTotal
+    const paidBefore = round2(Math.max(b.header.paid_usd ?? 0, b.payments.reduce((s, p) => s + (p.amount_usd || 0), 0)))
+    const outstanding = round2(Math.max(0, billedTotal - paidBefore))
+    if (outstanding <= EPS) throw new BillingError('INVOICE_ALREADY_PAID', 'La factura no tiene saldo pendiente.', 422)
+
+    // NIO payments need a rate to reconcile to USD — without one the payment
+    // used to land with amount_usd NULL and never counted toward the balance.
+    // Explicit rate wins; otherwise the agency's configured rate applies.
+    let fxRate = input.currency === 'USD' ? null : (input.fxRate && input.fxRate > 0 ? input.fxRate : null)
+    if (input.currency === 'NIO' && fxRate == null) {
+      const agencyInfo = await this.repo.getAgencyInfo(organizationId)
+      fxRate = agencyInfo?.exchangeRateNioPerUsd && agencyInfo.exchangeRateNioPerUsd > 0 ? agencyInfo.exchangeRateNioPerUsd : null
+    }
+    if (input.currency === 'NIO' && fxRate == null) {
+      throw new BillingError(
+        'EXCHANGE_RATE_REQUIRED',
+        'Falta la tasa de cambio (córdobas por dólar). Configurala en Configuración › Información o indicá una para este pago.',
+        422,
+      )
+    }
+    const amountUsd = paymentUsd(input.currency, input.amount, fxRate)
+    if (amountUsd == null || amountUsd <= 0) throw new BillingError('INVALID_PAYMENT_AMOUNT', 'El monto del pago no se pudo convertir a dólares.', 422)
+    if (amountUsd > outstanding + EPS) {
+      throw new BillingError(
+        'PAYMENT_EXCEEDS_BALANCE',
+        `El pago ($${amountUsd.toFixed(2)} USD) supera el saldo pendiente de la factura ($${outstanding.toFixed(2)} USD).`,
+        422,
+      )
+    }
+
     await this.repo.insertPayment(id, {
       method: input.method,
       bank: input.bank ?? null,
       currency: input.currency,
       amount: round2(input.amount),
       amount_usd: amountUsd,
-      fx_rate: input.fxRate ?? null,
+      fx_rate: fxRate,
       paid_at: input.paidAt ?? new Date().toISOString(),
       raw: null,
       quarantined: false,
@@ -1197,8 +1230,8 @@ export class BillingService {
       comments: input.comments?.trim() || null,
       organization_id: organizationId,
     })
-    const total = round2(b.lines.reduce((s, l) => s + (l.total || 0), 0))
-    const paidUsd = round2(b.payments.reduce((s, p) => s + (p.amount_usd || 0), 0) + (amountUsd ?? 0))
+    const total = billedTotal
+    const paidUsd = round2(paidBefore + amountUsd)
     const status = computeStatus(b.header.status, total, paidUsd)
     // Stamp paid_at when the invoice reaches PAID (for the issued->paid days badge).
     await this.repo.setInvoiceStatus(id, status, status === 'PAID' ? { paid_at: input.paidAt ?? new Date().toISOString() } : {})

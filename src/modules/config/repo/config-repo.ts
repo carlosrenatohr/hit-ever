@@ -311,8 +311,11 @@ export class InsforgeConfigRepo implements ConfigRepository {
     )
     const created = await this.getRateCard(card[0].id)
     if (!created) throw new Error('rate card was not created')
-    if (input.isDefault) await this.setDefaultRateCard(input.organizationId, card[0].id, input.priceModel)
-    return created
+    if (!input.isDefault) return created
+    await this.setDefaultRateCard(input.organizationId, card[0].id, input.priceModel)
+    // Re-read: the card fetched before the PATCH still reports is_default=false,
+    // and the panel needs the flag to place it first in its group.
+    return (await this.getRateCard(card[0].id)) ?? created
   }
 
   async updateRateCard(id: string, patch: Row): Promise<void> {

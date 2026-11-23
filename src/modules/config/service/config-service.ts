@@ -187,6 +187,10 @@ export class ConfigService {
     } else if (priceModel !== 'weight') {
       throw new Error(`Price model "${priceModel}" is under construction.`)
     }
+    // A default tariff prices every package of its kind — a zeroed card would
+    // silently bill $0. Creating the table empty stays allowed (fill it later),
+    // but never as the default.
+    if (isDefault) this.assertCardHasPrices(entries)
     const card = await this.repo.createRateCard({ organizationId: org, name, priceModel, currency: 'USD', entries, by: session.userId, isDefault })
     await this.audit({
       organizationId: org,
@@ -211,6 +215,7 @@ export class ConfigService {
     const card = await this.requireRateCardInOrg(org, id)
     if (card.pricingKind !== 'weight') await this.assertFlexiblePricing(org)
     if (!card.active) throw new Error('rate card not found')
+    this.assertCardHasPrices(card.currentVersion.entries)
     await this.repo.setDefaultRateCard(org, id, card.pricingKind)
     await this.audit({
       organizationId: org,
@@ -370,6 +375,17 @@ export class ConfigService {
   async assertFlexiblePricing(organizationId: string): Promise<void> {
     if (!(await this.isFlexiblePricingEnabled(organizationId))) {
       throw new Error('Flexible pricing is not enabled for this agency.')
+    }
+  }
+
+  /**
+   * Default tariff sanity: every service entry must carry a price > 0. A card
+   * created empty (the normal "create then fill" flow) is fine as a draft, but
+   * making it the default would price its packages at $0 without any warning.
+   */
+  private assertCardHasPrices(entries: Array<{ price: number }>): void {
+    if (entries.length === 0 || entries.some((e) => !(e.price > 0))) {
+      throw new Error('La tarifa por defecto necesita precio de Aéreo y Marítimo: la tabla está en cero.')
     }
   }
 
