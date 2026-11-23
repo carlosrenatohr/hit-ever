@@ -267,6 +267,9 @@ export class ConfigService {
   async replaceCardEntries(org: string, id: string, entries: RateCardEntryInput[], session: ConfigSession, requestId: string): Promise<RateCard> {
     const card = await this.requireRateCardInOrg(org, id)
     assertSimplePair(entries)
+    // A default tariff prices every package of its kind: zeroing it would silently
+    // bill $0 for the whole group, so the default must stay priced.
+    if (card.isDefault) this.assertCardHasPrices(entries)
     await this.repo.replaceCardEntries(id, entries)
     await this.audit({
       organizationId: org,
