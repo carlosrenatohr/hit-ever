@@ -834,3 +834,59 @@ describe('POST /api/config/rates/v2 — fixed cards (flexible pricing)', () => {
     expect(body.error?.code).toBe('FEATURE_NOT_ENABLED')
   })
 })
+
+// ─── Default tariff sanity: a zeroed table never becomes the default ─────────
+const zeroEntries = [
+  { serviceType: 'AIR', name: 'Regular', price: 0, cost: 0 },
+  { serviceType: 'MAR', name: 'Regular', price: 0, cost: 0 },
+]
+const zeroCardRow = {
+  ...hitCardRow,
+  rate_card_versions: [
+    {
+      ...hitCardRow.rate_card_versions[0],
+      rate_card_entries: [
+        { id: 'e1', service_type: 'AIR', name: 'Regular', unit: 'lb', price: 0, cost: 0 },
+        { id: 'e2', service_type: 'MAR', name: 'Regular', unit: 'lb', price: 0, cost: 0 },
+      ],
+    },
+  ],
+}
+
+describe('rate card default — zero prices are rejected', () => {
+  it('422s creating a default card with zeroed entries', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: { rate_cards: [hitCardRow] } })
+    const res = await call(
+      '/api/config/rates/v2',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'POST', body: { name: 'Vacía', priceModel: 'weight', isDefault: true, entries: zeroEntries } },
+    )
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as { error: { code: string; message: string } }
+    expect(body.error.code).toBe('RATE_CARD_ZERO_PRICE')
+    expect(body.error.message).toMatch(/en cero/i)
+    expect(postedAudits).toHaveLength(0)
+  })
+
+  it('422s marking an existing zeroed card as default', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: { rate_cards: [zeroCardRow] } })
+    const res = await call(
+      '/api/config/rates/v2/card-1',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'PATCH', body: { isDefault: true } },
+    )
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('RATE_CARD_ZERO_PRICE')
+  })
+
+  it('still allows creating an empty table when it is NOT the default', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: { rate_cards: [hitCardRow] } })
+    const res = await call(
+      '/api/config/rates/v2',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'POST', body: { name: 'Borrador', priceModel: 'weight', entries: zeroEntries } },
+    )
+    expect(res.status).toBe(201)
+  })
+})
