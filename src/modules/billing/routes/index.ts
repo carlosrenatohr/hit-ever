@@ -252,7 +252,9 @@ billing.get('/invoices/:id/events', async (c) => {
  */
 billing.get('/clients/:clientId/unbilled-packages', billingAuth('invoices:write'), async (c) => {
   const svc = new BillingService(getBillingRepo(c.env))
-  const result = await svc.listUnbilledPackagesForClient(c.req.param('clientId'), c.get('billingSession').agency)
+  const session = c.get('billingSession')
+  const includeCosts = session.role === 'admin' || session.role === 'billing'
+  const result = await svc.listUnbilledPackagesForClient(c.req.param('clientId'), session.agency, includeCosts)
   return Res.ok(c, result)
 })
 

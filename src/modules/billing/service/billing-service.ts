@@ -574,10 +574,14 @@ export class BillingService {
   }
 
   /** A client's packages in this agency, each marked eligible or not with a reason.
-   *  Feeds the guided new-invoice flow (select client → pick unbilled guides). */
+   *  Feeds the guided new-invoice flow (select client → pick unbilled guides).
+   *  `includeCosts` (finance roles only) adds the fixed service's provider cost and
+   *  utilidad so the invoice editor previews a correct profit without leaking
+   *  internal costs to staff. */
   async listUnbilledPackagesForClient(
     clientId: string,
     organizationId: string,
+    includeCosts = false,
   ): Promise<{
     clientId: string
     packages: Array<{
@@ -591,6 +595,8 @@ export class BillingService {
       pricingKind: string | null
       customerCharge: number | null
       customerUnit: string | null
+      providerCost?: number
+      grossProfit?: number
       eligible: boolean
       reason: string | null
     }>
@@ -610,6 +616,8 @@ export class BillingService {
       pricingKind: string | null
       customerCharge: number | null
       customerUnit: string | null
+      providerCost?: number
+      grossProfit?: number
       eligible: boolean
       reason: string | null
     }> = []
@@ -638,6 +646,14 @@ export class BillingService {
         serviceType: p.effective_service_type ?? p.service_type,
         freightType: (p.effective_service_type ?? p.service_type) ? (SERVICE_TYPE_TO_FREIGHT[p.effective_service_type ?? p.service_type ?? ''] ?? null) : null,
         weightLb: p.weight_lb,
+        // Fixed services: finance sees the real cost + utilidad (the flat charge
+        // minus the owner-configured cost). Staff never receives these fields.
+        ...(includeCosts && isFixed
+          ? {
+              providerCost: p.provider_cost ?? 0,
+              grossProfit: round2((p.customer_charge ?? 0) - (p.provider_cost ?? 0)),
+            }
+          : {}),
         eligible: reason === null,
         reason,
       })
