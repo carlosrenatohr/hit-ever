@@ -15,7 +15,7 @@ const ENV = { INSFORGE_API_URL: 'https://db.test', INSFORGE_API_KEY: 'admin-key'
 
 afterEach(() => vi.unstubAllGlobals())
 
-function stubBackend(opts: { packages?: unknown[]; activeLinks?: Record<string, string>; linkedPackages?: unknown[] } = {}) {
+function stubBackend(opts: { packages?: unknown[]; activeLinks?: Record<string, string>; linkedPackages?: unknown[]; role?: string } = {}) {
   const calls: { method: string; url: string; body?: string }[] = []
   const header = {
     id: 'i-g', invoice_number: 1, fiscal_year: 2026, client_id: 'c-ana', client_name_raw: 'Ana',
@@ -33,7 +33,7 @@ function stubBackend(opts: { packages?: unknown[]; activeLinks?: Record<string, 
         : new Response('no', { status: 401 })
     }
     if (url.includes('/records/app_users')) {
-      return new Response(JSON.stringify([{ role: 'billing', active: true, name: 'B', email: 'billing@hit.com', agency: 'hit' }]), { status: 201 })
+      return new Response(JSON.stringify([{ role: opts.role ?? 'billing', active: true, name: 'B', email: 'billing@hit.com', agency: 'hit' }]), { status: 201 })
     }
     calls.push({ method, url, body: typeof init?.body === 'string' ? init.body : undefined })
     if (method === 'GET' && url.includes('/records/invoice_packages?') && url.includes('active=eq.true')) {
@@ -143,5 +143,19 @@ describe('E2E — unbilled packages by client', () => {
     // Soft-deleted packages must never appear in the unbilled list.
     const pkgCall = calls.find((c) => c.method === 'GET' && c.url.includes('/records/packages?'))
     expect(pkgCall?.url).toContain('deleted_at=is.null')
+  })
+
+  it('attaches the fixed cost/profit for finance roles (staff is rejected outright)', async () => {
+    const fixed = { ...ANA_PKG, pricing_kind: 'fixed', customer_charge: 25, customer_rate: 25, customer_unit: 'package', provider_cost: 8 }
+    stubBackend({ packages: [fixed], role: 'billing' })
+    const finance = (await (await authed('/api/billing/clients/c-ana/unbilled-packages')).json()) as {
+      data: { packages: Array<{ providerCost?: number; grossProfit?: number }> }
+    }
+    expect(finance.data.packages[0]).toMatchObject({ providerCost: 8, grossProfit: 17 })
+
+    // The guided flow requires invoices:write — staff never reaches the payload.
+    stubBackend({ packages: [fixed], role: 'staff' })
+    const staff = await authed('/api/billing/clients/c-ana/unbilled-packages')
+    expect(staff.status).toBe(403)
   })
 })
