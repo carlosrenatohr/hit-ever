@@ -20,6 +20,18 @@ const FREIGHT_ES: Record<FreightType, string> = { AIR: 'Aéreo', MAR: 'Marítimo
 export { FREIGHT_ES }
 export const money = (n: number, currency: 'USD' | 'NIO') => `${currency === 'NIO' ? 'C$' : '$'}${(n ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 /**
+ * Quantity printed for a receipt line: pounds for weight billing and units for
+ * fixed services (one guía = one unit — "1 envío" read like a shipping label,
+ * not a quantity). Fixed qty is derived from total / unit price so a future
+ * multi-unit fixed line prints "2 unidades" without changing the money model.
+ */
+export function lineQtyLabel(l: { unit: string | null; quantityLbs: number | null; unitPrice: number; total: number }): string {
+  if (l.unit !== 'package') return l.quantityLbs != null ? `${l.quantityLbs} lb` : '-'
+  const perUnit = l.unitPrice > 0 ? l.unitPrice : l.total
+  const qty = perUnit > 0 ? Math.max(1, Math.round((l.total || 0) / perUnit)) : 1
+  return `${qty} ${qty === 1 ? 'unidad' : 'unidades'}`
+}
+/**
  * Short es-NI date ("5 sept 2026") for the receipt. A bare YYYY-MM-DD is the
  * local calendar day (like the panel's toLocalDate) — formatting a UTC-midnight
  * Date would shift it back a day in UTC- zones (Nicaragua). Full ISO timestamps
@@ -73,7 +85,7 @@ function receiptHtml(r: PublicReceipt): string {
       return `<tr>
       <td>${firstCell}</td>
       <td>${l.freightType ? esc(FREIGHT_ES[l.freightType]) : '-'}</td>
-      <td class="num">${l.unit === 'package' ? '1 envío' : l.quantityLbs != null ? esc(l.quantityLbs) : '-'}</td>
+      <td class="num">${esc(lineQtyLabel(l))}</td>
       <td class="num">${money(l.unitPrice, r.agency.currency)}</td>
       <td class="num">${money(l.total, r.agency.currency)}</td>
     </tr>`
@@ -154,7 +166,7 @@ function receiptHtml(r: PublicReceipt): string {
     ${r.clientAddress ? `<div class="client-details">${esc(r.clientAddress)}</div>` : ''}
   </div>
   <table>
-    <thead><tr><th>Guía / Concepto</th><th>Flete</th><th class="num">${r.lines.some((l) => l.unit === 'package') ? 'Cant.' : 'Libras'}</th><th class="num">P. unit.</th><th class="num">Total</th></tr></thead>
+    <thead><tr><th>Guía / Concepto</th><th>Flete</th><th class="num">Cantidad</th><th class="num">P. unit.</th><th class="num">Total</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>
   <div class="totals">

@@ -10,7 +10,7 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { Res } from '../../../lib/response.js'
 import { CatalogService } from '../catalog/catalog.js'
-import { margin } from '../domain/calc.js'
+import { margin, round2 } from '../domain/calc.js'
 import { CURRENCIES, FREIGHT_TYPES, INVOICE_STATUSES } from '../domain/enums.js'
 import { billingAuth, type BillingEnv } from '../middleware/auth.js'
 import { getBillingRepo } from '../repo/billing-repo.js'
@@ -104,7 +104,9 @@ billing.get(
 /**
  * GET /api/billing/pricing-preview — what the create-package form shows.
  * Resolves the rate card with the SAME order as create_package (explicit pick →
- * client assignment → org default) and returns the fixed snapshot fields.
+ * client assignment → org default) for the requested pricing kind:
+ *   * fixed  → the flat per-guía snapshot (quantity is always 1).
+ *   * weight → the resolved price per lb times the weight being created.
  * Provider cost / profit are included ONLY for admin|billing — staff and
  * viewers never see internal costs (plan requirement).
  */
@@ -114,21 +116,28 @@ billing.get(
     'query',
     z.object({
       serviceType: z.string().min(1),
+      pricingKind: z.enum(['weight', 'fixed']).optional(),
       clientId: z.string().min(1).optional(),
       rateCardId: z.string().min(1).optional(),
       pieces: z.coerce.number().int().positive().optional(),
       weightLb: z.coerce.number().nonnegative().optional(),
     }),
     (r, c) => {
-      if (!r.success) return Res.err(c, 'INVALID_QUERY', 'serviceType is required; clientId/rateCardId/pieces/weightLb optional.', 422)
+      if (!r.success) return Res.err(c, 'INVALID_QUERY', 'serviceType is required; pricingKind/clientId/rateCardId/pieces/weightLb optional.', 422)
     },
   ),
   async (c) => {
     const session = c.get('billingSession')
     const org = session.agency
-    const { serviceType, clientId, rateCardId, pieces, weightLb } = c.req.valid('query')
+    const { serviceType, pricingKind, clientId, rateCardId, pieces, weightLb } = c.req.valid('query')
+    const kind = pricingKind ?? 'fixed'
     const mode = serviceType === 'aereo' ? 'AIR' : serviceType === 'maritimo' ? 'MAR' : null
     if (!mode) return Res.err(c, 'INVALID_QUERY', 'serviceType must be aereo or maritimo.', 422)
+    // Weight pricing needs the weight itself: without it the preview would be a
+    // meaningless $0 and the operator would create the package blind.
+    if (kind === 'weight' && !(weightLb != null && weightLb > 0)) {
+      return Res.err(c, 'INVALID_QUERY', 'El peso (lb) es obligatorio para calcular el cobro por peso.', 422)
+    }
 
     const configRepo = getConfigRepo(c.env)
     const customerRepo = getCustomerRepo(c.env)
@@ -150,27 +159,49 @@ billing.get(
     const clientAssignments = clientId
       ? (await customerRepo.listRateAssignments(org, clientId)).map((a) => ({ rateCardId: a.rateCardId, pricingKind: a.pricingKind, transportMode: a.transportMode, active: true }))
       : []
-    const fixedCard = resolvePackageCard(asCards, {
-      pricingKind: 'fixed',
+    const card = resolvePackageCard(asCards, {
+      pricingKind: kind,
       transportMode: mode,
       explicitCardId: rateCardId ?? null,
       clientAssignments,
-      orgDefaultCardId: asCards.find((c) => c.isDefault && c.pricingKind === 'fixed')?.id ?? null,
+      orgDefaultCardId: asCards.find((c) => c.isDefault && (c.pricingKind ?? 'weight') === kind)?.id ?? null,
     })
-    const snapshot = fixedCard ? buildFixedPackageSnapshot(fixedCard, mode) : null
-    if (!fixedCard) return Res.err(c, 'NO_RATE_CONFIGURED', 'No hay servicio fijo configurado para este tipo de cobro.', 404)
-
     const isFinance = session.role === 'admin' || session.role === 'billing'
+
+    if (kind === 'fixed') {
+      const snapshot = card ? buildFixedPackageSnapshot(card, mode) : null
+      if (!card || !snapshot) return Res.err(c, 'NO_RATE_CONFIGURED', 'No hay servicio fijo configurado para este tipo de cobro.', 404)
+      return Res.ok(c, {
+        cardName: card.name,
+        pricingKind: 'fixed',
+        customerCharge: snapshot.customerCharge,
+        customerUnit: snapshot.customerUnit,
+        currency: snapshot.currency,
+        // Fixed rule: one guía = one charge; pieces never multiply it.
+        quantity: 1,
+        ...(isFinance ? { providerCost: snapshot.providerCost, grossProfit: round2(snapshot.customerCharge - snapshot.providerCost) } : {}),
+        inputs: { pieces: pieces ?? null, weightLb: weightLb ?? null },
+      })
+    }
+
+    // Weight: same entry the invoice quote would use (price/cost per lb), scaled
+    // by the weight being created. Never a fixed entry: resolvePackageCard
+    // filtered the cards by kind already.
+    const entry = card?.entries.find((e) => e.serviceType === mode && e.price != null)
+    if (!card || !entry) return Res.err(c, 'NO_RATE_CONFIGURED', 'No hay tarifa por peso configurada para este tipo de cobro.', 404)
+    const quantity = round2(weightLb as number)
+    const customerCharge = round2(entry.price * quantity)
+    const providerCost = round2((entry.cost ?? 0) * quantity)
     return Res.ok(c, {
-      cardName: fixedCard.name,
-      pricingKind: 'fixed',
-      customerCharge: snapshot!.customerCharge,
-      customerUnit: snapshot!.customerUnit,
-      currency: snapshot!.currency,
-      // Fixed rule: one guía = one charge; pieces never multiply it.
-      quantity: 1,
-      ...(isFinance ? { providerCost: snapshot!.providerCost, grossProfit: Math.round((snapshot!.customerCharge - snapshot!.providerCost) * 100) / 100 } : {}),
-      inputs: { pieces: pieces ?? null, weightLb: weightLb ?? null },
+      cardName: card.name,
+      pricingKind: 'weight',
+      customerRate: entry.price,
+      customerCharge,
+      customerUnit: entry.unit || 'lb',
+      currency: card.currency,
+      quantity,
+      ...(isFinance ? { providerCost, grossProfit: round2(customerCharge - providerCost) } : {}),
+      inputs: { pieces: pieces ?? null, weightLb: quantity },
     })
   },
 )

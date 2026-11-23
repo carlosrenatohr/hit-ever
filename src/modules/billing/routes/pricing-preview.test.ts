@@ -36,6 +36,33 @@ const FIXED_CARD_ROW = {
   ],
 }
 
+const WEIGHT_CARD_ROW = {
+  id: 'card-std',
+  organization_id: 'suite',
+  name: 'Estándar',
+  structure: 'simple_pair',
+  pricing_kind: 'weight',
+  is_default: true,
+  active: true,
+  created_at: '2026-11-16T00:00:00.000Z',
+  updated_at: '2026-11-16T00:00:00.000Z',
+  rate_card_versions: [
+    {
+      id: 'ver-std-1',
+      version: 1,
+      price_model: 'weight',
+      currency: 'USD',
+      status: 'published',
+      created_at: '2026-11-16T00:00:00.000Z',
+      updated_at: '2026-11-16T00:00:00.000Z',
+      rate_card_entries: [
+        { id: 'ent-std-air', service_type: 'AIR', name: 'Regular', unit: 'lb', price: 7, cost: 4.5 },
+        { id: 'ent-std-mar', service_type: 'MAR', name: 'Regular', unit: 'lb', price: 2.8, cost: 1.25 },
+      ],
+    },
+  ],
+}
+
 function stubBackend(opts: { role?: string; flag?: boolean; cards?: unknown[]; assignments?: unknown[] } = {}) {
   return vi.stubGlobal('fetch', async (input: Request | string) => {
     const url = typeof input === 'string' ? input : input.url
@@ -99,6 +126,47 @@ describe('GET /api/billing/pricing-preview', () => {
   it('404 NO_RATE_CONFIGURED when no fixed card applies', async () => {
     stubBackend({ cards: [{ ...FIXED_CARD_ROW, active: false }] })
     const res = await worker.fetch(new Request(URL, { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
+    expect(res.status).toBe(404)
+    const body = (await res.json()) as { error?: { code?: string } }
+    expect(body.error?.code).toBe('NO_RATE_CONFIGURED')
+  })
+
+  it('prices a weight preview with the resolved weight card (price × lb)', async () => {
+    stubBackend({ role: 'admin', cards: [WEIGHT_CARD_ROW] })
+    const res = await worker.fetch(new Request(`${URL}&pricingKind=weight&weightLb=5`, { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      data: { cardName: string; pricingKind: string; customerRate: number; customerCharge: number; customerUnit: string; quantity: number; providerCost: number; grossProfit: number }
+    }
+    expect(body.data.pricingKind).toBe('weight')
+    expect(body.data.cardName).toBe('Estándar')
+    expect(body.data.customerRate).toBe(7)
+    expect(body.data.customerUnit).toBe('lb')
+    expect(body.data.quantity).toBe(5)
+    expect(body.data.customerCharge).toBe(35)
+    expect(body.data.providerCost).toBe(22.5)
+    expect(body.data.grossProfit).toBe(12.5)
+  })
+
+  it('hides cost and profit from staff on a weight preview too', async () => {
+    stubBackend({ role: 'staff', cards: [WEIGHT_CARD_ROW] })
+    const res = await worker.fetch(new Request(`${URL}&pricingKind=weight&weightLb=2`, { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { data: Record<string, unknown> }
+    expect(body.data.customerCharge).toBe(14)
+    expect('providerCost' in body.data).toBe(false)
+    expect('grossProfit' in body.data).toBe(false)
+  })
+
+  it('422 when a weight preview has no weight to price', async () => {
+    stubBackend({ role: 'admin', cards: [WEIGHT_CARD_ROW] })
+    const res = await worker.fetch(new Request(`${URL}&pricingKind=weight`, { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
+    expect(res.status).toBe(422)
+  })
+
+  it('never prices a weight preview with a fixed card', async () => {
+    stubBackend({ role: 'admin', cards: [FIXED_CARD_ROW] })
+    const res = await worker.fetch(new Request(`${URL}&pricingKind=weight&weightLb=3`, { headers: { Authorization: 'Bearer goodToken' } }), ENV, ctx as never)
     expect(res.status).toBe(404)
     const body = (await res.json()) as { error?: { code?: string } }
     expect(body.error?.code).toBe('NO_RATE_CONFIGURED')
