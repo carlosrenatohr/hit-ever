@@ -870,7 +870,7 @@ const zeroCardRow = {
   ],
 }
 
-describe('rate card default — zero prices are rejected', () => {
+describe('rate card prices — zero is rejected everywhere', () => {
   it('422s creating a default card with zeroed entries', async () => {
     stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: { rate_cards: [hitCardRow] } })
     const res = await call(
@@ -897,13 +897,37 @@ describe('rate card default — zero prices are rejected', () => {
     expect(body.error.code).toBe('RATE_CARD_ZERO_PRICE')
   })
 
-  it('still allows creating an empty table when it is NOT the default', async () => {
+  it('422s creating an empty table even when it is NOT the default', async () => {
     stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: { rate_cards: [hitCardRow] } })
     const res = await call(
       '/api/config/rates/v2',
       { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
       { method: 'POST', body: { name: 'Borrador', priceModel: 'weight', entries: zeroEntries } },
     )
-    expect(res.status).toBe(201)
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('RATE_CARD_ZERO_PRICE')
+  })
+
+  it('422s creating a table whose cost is zero', async () => {
+    stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: { rate_cards: [hitCardRow] } })
+    const res = await call(
+      '/api/config/rates/v2',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      {
+        method: 'POST',
+        body: {
+          name: 'Sin costo',
+          priceModel: 'weight',
+          entries: [
+            { serviceType: 'AIR', name: 'Regular', price: 7, cost: 0 },
+            { serviceType: 'MAR', name: 'Regular', price: 2.9, cost: 1.25 },
+          ],
+        },
+      },
+    )
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('RATE_CARD_ZERO_PRICE')
   })
 })

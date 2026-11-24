@@ -187,10 +187,12 @@ export class ConfigService {
     } else if (priceModel !== 'weight') {
       throw new Error(`Price model "${priceModel}" is under construction.`)
     }
-    // A default tariff prices every package of its kind — a zeroed card would
-    // silently bill $0. Creating the table empty stays allowed (fill it later),
-    // but never as the default.
-    if (isDefault) this.assertCardHasPrices(entries)
+    // A new tariff is saved complete: an empty or zero table would bill $0 for
+    // every package of its kind, so it is never created (the panel initializes
+    // the four amounts at 0 and blocks the save until they are positive).
+    if (entries.some((e) => !(e.price > 0) || !(e.cost > 0))) {
+      throw new Error('La tabla de tarifas necesita precio y costo de Aéreo y Marítimo mayores a 0: la tabla está en cero.')
+    }
     const card = await this.repo.createRateCard({ organizationId: org, name, priceModel, currency: 'USD', entries, by: session.userId, isDefault })
     await this.audit({
       organizationId: org,
