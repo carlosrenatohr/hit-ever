@@ -600,6 +600,7 @@ export class BillingService {
       pricingKind: string | null
       customerCharge: number | null
       customerUnit: string | null
+      rateCardId: string | null
       providerCost?: number
       grossProfit?: number
       eligible: boolean
@@ -621,6 +622,7 @@ export class BillingService {
       pricingKind: string | null
       customerCharge: number | null
       customerUnit: string | null
+      rateCardId: string | null
       providerCost?: number
       grossProfit?: number
       eligible: boolean
@@ -647,6 +649,7 @@ export class BillingService {
         pricingKind: p.pricing_kind,
         customerCharge: p.customer_charge,
         customerUnit: p.customer_unit,
+        rateCardId: p.rate_card_id,
         status: p.effective_status,
         serviceType: p.effective_service_type ?? p.service_type,
         freightType: (p.effective_service_type ?? p.service_type) ? (SERVICE_TYPE_TO_FREIGHT[p.effective_service_type ?? p.service_type ?? ''] ?? null) : null,
@@ -1355,12 +1358,13 @@ export class BillingService {
         { clientId: before.header.client_id, clientName: before.header.client_name_raw },
         organizationId,
       )
+      const cardId = await this.weightCardFor(organizationId, client.id, info.freightType, info.rateCardId)
       const q = await this.catalog.quoteOrg(
         organizationId,
         info.freightType,
         'REGULAR',
         info.weightLb as number,
-        client.defaultRateTableId,
+        cardId ?? client.defaultRateTableId,
       )
       if (!q) throw new Error(`El paquete ${info.guia} no tiene tarifa para ${info.freightType}.`)
       row = lineRow({
@@ -1596,6 +1600,89 @@ export class BillingService {
   }
 
   /**
+   * Resolve which weight card prices one package. Order: the package's stored
+   * card → the client's assignment for this kind/mode → the client's profile
+   * default → the agency default for weight → the only usable card. Null means
+   * "do not guess": the caller stops with an actionable error.
+   */
+  private async weightCardFor(
+    organizationId: string,
+    clientId: string | null,
+    freightType: FreightType,
+    packageCardId?: string | null,
+  ): Promise<string | null> {
+    const cards = await this.catalog.cardsFor(organizationId)
+    const usable = (c: { id: string; pricingKind?: string; active?: boolean; isDefault?: boolean; entries: Array<{ serviceType: string; price: number | null }> }) =>
+      (c.pricingKind ?? 'weight') !== 'fixed' &&
+      c.active !== false &&
+      c.entries.some((e) => e.serviceType === freightType && e.price != null)
+    const usableId = (id: string | null | undefined) => (id ? (cards.find((c) => c.id === id && usable(c))?.id ?? null) : null)
+
+    const snapshotId = usableId(packageCardId)
+    if (snapshotId) return snapshotId
+
+    if (clientId && this.repo.listClientRateAssignments) {
+      const assignments = await this.repo.listClientRateAssignments(organizationId, clientId)
+      const assigned = assignments.find(
+        (a) => a.pricingKind === 'weight' && (a.transportMode == null || a.transportMode === freightType),
+      )
+      const assignedId = usableId(assigned?.rateCardId)
+      if (assignedId) return assignedId
+    }
+
+    if (clientId) {
+      const profileId = this.repo.getClientDefaultRateCard
+        ? usableId(await this.repo.getClientDefaultRateCard(clientId))
+        : null
+      if (profileId) return profileId
+    }
+
+    const orgDefault = cards.find((c) => c.isDefault && usable(c))
+    if (orgDefault) return orgDefault.id
+    const candidates = cards.filter(usable)
+    return candidates.length === 1 ? candidates[0].id : null
+  }
+
+  /**
+   * Stamp the weight snapshot right after a package is created (the RPC inserts
+   * it, the Worker resolves the tariff). Best effort: a legacy row without
+   * snapshot still bills through the same resolution at invoice time.
+   */
+  async stampWeightSnapshot(packageId: string, actor: string, organizationId: string) {
+    const [p] = await this.repo.getPackagesForBulk([packageId], organizationId)
+    if (!p) throw new Error('El paquete no existe en tu agencia.')
+    if (p.pricing_kind === 'fixed') return null
+    const effectiveService = p.effective_service_type ?? p.service_type
+    if (!effectiveService) throw new Error('El paquete no tiene tipo de servicio.')
+    if (p.weight_lb == null || p.weight_lb <= 0) throw new Error('El paquete no tiene peso para cotizar.')
+    const freightType = SERVICE_TYPE_TO_FREIGHT[effectiveService] ?? 'AIR'
+    const cardId = await this.weightCardFor(organizationId, p.client_id, freightType, p.rate_card_id)
+    if (!cardId) throw new Error('No hay una tarifa por peso configurada para este paquete.')
+    const q = await this.catalog.quoteOrg(organizationId, freightType, 'REGULAR', p.weight_lb, cardId)
+    if (!q?.rateCardId || !q.rateCardVersionId || !q.rateCardEntryId) {
+      throw new Error('La tarifa resuelta no tiene el snapshot completo.')
+    }
+    await this.repo.setPackageWeightSnapshot?.(packageId, organizationId, {
+      rateCardId: q.rateCardId,
+      versionId: q.rateCardVersionId,
+      entryId: q.rateCardEntryId,
+      rate: q.unitPrice,
+      charge: q.total,
+      cost: q.freightCost,
+      currency: q.currency ?? 'USD',
+      pricedBy: actor,
+    })
+    return {
+      rateCardId: q.rateCardId,
+      cardName: q.cardName ?? null,
+      unitPrice: q.unitPrice,
+      total: q.total,
+      cost: q.freightCost,
+      currency: q.currency ?? 'USD',
+    }
+  }
+
+  /**
    * Preview: validate + price a batch of packages before creating the invoice.
    * All packages must be in the same org, have an invoiceable status
    * (en_destino | entregado), and belong to one client (resolved from
@@ -1620,6 +1707,8 @@ export class BillingService {
       total: number
       freightCost: number
       profit: number
+      /** Card that priced the line (weight) / snapshot card (fixed). */
+      cardName: string | null
     }>
     total: number
     profit: number
@@ -1665,8 +1754,9 @@ export class BillingService {
       throw new Error('Los paquetes no tienen cliente asignado — asigna un cliente primero.')
     }
 
-    // Get the client's default rate (card for migrated orgs, legacy table fallback).
-    const defaultRateTableId = clientId ? (await this.repo.getClientDefaultRateCard(clientId)) ?? (await this.repo.getClientDefaultRateTable(clientId)) : null
+    // Legacy default table (only unmigrated orgs have one). Client cards and
+    // assignments are resolved per package by weightCardFor below.
+    const legacyDefaultTableId = clientId ? await this.repo.getClientDefaultRateTable(clientId) : null
     // Deactivated clients can't be billed again (historical invoices stay intact).
     if (clientId) {
       const clientActive = await this.repo.getClientLifecycle(clientId)
@@ -1683,6 +1773,7 @@ export class BillingService {
       packageId: string; guia: string; tracking: string | null; serviceType: string | null
       freightType: FreightType; weightLb: number | null; tier: string
       unitPrice: number; total: number; freightCost: number; profit: number
+      cardName: string | null
       rateCardId: string | null; rateCardVersionId: string | null; rateCardEntryId: string | null
       pricingSource: string
       pricingKind: 'weight' | 'fixed' | null
@@ -1691,6 +1782,17 @@ export class BillingService {
     }> = []
     let fixedCount = 0
     let weightCount = 0
+    // Client-level fallback is resolved once per freight mode, not per package:
+    // a batch of legacy guides must not multiply reads (subrequest budget).
+    const fallbackByFreight = new Map<string, Promise<string | null>>()
+    const fallbackCardFor = (freightType: FreightType): Promise<string | null> => {
+      let cached = fallbackByFreight.get(freightType)
+      if (!cached) {
+        cached = this.weightCardFor(organizationId, clientId, freightType, null)
+        fallbackByFreight.set(freightType, cached)
+      }
+      return cached
+    }
     for (const p of pkgs) {
       const effectiveService = p.effective_service_type ?? p.service_type
       const freightType = SERVICE_TYPE_TO_FREIGHT[effectiveService ?? ''] ?? 'AIR'
@@ -1709,6 +1811,7 @@ export class BillingService {
           total: p.customer_charge,
           freightCost: p.provider_cost ?? 0,
           profit: round2(p.customer_charge - (p.provider_cost ?? 0)),
+          cardName: null,
           rateCardId: p.rate_card_id,
           rateCardVersionId: p.rate_card_version_id,
           rateCardEntryId: p.rate_card_entry_id,
@@ -1720,8 +1823,22 @@ export class BillingService {
         continue
       }
       weightCount++
-      const weightLb = p.weight_lb ?? 1 // minimum 1 lb for pricing
-      const q = await this.catalog.quoteOrg(organizationId, freightType, 'REGULAR', weightLb, defaultRateTableId)
+      if (!effectiveService) throw new Error(`El paquete ${p.almacen_id} no tiene tipo de servicio.`)
+      if (p.weight_lb == null || p.weight_lb <= 0) throw new Error(`El paquete ${p.almacen_id} no tiene peso para cotizar.`)
+      const weightLb = p.weight_lb
+      // Each package prices with the card it was created with (when stored);
+      // legacy guides fall back to the client/agency resolution — never to the
+      // first card in the list.
+      const storedCardId = p.rate_card_id
+        ? await this.weightCardFor(organizationId, null, freightType, p.rate_card_id)
+        : null
+      const cardId = storedCardId ?? (await fallbackCardFor(freightType))
+      const q = await this.catalog.quoteOrg(organizationId, freightType, 'REGULAR', weightLb, cardId ?? legacyDefaultTableId)
+      if (!q) {
+        throw new Error(
+          `La guía ${p.almacen_id} no tiene una tarifa por peso configurada. Asigná una tarifa al cliente o marcá la tarifa por defecto de la agencia.`,
+        )
+      }
       lines.push({
         packageId: p.id,
         guia: p.almacen_id,
@@ -1730,14 +1847,15 @@ export class BillingService {
         freightType,
         weightLb: p.weight_lb,
         tier: 'REGULAR',
-        unitPrice: q ? round2(q.unitPrice) : 0,
-        total: q ? round2(q.total) : 0,
-        freightCost: q ? round2(q.freightCost) : 0,
-        profit: q ? round2(q.profit) : 0,
-        rateCardId: q?.rateCardId ?? null,
-        rateCardVersionId: q?.rateCardVersionId ?? null,
-        rateCardEntryId: q?.rateCardEntryId ?? null,
-        pricingSource: q?.pricingSource ?? 'catalog',
+        unitPrice: round2(q.unitPrice),
+        total: round2(q.total),
+        freightCost: round2(q.freightCost),
+        profit: round2(q.profit),
+        cardName: q.cardName ?? null,
+        rateCardId: q.rateCardId ?? null,
+        rateCardVersionId: q.rateCardVersionId ?? null,
+        rateCardEntryId: q.rateCardEntryId ?? null,
+        pricingSource: q.pricingSource,
         pricingKind: 'weight',
         unit: 'lbs',
         quantity: weightLb,

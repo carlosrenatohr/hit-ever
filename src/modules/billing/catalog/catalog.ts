@@ -24,6 +24,8 @@ export interface Quote extends LineAmounts {
   unit?: string
   pricingKind?: string
   cardName?: string
+  /** Currency of the source card (USD today). */
+  currency?: string
 }
 
 export interface ResolvedRate {
@@ -40,6 +42,8 @@ export interface ResolvedRate {
   pricingKind?: string
   /** Card/service name — the label invoices show for fixed services. */
   cardName?: string
+  /** Card currency (USD today); legacy rows omit it. */
+  currency?: string
 }
 
 /**
@@ -61,14 +65,29 @@ export function resolveOrgRate(
   // otherwise be multiplied by pounds in the weight quoting path. Fixed money
   // flows only through the package snapshot (pricing.ts + create_package).
   const entryFor = (c: OrgRateCard) =>
-    c.pricingKind === 'fixed' ? undefined : c.entries.find((e) => e.serviceType === freightType && e.price != null)
+    c.pricingKind === 'fixed' || c.active === false
+      ? undefined
+      : c.entries.find((e) => e.serviceType === freightType && e.price != null)
   const tierRow = (t: OrgRateTable) => t.rows.find((r) => r.tier === tier && r.price != null)
+  const asRate = (c: OrgRateCard, entry: { id: string; price: number; cost: number | null; unit: string }): ResolvedRate => ({
+    price: entry.price,
+    cost: entry.cost ?? 0,
+    priceModel: c.priceModel ?? 'weight',
+    pricingSource: 'rate_card',
+    rateCardId: c.id,
+    rateCardVersionId: c.versionId,
+    rateCardEntryId: entry.id,
+    unit: entry.unit,
+    pricingKind: c.pricingKind ?? 'weight',
+    cardName: c.name,
+    currency: c.currency,
+  })
 
   if (defaultRateId) {
     const card = cards.find((c) => c.id === defaultRateId)
     if (card) {
       const entry = entryFor(card)
-      if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id, unit: entry.unit, pricingKind: card.pricingKind ?? 'weight', cardName: card.name }
+      if (entry) return asRate(card, entry)
     } else {
       // Legacy default (billing_clients.default_rate_id) for an unmigrated org.
       const t = legacyTables.find((x) => x.id === defaultRateId && x.freightType === freightType)
@@ -76,10 +95,14 @@ export function resolveOrgRate(
       if (row) return { price: row.price, cost: row.cost ?? 0, priceModel: row.priceModel ?? 'weight', pricingSource: 'legacy' }
     }
   }
-  for (const card of cards) {
-    const entry = entryFor(card)
-    if (entry) return { price: entry.price, cost: entry.cost ?? 0, priceModel: card.priceModel ?? 'weight', pricingSource: 'rate_card', rateCardId: card.id, rateCardVersionId: card.versionId, rateCardEntryId: entry.id, unit: entry.unit, pricingKind: card.pricingKind ?? 'weight', cardName: card.name }
-  }
+  // The agency default for the requested kind is the commercial fallback. Picking
+  // the first card in the list billed a card nobody chose.
+  const orgDefault = cards.find((c) => c.isDefault && entryFor(c))
+  if (orgDefault) return asRate(orgDefault, entryFor(orgDefault)!)
+  // No default: only an unambiguous single candidate may price the line. With
+  // several cards the caller must choose one — guessing would bill the wrong rate.
+  const candidates = cards.filter((c) => entryFor(c))
+  if (candidates.length === 1) return asRate(candidates[0], entryFor(candidates[0])!)
   for (const t of legacyTables) {
     if (t.freightType !== freightType) continue
     const row = tierRow(t)
@@ -105,6 +128,12 @@ export class CatalogService {
       this.rateCache.set(organizationId, cached)
     }
     return cached
+  }
+
+  /** Org cards for the current request (same cache as quotes: no extra read). */
+  async cardsFor(organizationId: string): Promise<OrgRateCard[]> {
+    const [cards] = await this.orgRates(organizationId)
+    return cards
   }
 
   /** All catalog entries (for GET /catalog and the panel's tier dropdown). */
@@ -158,6 +187,7 @@ export class CatalogService {
         unit: rate.unit,
         pricingKind: rate.pricingKind,
         cardName: rate.cardName,
+        currency: rate.currency,
         ...amounts,
       }
     }

@@ -47,15 +47,24 @@ describe('resolveOrgRate (v2 cards)', () => {
     expect(r?.rateCardEntryId).toBe('e-vip-mar')
   })
 
-  it('falls back to the first card offering the service when no explicit id', () => {
-    const r = resolveOrgRate(cards, [], 'AIR', 'CustomName', null)
-    expect(r?.price).toBe(7)
-    expect(r?.rateCardId).toBe('c-std')
+  it('prefers the agency default card when no explicit id', () => {
+    const withDefault = cards.map((c) => (c.id === 'c-vip' ? { ...c, isDefault: true } : c))
+    const r = resolveOrgRate(withDefault, [], 'AIR', 'CustomName', null)
+    expect(r?.price).toBe(5.5)
+    expect(r?.rateCardId).toBe('c-vip')
   })
 
-  it('resolves an unknown explicit id from any card (not legacy)', () => {
-    const r = resolveOrgRate(cards, legacy, 'AIR', 'Regular', 'not-ours')
+  it('refuses to guess between several cards without a default', () => {
+    // No explicit pick, no agency default, two usable cards: picking the first
+    // would bill a card nobody chose.
+    expect(resolveOrgRate(cards, [], 'AIR', 'Regular', null)).toBeNull()
+  })
+
+  it('resolves an unknown explicit id to the agency default (not an arbitrary card)', () => {
+    const withDefault = cards.map((c) => (c.id === 'c-std' ? { ...c, isDefault: true } : c))
+    const r = resolveOrgRate(withDefault, legacy, 'AIR', 'Regular', 'not-ours')
     expect(r?.pricingSource).toBe('rate_card')
+    expect(r?.rateCardId).toBe('c-std')
     expect(r?.price).toBe(7)
   })
 
@@ -70,8 +79,8 @@ describe('resolveOrgRate (v2 cards)', () => {
   })
 
   it('cards resolve by service (tier is informational) — a card offering AIR prices it', () => {
-    expect(resolveOrgRate(cards, [], 'AIR', 'MADRES', null)?.price).toBe(7)
-    expect(resolveOrgRate(cards, [], 'MAR', 'ANYNAME', null)?.price).toBe(2.8)
+    expect(resolveOrgRate(cards, [], 'AIR', 'MADRES', 'c-std')?.price).toBe(7)
+    expect(resolveOrgRate(cards, [], 'MAR', 'ANYNAME', 'c-std')?.price).toBe(2.8)
   })
 
   it('returns null when nothing offers the line', () => {
