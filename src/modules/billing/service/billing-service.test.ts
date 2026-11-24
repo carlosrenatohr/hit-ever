@@ -772,6 +772,80 @@ describe('previewBulkPackages — pricing', () => {
   })
 })
 
+describe('previewBulkPackages — weight rate resolution', () => {
+  const card = (id: string, name: string, price: number, isDefault = false) => ({
+    id, name, priceModel: 'weight', currency: 'USD', versionId: `v-${id}`, pricingKind: 'weight', isDefault, active: true,
+    entries: [
+      { id: `air-${id}`, serviceType: 'AIR' as const, name: 'Regular', unit: 'lb', price, cost: price - 3 },
+      { id: `mar-${id}`, serviceType: 'MAR' as const, name: 'Regular', unit: 'lb', price: 2, cost: 1 },
+    ],
+  })
+  const repoWith = (pkgs: unknown[], cards: ReturnType<typeof card>[], over: Record<string, unknown> = {}) => {
+    const { repo } = bulkRepo(pkgs)
+    return {
+      ...repo,
+      getOrgRateCards: async () => cards,
+      getOrgRates: async () => [],
+      getClientDefaultRateCard: async () => null,
+      listClientRateAssignments: async () => [],
+      ...over,
+    } as unknown as BillingRepository
+  }
+
+  it('prices with the agency default card, not the first card in the list', async () => {
+    const repo = repoWith([enDestino('p1')], [card('c-other', 'Otra', 9), card('c-default', 'Estándar', 7, true)])
+    const preview = await new BillingService(repo).previewBulkPackages(['p1'], 'hit')
+    expect(preview.lines[0].unitPrice).toBe(7)
+    expect(preview.lines[0].cardName).toBe('Estándar')
+    expect(preview.lines[0].total).toBe(14)
+  })
+
+  it('honours the card stored on the package over any default', async () => {
+    const pkgs = [{ ...enDestino('p1'), rate_card_id: 'c-snap' }]
+    const repo = repoWith(pkgs, [card('c-default', 'Estándar', 7, true), card('c-snap', 'Cliente VIP', 11)])
+    const preview = await new BillingService(repo).previewBulkPackages(['p1'], 'hit')
+    expect(preview.lines[0].unitPrice).toBe(11)
+    expect(preview.lines[0].cardName).toBe('Cliente VIP')
+  })
+
+  it('uses the client assignment before the client profile default', async () => {
+    const repo = repoWith([enDestino('p1')], [card('c-assigned', 'Asignada', 6), card('c-profile', 'Perfil', 8)], {
+      getClientDefaultRateCard: async () => 'c-profile',
+      listClientRateAssignments: async () => [{ rateCardId: 'c-assigned', pricingKind: 'weight', transportMode: null }],
+    })
+    const preview = await new BillingService(repo).previewBulkPackages(['p1'], 'hit')
+    expect(preview.lines[0].unitPrice).toBe(6)
+    expect(preview.lines[0].cardName).toBe('Asignada')
+  })
+
+  it('refuses to guess when several cards exist and none is the default', async () => {
+    const repo = repoWith([enDestino('p1')], [card('c-a', 'A', 9), card('c-b', 'B', 7)])
+    await expect(new BillingService(repo).previewBulkPackages(['p1'], 'hit')).rejects.toThrow(/no tiene una tarifa por peso configurada/i)
+  })
+
+  it('rejects a weight guide without weight instead of pricing 1 lb', async () => {
+    const repo = repoWith([{ ...enDestino('p1'), weight_lb: null }], [card('c-default', 'Estándar', 7, true)])
+    await expect(new BillingService(repo).previewBulkPackages(['p1'], 'hit')).rejects.toThrow(/no tiene peso/i)
+  })
+
+  it('stamps the resolved weight card on the package for later billing', async () => {
+    const setPackageWeightSnapshot = vi.fn(async () => {})
+    const repo = repoWith([enDestino('p1')], [card('c-other', 'Otra', 9), card('c-default', 'Estándar', 7, true)], { setPackageWeightSnapshot })
+    const snapshot = await new BillingService(repo).stampWeightSnapshot('p1', 'tester', 'hit')
+    expect(snapshot).toMatchObject({ rateCardId: 'c-default', cardName: 'Estándar', unitPrice: 7, total: 14 })
+    expect(setPackageWeightSnapshot).toHaveBeenCalledWith('p1', 'hit', expect.objectContaining({
+      rateCardId: 'c-default', versionId: 'v-c-default', entryId: 'air-c-default', rate: 7, charge: 14, cost: 8, currency: 'USD', pricedBy: 'tester',
+    }))
+  })
+
+  it('never stamps a fixed package', async () => {
+    const setPackageWeightSnapshot = vi.fn(async () => {})
+    const repo = repoWith([{ ...enDestino('p1'), pricing_kind: 'fixed' }], [card('c-default', 'Estándar', 7, true)], { setPackageWeightSnapshot })
+    await expect(new BillingService(repo).stampWeightSnapshot('p1', 'tester', 'hit')).resolves.toBeNull()
+    expect(setPackageWeightSnapshot).not.toHaveBeenCalled()
+  })
+})
+
 describe('createBulkInvoice', () => {
   it('creates a DRAFT invoice with one line per package and links every package', async () => {
     const { repo, insertLineItems, linkPackages, insertPackageEvents, createInvoiceHeader } = bulkRepo([enDestino('p1'), entregado('p2')])

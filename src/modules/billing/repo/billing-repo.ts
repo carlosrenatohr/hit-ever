@@ -261,6 +261,13 @@ export interface BillingRepository {
   getClientDefaultRateTable(clientId: string): Promise<string | null>
   /** The client's default rate card (billing_clients.default_rate_card_id), or null. */
   getClientDefaultRateCard(clientId: string): Promise<string | null>
+  /** Active per-client rate assignments (used to resolve the card before quoting). */
+  listClientRateAssignments?(organizationId: string, clientId: string): Promise<Array<{ rateCardId: string; pricingKind: string; transportMode: string | null }>>
+  /** Stamp the weight pricing snapshot on a package (post-create). */
+  setPackageWeightSnapshot?(packageId: string, organizationId: string, snapshot: {
+    rateCardId: string; versionId: string; entryId: string
+    rate: number; charge: number; cost: number; currency: string; pricedBy: string
+  }): Promise<void>
   /** The client's lifecycle state (active) by id; null if the client doesn't exist. */
   getClientLifecycle(clientId: string): Promise<boolean | null>
   /** Org-scoped client read (identity + defaults) for an explicit client pick. */
@@ -469,6 +476,43 @@ export class InsforgeBillingRepo implements BillingRepository {
   async getClientDefaultRateCard(clientId: string): Promise<string | null> {
     const rows = await this.get<{ default_rate_card_id: string | null }>('billing_clients', `id=eq.${encodeURIComponent(clientId)}&select=default_rate_card_id&limit=1`)
     return rows[0]?.default_rate_card_id ?? null
+  }
+
+  async listClientRateAssignments(organizationId: string, clientId: string): Promise<Array<{ rateCardId: string; pricingKind: string; transportMode: string | null }>> {
+    const rows = await this.get<{ rate_card_id: string; pricing_kind: string; transport_mode: string | null }>(
+      'client_rate_assignments',
+      `organization_id=eq.${encodeURIComponent(organizationId)}&client_id=eq.${encodeURIComponent(clientId)}&active=eq.true&select=rate_card_id,pricing_kind,transport_mode`,
+    )
+    return rows.map((r) => ({ rateCardId: r.rate_card_id, pricingKind: r.pricing_kind, transportMode: r.transport_mode }))
+  }
+
+  async setPackageWeightSnapshot(packageId: string, organizationId: string, snapshot: {
+    rateCardId: string; versionId: string; entryId: string
+    rate: number; charge: number; cost: number; currency: string; pricedBy: string
+  }): Promise<void> {
+    // Org-scoped filter: a foreign id matches nothing. Only weight fields are
+    // touched — fixed snapshots are written atomically by create_package.
+    await this.patch(
+      'packages',
+      `id=eq.${encodeURIComponent(packageId)}&organization_id=eq.${encodeURIComponent(organizationId)}&pricing_kind=neq.fixed`,
+      {
+        pricing_kind: 'weight',
+        rate_card_id: snapshot.rateCardId,
+        rate_card_version_id: snapshot.versionId,
+        rate_card_entry_id: snapshot.entryId,
+        customer_price_model: 'WEIGHT',
+        customer_unit: 'lb',
+        customer_rate: snapshot.rate,
+        customer_charge: snapshot.charge,
+        provider_cost_model: 'WEIGHT',
+        provider_cost_unit: 'lb',
+        provider_rate: snapshot.rate > 0 ? snapshot.cost / snapshot.rate : 0,
+        provider_cost: snapshot.cost,
+        pricing_currency: snapshot.currency,
+        priced_at: new Date().toISOString(),
+        priced_by: snapshot.pricedBy,
+      },
+    )
   }
 
   async getClientLifecycle(clientId: string): Promise<boolean | null> {

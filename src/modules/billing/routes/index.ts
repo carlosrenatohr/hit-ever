@@ -175,14 +175,13 @@ billing.get(
       ? (await customerRepo.listRateAssignments(org, clientId)).map((a) => ({ rateCardId: a.rateCardId, pricingKind: a.pricingKind, transportMode: a.transportMode, active: true }))
       : []
     // A client's profile default (billing_clients.default_rate_card_id) is the
-    // weight tariff the invoice quote uses. The weight preview must resolve the
-    // same card, or the create-package summary would show the agency default
-    // while the invoice bills the client's tariff.
+    // fallback weight tariff when no explicit per-kind assignment exists. The
+    // assignment list is checked first (same order as bulk preview/link).
     if (clientId && kind === 'weight') {
       const client = await customerRepo.get(clientId, org)
       const profileDefault = client?.defaultRateCardId ?? null
       if (profileDefault) {
-        clientAssignments.unshift({ rateCardId: profileDefault, pricingKind: 'weight', transportMode: null, active: true })
+        clientAssignments.push({ rateCardId: profileDefault, pricingKind: 'weight', transportMode: null, active: true })
       }
     }
     const card = resolvePackageCard(asCards, {
@@ -231,6 +230,17 @@ billing.get(
     })
   },
 )
+
+/** POST /api/billing/packages/:id/weight-snapshot — stamp the tariff used at
+ *  package creation (weight). Server resolves it; the panel only triggers it. */
+billing.post('/packages/:id/weight-snapshot', billingAuth('invoices:write'), async (c) => {
+  const svc = new BillingService(getBillingRepo(c.env))
+  try {
+    return Res.ok(c, await svc.stampWeightSnapshot(c.req.param('id'), c.get('billingSession').email ?? 'panel', c.get('billingSession').agency))
+  } catch (e) {
+    return fail(c, e)
+  }
+})
 
 // ─── Invoices ─────────────────────────────────────────────────────────────────
 /** GET /api/billing/invoices — filtered, paginated list (mirrors the packages list). */
