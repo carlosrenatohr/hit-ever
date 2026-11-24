@@ -38,6 +38,35 @@ describe('InsforgeCustomerRepo', () => {
     })
   })
 
+  it('sorts the list by a whitelisted header column with an id tiebreak', async () => {
+    const requested: string[] = []
+    vi.stubGlobal('fetch', async (input: Request | string) => {
+      const url = typeof input === 'string' ? input : input.url
+      requested.push(url)
+      if (url.includes('/rpc/customer_weight_stats')) return new Response(JSON.stringify({}), { status: 200 })
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'content-range': '*/0' } })
+    })
+
+    await new InsforgeCustomerRepo('https://db.test', 'key').list({ organizationId: 'hit', sort: 'name', ascending: false })
+
+    // Accent-folded column, not the raw name — paging stays stable via id.asc.
+    expect(new URL(requested[0]).searchParams.get('order')).toBe('name_normalized.desc,id.asc')
+  })
+
+  it('ignores an unknown sort column', async () => {
+    const requested: string[] = []
+    vi.stubGlobal('fetch', async (input: Request | string) => {
+      const url = typeof input === 'string' ? input : input.url
+      requested.push(url)
+      if (url.includes('/rpc/customer_weight_stats')) return new Response(JSON.stringify({}), { status: 200 })
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'content-range': '*/0' } })
+    })
+
+    await new InsforgeCustomerRepo('https://db.test', 'key').list({ organizationId: 'hit', sort: 'drop table' })
+
+    expect(new URL(requested[0]).searchParams.get('order')).toBe('name.asc,id.asc')
+  })
+
   it('folds accents in the name search so Mendez matches Méndez', async () => {
     const requested: string[] = []
     vi.stubGlobal('fetch', async (input: Request | string) => {

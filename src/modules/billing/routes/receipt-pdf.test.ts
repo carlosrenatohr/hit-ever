@@ -1,11 +1,15 @@
-import { describe, expect, it } from 'vitest'
-import { buildReceiptPdf, sanitizePdfText, getWebpWasm } from './receipt-pdf.js'
+import { beforeAll, describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { buildReceiptPdf, sanitizePdfText, setWebpWasmForTests } from './receipt-pdf.js'
 import type { PublicReceipt } from '../service/billing-service.js'
 
 // 1×1 PNG used to assert the logo-embedding path without network.
 const TINY_PNG = new Uint8Array(
   Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'),
 )
+// 4×4 lossless WebP (the format the panel's canvas uploader produces).
+const TINY_WEBP = new Uint8Array(readFileSync(fileURLToPath(new URL('./fixtures/tiny.webp', import.meta.url))))
 
 const receipt: PublicReceipt = {
   invoiceNumber: 7,
@@ -41,9 +45,11 @@ describe('buildReceiptPdf', () => {
     expect(bytes.length).toBeGreaterThan(1000)
   })
 
-  it('compiles the embedded WebP decoder wasm (encoded base64, lazy)', async () => {
-    const wasm = await getWebpWasm()
-    expect(wasm).toBeInstanceOf(WebAssembly.Module)
+  beforeAll(async () => {
+    // Wrangler bundles this file as a Module; vitest gets a URL, so compile the
+    // vendored bytes here — the same artifact the Worker ships.
+    const bytes = new Uint8Array(readFileSync(fileURLToPath(new URL('../../../vendor/webp_dec.wasm', import.meta.url))))
+    setWebpWasmForTests(await WebAssembly.compile(bytes))
   })
 
   it('embeds the agency logo in the header (PNG fetcher)', async () => {
@@ -53,6 +59,15 @@ describe('buildReceiptPdf', () => {
     expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe('%PDF-')
     // The embedded XObject image makes the PDF bigger than the text-only version.
     const textOnly = await buildReceiptPdf(receipt)
+    expect(bytes.length).toBeGreaterThan(textOnly.length)
+  })
+
+  it('decodes a WebP logo into an embedded image (what the panel uploads)', async () => {
+    const withLogo: PublicReceipt = { ...receipt, agency: { ...receipt.agency, logoUrl: 'https://cdn.test/logos/suite.webp' } }
+    const fetcher = async () => new Response(TINY_WEBP, { status: 200 })
+    const bytes = await buildReceiptPdf(withLogo, fetcher)
+    const textOnly = await buildReceiptPdf(receipt)
+    expect(new TextDecoder().decode(bytes.slice(0, 5))).toBe('%PDF-')
     expect(bytes.length).toBeGreaterThan(textOnly.length)
   })
 })

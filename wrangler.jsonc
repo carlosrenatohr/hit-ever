@@ -6,6 +6,10 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  // ─── WebAssembly: static imports (runtime WebAssembly.compile is disallowed) ─
+  // The invoice PDF decodes WebP logos with @jsquash/webp; its decoder ships as
+  // a compiled module so the Worker never tries to generate wasm at runtime.
+  "rules": [{ "type": "CompiledWasm", "globs": ["**/*.wasm"], "fallthrough": true }],
   // ─── Observability (real-time logs in CF dashboard) ────────────────────────
   "observability": {
     "enabled": true,

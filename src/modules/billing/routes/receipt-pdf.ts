@@ -12,7 +12,7 @@ import { PDFDocument, rgb, type PDFFont, type PDFImage, type PDFPage } from 'pdf
 import fontkit from '@pdf-lib/fontkit'
 import decodeWebp, { init as initWebpModule } from '@jsquash/webp/decode'
 import { encode as encodePng } from 'upng-js'
-import { WEBP_DECODER_B64 } from './webp-decoder.b64.js'
+import bundledWebpWasm from '../../../vendor/webp_dec.wasm'
 import {
   POPPINS_REGULAR_B64,
   POPPINS_MEDIUM_B64,
@@ -111,24 +111,21 @@ function isWebp(bytes: Uint8Array): boolean {
   return bytes.length > 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
 }
 
-/**
- * Lazy-compile the embedded WebP decoder wasm (base64) once per isolate.
- * Compiling is supported in Workers and Node, so this path is identical in
- * both vitest and the deployed worker.
- */
-let webpWasmModule: Promise<WebAssembly.Module | null> | null = null
+/** The decoder is bundled through Wrangler's CompiledWasm rule, so the Worker
+ *  never compiles wasm at runtime (Workers reject dynamic code generation).
+ *  Vite/vitest import the same file as a URL string — tests inject the module
+ *  through `setWebpWasmForTests` instead of shipping a second copy. */
+const staticWebpWasm = typeof bundledWebpWasm === 'string' ? null : (bundledWebpWasm as unknown as WebAssembly.Module)
+let webpWasmOverride: WebAssembly.Module | null = null
+
 export function getWebpWasm(): Promise<WebAssembly.Module | null> {
-  if (!webpWasmModule) {
-    webpWasmModule = (async () => {
-      try {
-        const bytes = Uint8Array.from(atob(WEBP_DECODER_B64), (c) => c.charCodeAt(0))
-        return await WebAssembly.compile(bytes)
-      } catch {
-        return null
-      }
-    })()
-  }
-  return webpWasmModule
+  return Promise.resolve(webpWasmOverride ?? staticWebpWasm)
+}
+
+/** Test-only: hand the decoder a module compiled by the test runner (Node can
+ *  compile wasm; Vite turns the `.wasm` import into a URL string). */
+export function setWebpWasmForTests(module: WebAssembly.Module | null): void {
+  webpWasmOverride = module
 }
 
 /** Decode WebP → RGBA → PNG bytes (jsquash wasm + upng encode). Null on any failure. */

@@ -133,6 +133,19 @@ export interface ListFilter {
   to?: string // issue_date <=
   page?: number
   pageSize?: number
+  /** Whitelisted column key from the list header (never a raw SQL fragment). */
+  sort?: string
+  /** true = ascending. Ignored when `sort` is absent (newest invoice first). */
+  ascending?: boolean
+}
+
+/** Header columns the invoice list can sort by. Anything else is ignored. */
+const INVOICE_SORT_COLUMNS: Record<string, string> = {
+  invoice_number: 'invoice_number',
+  client: 'client_name_raw',
+  date: 'issue_date',
+  status: 'status',
+  total: 'total',
 }
 
 function rowToCatalog(r: PricingCatalogRow): CatalogEntry {
@@ -573,7 +586,14 @@ export class InsforgeBillingRepo implements BillingRepository {
   async listInvoices(filter: ListFilter): Promise<{ rows: InvoiceHeaderDbRow[]; count: number }> {
     const page = Math.max(1, filter.page ?? 1)
     const pageSize = Math.min(1000, Math.max(1, filter.pageSize ?? 25))
-    const parts: string[] = ['select=*', 'order=fiscal_year.desc,invoice_number.desc']
+    const sortColumn = filter.sort ? INVOICE_SORT_COLUMNS[filter.sort] : undefined
+    // Unknown/absent sort → the historical newest-invoice-first order. The
+    // fiscal_year/invoice_number tiebreak keeps paging stable when the chosen
+    // column has duplicates (status, client, issue_date).
+    const order = sortColumn
+      ? `order=${sortColumn}.${filter.ascending ? 'asc' : 'desc'},fiscal_year.desc,invoice_number.desc`
+      : 'order=fiscal_year.desc,invoice_number.desc'
+    const parts: string[] = ['select=*', order]
     parts.push(`organization_id=eq.${encodeURIComponent(filter.organizationId)}`)
     parts.push('deleted_at=is.null')
     if (filter.status) parts.push(`status=eq.${filter.status}`)
@@ -730,6 +750,14 @@ export class InsforgeBillingRepo implements BillingRepository {
       'invoice_packages',
       [{ invoice_id: invoiceId, package_id: packageId, source, matched_oc: matchedOc, created_by: by, organization_id: organizationId }],
       { onConflict: 'invoice_id,package_id' },
+    )
+  }
+
+  /** Remove the freight line that billed a package (unlink keeps money in sync). */
+  async deleteLineForPackage(invoiceId: string, packageId: string): Promise<void> {
+    await this.del(
+      'invoice_line_items',
+      `invoice_id=eq.${encodeURIComponent(invoiceId)}&package_id=eq.${encodeURIComponent(packageId)}&line_type=eq.freight`,
     )
   }
 

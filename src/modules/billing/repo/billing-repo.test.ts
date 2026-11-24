@@ -50,6 +50,32 @@ describe('InsforgeBillingRepo.closeInvoiceIfOpen — compare-and-set', () => {
   })
 })
 
+describe('InsforgeBillingRepo.listInvoices — header sorting', () => {
+  it('defaults to the newest invoice first when no valid sort is sent', async () => {
+    const calls = mockFetch([])
+    const repo = new InsforgeBillingRepo('https://x.test', 'k')
+    await repo.listInvoices({ organizationId: 'hit', page: 1, pageSize: 20, sort: 'nope' as never })
+    expect(new URL(calls[0].url).searchParams.get('order')).toBe('fiscal_year.desc,invoice_number.desc')
+  })
+
+  it('maps the whitelisted column and keeps a stable tiebreak', async () => {
+    const calls = mockFetch([])
+    const repo = new InsforgeBillingRepo('https://x.test', 'k')
+    await repo.listInvoices({ organizationId: 'hit', page: 2, pageSize: 20, sort: 'client', ascending: true })
+    const q = new URL(calls[0].url).searchParams
+    expect(q.get('order')).toBe('client_name_raw.asc,fiscal_year.desc,invoice_number.desc')
+    expect(q.get('limit')).toBe('20')
+    expect(q.get('offset')).toBe('20')
+  })
+
+  it('sorts money and dates both ways', async () => {
+    const calls = mockFetch([])
+    const repo = new InsforgeBillingRepo('https://x.test', 'k')
+    await repo.listInvoices({ organizationId: 'hit', sort: 'total', ascending: false })
+    expect(new URL(calls[0].url).searchParams.get('order')).toContain('total.desc')
+  })
+})
+
 describe('InsforgeBillingRepo package projections — PostgREST alias syntax', () => {
   const row = {
     id: 'p1',

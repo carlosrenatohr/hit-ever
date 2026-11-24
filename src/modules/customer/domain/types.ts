@@ -43,6 +43,10 @@ export interface CustomerListFilter {
   to?: string
   page?: number
   pageSize?: number
+  /** Whitelisted header column (`name`, `casillero`, `email`, `phone`, `company`, `taxId`). */
+  sort?: string
+  /** true = ascending; ignored when `sort` is absent (alphabetical default). */
+  ascending?: boolean
 }
 
 export interface CreateCustomerInput extends CustomerRateDefaults {

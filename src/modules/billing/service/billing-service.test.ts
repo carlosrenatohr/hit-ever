@@ -1059,3 +1059,109 @@ describe('invoice view — pricing snapshot', () => {
     expect(view!.lines[0]).toMatchObject({ rateCardId: 'card-vip', pricingSource: 'rate_card', priceTier: 'VIP' })
   })
 })
+
+describe('linkPackage / unlinkPackage — money follows the guide', () => {
+  function repoForLink(over: Record<string, unknown> = {}) {
+    const header = {
+      id: 'i1', invoice_number: 7, fiscal_year: 2026, client_id: 'c1', client_name_raw: 'Ana',
+      issue_date: '2026-11-01', status: 'DRAFT', address: null, special_price: false, observations: null,
+      tracking_orders: [], agent_id: null, public_token: null, paid_at: null,
+      total: 6.5, profit: 2, paid_usd: 0, closed_at: null, closed_by: null,
+      created_at: '', updated_at: '',
+    } as unknown as InvoiceBundle['header']
+    const lines = [
+      {
+        id: 'l0', invoice_id: 'i1', line_no: 1, description: null, freight_type: 'AIR', line_type: 'freight',
+        concept_id: null, quantity_lbs: 1, unit: 'lbs', unit_price: 6.5, total: 6.5, list_price: null,
+        freight_cost: 4.5, profit: 2, price_tier: 'REGULAR', price_off_catalog: false,
+        rate_card_id: null, rate_card_version_id: null, rate_card_entry_id: null, pricing_source: null,
+        package_id: 'pkg-0', package_guia: 'G-0', package_tracking: null,
+      },
+    ] as unknown as InvoiceBundle['lines']
+    const bundle: InvoiceBundle = {
+      header,
+      lines: over.lines as InvoiceBundle['lines'] ?? lines,
+      payments: [{ id: 'p0', amount_usd: 5 } as InvoiceBundle['payments'][number]],
+      packages: [],
+    }
+    const spies = {
+      insertLineItems: vi.fn(async () => {}),
+      setInvoiceTotals: vi.fn(async () => {}),
+      deleteLineForPackage: vi.fn(async () => {}),
+      linkPackage: vi.fn(async () => {}),
+      unlinkPackage: vi.fn(async () => {}),
+      insertPackageEvent: vi.fn(async () => {}),
+      insertInvoiceEvent: vi.fn(async () => {}),
+    }
+    const repo = {
+      getOrgRateCards: async () => [],
+      getOrgRates: async () => [
+        { id: 't1', name: 'Estándar', freightType: 'AIR', rows: [{ tier: 'REGULAR', price: 7, cost: 4.5, priceModel: 'weight' }] },
+      ],
+      getCatalog: async () => [],
+      getInvoiceBundle: async () => bundle,
+      getPackagesForBulk: async (ids: string[]) => ids.map((id) => ({
+        id, almacen_id: `G-${id}`, tracking_number: `T-${id}`, effective_status: 'entregado',
+        service_type: 'aereo', effective_service_type: 'aereo', weight_lb: 5,
+        client_id: 'c1', referencia_name: 'Ana', organization_id: 'hit', pricing_kind: 'weight',
+      })),
+      getActivePackageLinks: async () => new Map<string, string>(),
+      getActivePackageLink: async () => null,
+      packageBelongsToOrg: async () => true,
+      getClientForBilling: async () => ({ id: 'c1', name: 'Ana', active: true, default_rate_card_id: null, default_rate_id: null }),
+      listClientsForBilling: async () => [{ id: 'c1', name: 'Ana', active: true, default_rate_card_id: null, default_rate_id: null }],
+      ...spies,
+      ...over,
+    } as unknown as BillingRepository
+    return { repo, spies, bundle }
+  }
+
+  it('prices the linked weight guide with the client rate and rewrites the totals', async () => {
+    const { repo, spies } = repoForLink()
+    await new BillingService(repo).linkPackage('i1', 'pkg-1', 'tester', 'hit')
+
+    const [invoiceId, rows] = spies.insertLineItems.mock.calls[0] as unknown as [string, Record<string, unknown>[]]
+    expect(invoiceId).toBe('i1')
+    expect(rows[0]).toMatchObject({ line_no: 2, package_id: 'pkg-1', quantity_lbs: 5, unit: 'lbs', total: 35, profit: 12.5 })
+    // Existing 6.5/2 + the new 35/12.5; payments are untouched.
+    expect(spies.setInvoiceTotals).toHaveBeenCalledWith('i1', { total: 41.5, profit: 14.5, paidUsd: 5 })
+  })
+
+  it('bills a fixed-package guide from its snapshot (never from weight)', async () => {
+    const { repo, spies } = repoForLink({ lines: [],
+      getPackagesForBulk: async (ids: string[]) => ids.map((id) => ({
+        id, almacen_id: `G-${id}`, tracking_number: null, effective_status: 'entregado',
+        service_type: 'aereo', effective_service_type: 'aereo', weight_lb: 9,
+        client_id: 'c1', referencia_name: 'Ana', organization_id: 'hit', pricing_kind: 'fixed',
+        customer_charge: 40, customer_rate: 40, customer_unit: 'package', provider_cost: 25,
+      })),
+    })
+    await new BillingService(repo).linkPackage('i1', 'pkg-1', 'tester', 'hit')
+    const rows = spies.insertLineItems.mock.calls[0][1] as Record<string, unknown>[]
+    expect(rows[0]).toMatchObject({ quantity_lbs: 0, unit: 'package', total: 40, profit: 15, pricing_source: 'package_snapshot' })
+  })
+
+  it('rejects mixing a fixed package into a weight invoice', async () => {
+    const { repo, spies } = repoForLink({
+      getPackagesForBulk: async (ids: string[]) => ids.map((id) => ({
+        id, almacen_id: `G-${id}`, tracking_number: null, effective_status: 'entregado',
+        service_type: 'aereo', effective_service_type: 'aereo', weight_lb: 3,
+        client_id: 'c1', referencia_name: 'Ana', organization_id: 'hit', pricing_kind: 'fixed',
+        customer_charge: 40, customer_rate: 40, customer_unit: 'package', provider_cost: 25,
+      })),
+    })
+    await expect(new BillingService(repo).linkPackage('i1', 'pkg-1', 'tester', 'hit')).rejects.toThrow(/mezclar/i)
+    expect(spies.linkPackage).not.toHaveBeenCalled()
+  })
+
+  it('removes the package line and recomputes totals on unlink', async () => {
+    const lines = [
+      { id: 'l0', line_no: 1, line_type: 'freight', unit: 'lbs', total: 6.5, profit: 2, package_id: 'pkg-0' },
+      { id: 'l1', line_no: 2, line_type: 'freight', unit: 'lbs', total: 35, profit: 12.5, package_id: 'pkg-1' },
+    ] as unknown as InvoiceBundle['lines']
+    const { repo, spies } = repoForLink({ lines })
+    await new BillingService(repo).unlinkPackage('i1', 'pkg-1', 'hit')
+    expect(spies.deleteLineForPackage).toHaveBeenCalledWith('i1', 'pkg-1')
+    expect(spies.setInvoiceTotals).toHaveBeenCalledWith('i1', { total: 6.5, profit: 2, paidUsd: 5 })
+  })
+})
