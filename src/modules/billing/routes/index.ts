@@ -12,7 +12,7 @@ import { Res } from '../../../lib/response.js'
 import { CatalogService } from '../catalog/catalog.js'
 import { margin, round2 } from '../domain/calc.js'
 import { CURRENCIES, FREIGHT_TYPES, INVOICE_STATUSES } from '../domain/enums.js'
-import { billingAuth, type BillingEnv } from '../middleware/auth.js'
+import { billingAuth, billingAuthAny, type BillingEnv } from '../middleware/auth.js'
 import { getBillingRepo } from '../repo/billing-repo.js'
 import { getConfigRepo } from '../../config/repo/config-repo.js'
 import { getCustomerRepo } from '../../customer/repo/customer-repo.js'
@@ -35,18 +35,18 @@ function fail(c: Parameters<typeof Res.err>[0], e: unknown) {
 const billing = new Hono<BillingEnv>()
 
 /** GET /api/billing/linked-packages — org-scoped package IDs with at least one invoice link.
- *  Registered before the global billingAuth gate so that the viewer role (reports:read only)
- *  can access it without needing invoices:read. */
-billing.get('/linked-packages', billingAuth('reports:read'), async (c) => {
+ *  Registered before the global billingAuth gate so the viewer role (reports:read only) can
+ *  reach it; invoices:read also opens it because the Reports filter is used by admins too. */
+billing.get('/linked-packages', billingAuthAny(['reports:read', 'invoices:read']), async (c) => {
   const svc = new BillingService(getBillingRepo(c.env))
   return Res.ok(c, { ids: await svc.linkedPackageIds(c.get('billingSession').agency) })
 })
 
 /** GET /api/billing/invoice-links?ids=a,b,c — active invoice + status per package.
- *  Same gate as linked-packages (viewer has reports:read) because the package
- *  list draws the paid icon from here: RLS is default-deny on `invoices`, so the
- *  panel's PostgREST embed always comes back null. */
-billing.get('/invoice-links', billingAuth('reports:read'), async (c) => {
+ *  Same gate as linked-packages: the package list draws the paid icon from here and
+ *  the reports filter reads it too. Requiring only reports:read left admins (who
+ *  have invoices:read but not reports:read) with 403 and an orange icon forever. */
+billing.get('/invoice-links', billingAuthAny(['reports:read', 'invoices:read']), async (c) => {
   // IDs land inside an `in.(...)` PostgREST filter: accept UUIDs only.
   const ids = (c.req.query('ids') ?? '')
     .split(',')

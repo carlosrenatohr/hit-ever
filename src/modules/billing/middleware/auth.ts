@@ -132,6 +132,16 @@ export async function resolveBillingSession(env: CloudflareBindings, token: stri
  * On success the session is stashed at `c.get('billingSession')`.
  */
 export function billingAuth(permission: BillingPermission): MiddlewareHandler<BillingEnv> {
+  return billingAuthAny([permission])
+}
+
+/**
+ * Same gate, but any of the listed permissions opens it. Needed by endpoints that
+ * feed BOTH surfaces: `invoice-links` draws the paid icon in the package list
+ * (invoices:read) and the billing filter in reports (reports:read, viewer-only).
+ * Requiring a single permission locked admins out of their own package list.
+ */
+export function billingAuthAny(permissions: BillingPermission[]): MiddlewareHandler<BillingEnv> {
   return async (c, next) => {
     const token = bearer(c)
     if (!token) {
@@ -141,8 +151,9 @@ export function billingAuth(permission: BillingPermission): MiddlewareHandler<Bi
     if (!result.ok) {
       return Res.err(c, result.code, result.message, result.status)
     }
-    if (!roleHasPermission(result.session.role, permission)) {
-      return Res.err(c, 'FORBIDDEN', `Requires permission "${permission}".`, 403)
+    const allowed = permissions.some((permission) => roleHasPermission(result.session.role, permission))
+    if (!allowed) {
+      return Res.err(c, 'FORBIDDEN', `Requires one of ${permissions.map((p) => `"${p}"`).join(', ')}.`, 403)
     }
     c.set('billingSession', result.session)
     await next()
