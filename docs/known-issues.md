@@ -10,6 +10,36 @@ Registro de problemas conocidos del worker y su causa raíz, para no re-investig
 
 ---
 
+## 2026-11-24 · El PDF de la factura compartida salía sin logo (WebP + wasm en Workers)
+
+**Síntoma.** El enlace público de factura de `suite` (`/billing/r/<token>/pdf`, el que se manda
+por WhatsApp) descargaba un PDF sin el logo de la agencia. El mismo PDF de `hit` sí lo mostraba.
+La base tenía `logo_url` correcto para ambas agencias; la diferencia era el formato: `suite`
+subió un `.webp` y `hit` un `.png`.
+
+**Diagnóstico.** Los logs del Worker mostraban `receipt-logo:webp-decode-failed` precedido de
+`Aborted(both async and sync fetching of the wasm failed)`. El código compilaba el decoder WebP
+en runtime con `WebAssembly.compile(bytes)`; Workerd responde
+`Wasm code generation disallowed by embedder` y el `catch` lo convertía en `null` — el fetch de
+un `.wasm` desde el bundle tampoco existe en Workers. Resultado: el logo se descartaba en
+silencio y el PDF seguía siendo válido, solo sin imagen.
+
+**Fix (2026-11-24).** El decoder ahora entra como **módulo wasm estático**
+(`rules: [{ type: "CompiledWasm" }]` en `wrangler.jsonc` +
+`src/vendor/webp_dec.wasm`, copia del decoder de `@jsquash/webp`). Workerd lo compila al
+desplegar, nunca en la request. `vitest` inyecta el mismo binario compilado con Node
+(`setWebpWasmForTests`) y hay una regresión con un `.webp` real. El base64 embebido se retiró
+(184 KB menos de bundle).
+
+**Reglas.**
+- En Workers, **wasm solo por import estático** (regla `CompiledWasm`). `WebAssembly.compile`
+  en runtime no es una opción, ni con un fallback silencioso.
+- Un `catch` que devuelve `null` en el camino visual (logos, fuentes, imágenes) convierte un
+  error de plataforma en "no se ve nada"; loguear el motivo es obligatorio.
+- Al validar PDFs, no alcanza con `%PDF-`: revisar que el stream tenga `/Subtype /Image`.
+
+---
+
 ## 2026-11-24 · El icono de factura pagada seguía naranja para admins (permiso de rol)
 
 **Síntoma.** Tras implementar `GET /api/billing/invoice-links`, la factura pagada seguía
