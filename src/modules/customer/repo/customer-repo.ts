@@ -147,6 +147,17 @@ function withStats(client: BillingClient, stats?: CustomerWeightStats): Customer
 const CLIENT_COLS =
   'id,name,name_normalized,casillero,to_review,email,phone,address,company_name,tax_id,active,deleted_at,default_rate_id,default_rate_card_id,packages(count)'
 
+/** Header columns the client list can sort by — `name` uses the accent-folded
+ *  column so "Méndez" files with "Mendez", not after "Z". */
+const CUSTOMER_SORT_COLUMNS: Record<string, string> = {
+  name: 'name_normalized',
+  casillero: 'casillero',
+  email: 'email',
+  phone: 'phone',
+  company: 'company_name',
+  taxId: 'tax_id',
+}
+
 function statusPredicate(status: string): string {
   if (status === 'active') return 'active.eq.true'
   if (status === 'inactive') return 'active.eq.false'
@@ -232,7 +243,13 @@ export class InsforgeCustomerRepo implements CustomerRepository {
   async list(filter: CustomerListFilter): Promise<CustomerPage> {
     const page = Math.max(1, filter.page ?? 1)
     const pageSize = Math.min(100, Math.max(1, filter.pageSize ?? 25))
-    const parts = [`select=${CLIENT_COLS}`, 'order=name.asc']
+    const sortColumn = filter.sort ? CUSTOMER_SORT_COLUMNS[filter.sort] : undefined
+    // Unknown/absent sort → A-Z by folded name (the historical default). The
+    // id tiebreak keeps paging stable when the column has duplicates.
+    const order = sortColumn
+      ? `order=${sortColumn}.${filter.ascending ? 'asc' : 'desc'},id.asc`
+      : 'order=name.asc,id.asc'
+    const parts = [`select=${CLIENT_COLS}`, order]
     parts.push(`organization_id=eq.${encodeURIComponent(filter.organizationId)}`)
     // Soft-deleted clients are out of every operational read by default.
     parts.push('deleted_at=is.null')

@@ -248,11 +248,20 @@ billing.get(
       to: z.string().optional(),
       page: z.coerce.number().int().positive().optional(),
       pageSize: z.coerce.number().int().positive().max(1000).optional(),
+      // Header sorting: one whitelisted column at a time. `ascending` is a
+      // string enum on purpose — z.coerce.boolean("false") is true.
+      sort: z.enum(['invoice_number', 'client', 'date', 'status', 'total']).optional(),
+      ascending: z.enum(['true', 'false']).optional(),
     }),
   ),
   async (c) => {
     const svc = new BillingService(getBillingRepo(c.env))
-    return Res.ok(c, await svc.list({ ...c.req.valid('query'), organizationId: c.get('billingSession').agency }))
+    const query = c.req.valid('query')
+    return Res.ok(c, await svc.list({
+      ...query,
+      ascending: query.ascending === undefined ? undefined : query.ascending === 'true',
+      organizationId: c.get('billingSession').agency,
+    }))
   },
 )
 

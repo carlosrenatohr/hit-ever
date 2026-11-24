@@ -89,7 +89,17 @@ customer.put(
 
 customer.get(
   '/clients',
-  zValidator('query', z.object({ search: z.string().optional(), status: z.string().optional(), toReview: z.enum(['true', 'false']).optional(), ...DATE_QUERY, page: z.coerce.number().int().positive().optional(), pageSize: z.coerce.number().int().positive().max(100).optional() })),
+  zValidator('query', z.object({
+    search: z.string().optional(),
+    status: z.string().optional(),
+    toReview: z.enum(['true', 'false']).optional(),
+    ...DATE_QUERY,
+    page: z.coerce.number().int().positive().optional(),
+    pageSize: z.coerce.number().int().positive().max(100).optional(),
+    // Header sorting: whitelisted column + direction (string enum — never coerce a boolean).
+    sort: z.enum(['name', 'casillero', 'email', 'phone', 'company', 'taxId']).optional(),
+    ascending: z.enum(['true', 'false']).optional(),
+  })),
   async (c) => {
     const query = c.req.valid('query')
     // Tenant scope comes from the session, never from the query string.
@@ -105,6 +115,8 @@ customer.get(
         to: query.to,
         page: query.page,
         pageSize: query.pageSize,
+        sort: query.sort,
+        ascending: query.ascending === undefined ? undefined : query.ascending === 'true',
       }),
     )
   },
