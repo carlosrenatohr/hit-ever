@@ -74,6 +74,15 @@ describe('toView', () => {
     expect(v.integrityWarning).toBe(true)
   })
 
+  it('lists only active links in the invoice view (unlink hides the guide)', () => {
+    const b = bundle({ status: 'DRAFT' })
+    b.packages = [
+      { id: 'lk1', invoice_id: 'i1', package_id: 'pkg-1', source: 'manual', matched_oc: null, active: true, packages: { almacen_id: 'G-1', tracking_number: null } },
+      { id: 'lk2', invoice_id: 'i1', package_id: 'pkg-2', source: 'manual', matched_oc: null, active: false, packages: { almacen_id: 'G-2', tracking_number: null } },
+    ] as InvoiceBundle['packages']
+    expect(toView(b).packages.map((p) => p.guia)).toEqual(['G-1'])
+  })
+
   it('no warning when every billed package has an active link', () => {
     const b = bundle({ status: 'ISSUED' }, [{ line_type: 'freight', package_id: 'pkg-1' }])
     b.packages = [{ id: 'lk1', invoice_id: 'i1', package_id: 'pkg-1', source: 'manual', matched_oc: null, active: true }] as InvoiceBundle['packages']
