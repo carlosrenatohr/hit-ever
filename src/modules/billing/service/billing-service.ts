@@ -305,7 +305,12 @@ export function toView(b: InvoiceBundle): InvoiceView {
       reference: p.reference,
       comments: p.comments,
     })),
-    packages: b.packages.map((p) => ({ packageId: p.package_id, source: p.source, matchedOc: p.matched_oc, guia: p.packages?.almacen_id ?? p.matched_oc ?? null, tracking: p.packages?.tracking_number ?? null, active: p.active !== false })),
+    // Only active links belong in "Paquetes enlazados": unlinking soft-deletes the
+    // row, and the detail used to keep listing the released guide as if it were
+    // still billed. The integrity check above still reads the full set.
+    packages: b.packages
+      .filter((p) => p.active !== false)
+      .map((p) => ({ packageId: p.package_id, source: p.source, matchedOc: p.matched_oc, guia: p.packages?.almacen_id ?? p.matched_oc ?? null, tracking: p.packages?.tracking_number ?? null, active: true })),
     // Integrity warning (live invoices only — released links on VOID are by
     // design): a billed package without an active link means the invoice bills
     // something the linked-packages view doesn't reflect (double-billing risk).
