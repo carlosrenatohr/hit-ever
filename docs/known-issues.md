@@ -10,6 +10,57 @@ Registro de problemas conocidos del worker y su causa raíz, para no re-investig
 
 ---
 
+## 2026-11-23 · `42P10` al crear paquetes (target de conflicto retirado por ADR-013)
+
+**Síntoma.** El alta manual desde Orbit fallaba siempre con
+`42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification`.
+El panel mostraba «Error al crear el paquete.» y, como el cliente se crea antes que el
+paquete, el reintento creaba otro cliente.
+
+**Diagnóstico.** Prod solo tiene `packages_organization_id_almacen_id_key`, la identidad
+tenant-scoped de ADR-013. En `pg_proc` se vio que `create_package` (20 args,
+`20261026222000` / `20261116150000`) y `create_package_v2` (21 args, `20261123180000`)
+seguían con `on conflict (provider_id, almacen_id)`; la sobrecarga de 19 args estaba bien
+porque nunca se recopió.
+
+**Causa.** Recopiar el cuerpo completo de la función en cada migración arrastró el target
+que ADR-013 ya había dropeado. Es la segunda vez que este mismo `ON CONFLICT` viejo
+aparece (`20260929051106` documenta el primero y la ventana de deploy que lo expone).
+
+**Fix (2026-11-23).** `20261123220000_fix-create-package-conflict-target.sql` parchea la
+cláusula sobre la definición viva (`pg_get_functiondef` + `regexp_replace`) en vez de
+recopiar ~200 líneas, y falla ruidoso si alguna sobrecarga queda con el target viejo.
+Panel (`hit-panel`): el `clientId` recién creado se guarda en el formulario antes de la
+llamada al paquete, y los errores de PostgREST se envuelven en `Error` con un mensaje
+accionable en vez del fallback genérico.
+
+**Prevención.** Toda migración que redefina una RPC debe confirmar el target contra
+`pg_constraint` **y** probar un insert con rollback deliberado. No copiar cuerpos de
+funciones sin revisar los `on conflict`.
+
+---
+
+## 2026-11-23 · La factura pagada nunca se veía en verde (embed bloqueado por RLS)
+
+**Síntoma.** El icono de factura en la lista de paquetes no cambiaba a verde aunque la
+factura estuviera `PAID` (caso reportado: agencia `suite`, guía `0811942026`, factura `13`:
+vínculo activo + `PAID` en la base).
+
+**Diagnóstico.** `invoices` no tiene política de `SELECT` para `authenticated` (default-deny
+a propósito; el panel lee facturas por el Worker). El embed `invoice_packages(...invoices
+(status))` de la lista devolvía `null` en todas las filas, así que `isPaidInvoiceLink()`
+siempre era `false`. Mismo gotcha que ya documenta `Reports.tsx` para el filtro facturadas.
+
+**Fix (2026-11-23).** `GET /api/billing/invoice-links?ids=…` (`reports:read`, org-scoped,
+ids validados como UUID, tope 200) devuelve el vínculo activo + estado. La lista y el
+detalle del paquete lo consumen y mantienen la forma del embed, así que el resto de la UI
+no cambió. El detalle además recupera la acción «Ver factura».
+
+**Regla.** Un embed hacia una tabla sin política de lectura para el rol del panel siempre
+llega `null`: si la vista depende de ese dato, va por un endpoint del Worker.
+
+---
+
 ## 2026-10-24 · Facturas parciales por explosión de subrequests (bulk billing)
 
 **Síntoma.** El bulk de facturación dejaba facturas vivas a medias: 3 facturas (incluida
