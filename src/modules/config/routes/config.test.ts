@@ -652,6 +652,23 @@ describe('PUT /api/config/rates/v2/:id/entries', () => {
     expect(postedAudits).toHaveLength(0)
   })
 
+  it('422s zeroing a non-default card (a client can still be assigned to it)', async () => {
+    stubBackend({
+      validToken: 'goodToken',
+      users: { u1: admin },
+      tables: { rate_cards: [{ ...hitCardRow, pricing_kind: 'weight', is_default: false, active: true }] },
+    })
+    const res = await call(
+      '/api/config/rates/v2/card-1/entries',
+      { Authorization: 'Bearer goodToken', 'Content-Type': 'application/json' },
+      { method: 'PUT', body: { entries: [{ ...twoEntries[0], cost: 0 }, twoEntries[1]] } },
+    )
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as { error: { code: string } }
+    expect(body.error.code).toBe('RATE_CARD_ZERO_PRICE')
+    expect(postedAudits).toHaveLength(0)
+  })
+
   it('422 when entries are not exactly AIR+MAR', async () => {
     stubBackend({ validToken: 'goodToken', users: { u1: admin }, tables: { rate_cards: [hitCardRow] } })
     const res = await call(

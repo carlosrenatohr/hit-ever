@@ -269,9 +269,9 @@ export class ConfigService {
   async replaceCardEntries(org: string, id: string, entries: RateCardEntryInput[], session: ConfigSession, requestId: string): Promise<RateCard> {
     const card = await this.requireRateCardInOrg(org, id)
     assertSimplePair(entries)
-    // A default tariff prices every package of its kind: zeroing it would silently
-    // bill $0 for the whole group, so the default must stay priced.
-    if (card.isDefault) this.assertCardHasPrices(entries)
+    // Zero is never a valid tariff: a non-default card can still be assigned to a
+    // client, so a zeroed price would bill $0 there too.
+    this.assertCardHasPrices(entries)
     await this.repo.replaceCardEntries(id, entries)
     await this.audit({
       organizationId: org,
@@ -388,9 +388,9 @@ export class ConfigService {
    * created empty (the normal "create then fill" flow) is fine as a draft, but
    * making it the default would price its packages at $0 without any warning.
    */
-  private assertCardHasPrices(entries: Array<{ price: number }>): void {
-    if (entries.length === 0 || entries.some((e) => !(e.price > 0))) {
-      throw new Error('La tarifa por defecto necesita precio de Aéreo y Marítimo: la tabla está en cero.')
+  private assertCardHasPrices(entries: Array<{ price: number; cost: number }>): void {
+    if (entries.length === 0 || entries.some((e) => !(e.price > 0) || !(e.cost > 0))) {
+      throw new Error('La tabla de tarifas necesita precio y costo de Aéreo y Marítimo mayores a 0: la tabla está en cero.')
     }
   }
 
