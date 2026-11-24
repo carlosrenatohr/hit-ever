@@ -10,6 +10,33 @@ Registro de problemas conocidos del worker y su causa raíz, para no re-investig
 
 ---
 
+## 2026-11-24 · El icono de factura pagada seguía naranja para admins (permiso de rol)
+
+**Síntoma.** Tras implementar `GET /api/billing/invoice-links`, la factura pagada seguía
+mostrando el icono naranja por defecto. El caso reportado (`suite`, guía `0811942026`,
+factura `13`) tenía vínculo activo + `status='PAID'` en la base.
+
+**Diagnóstico.** El endpoint estaba detrás de `billingAuth('reports:read')`. En
+`ROLE_PERMISSIONS`, solo `viewer` tiene `reports:read`; `admin`, `billing` y `staff` no.
+El usuario de `suite` es `admin`, así que la request devolvía 403. El panel la descartaba
+con `.catch(() => {})` y dejaba el embed de PostgREST, que por RLS siempre llega `null`.
+Resultado: el icono nunca cambiaba de color aunque el endpoint existiera y respondiera
+bien para el rol `viewer`.
+
+**Fix (2026-11-24).** `billingAuthAny(['reports:read', 'invoices:read'])` en
+`/invoice-links` y `/linked-packages`: el primer permiso cubre a `viewer` (reportes) y el
+segundo a quien ya lee facturas (admin/billing/staff). Tests de ruta para los cuatro roles.
+
+**Reglas.**
+- Un endpoint compartido por dos superficies tiene que listar **todos** los permisos que
+  abren cada superficie; no alcanza con el permiso más restrictivo.
+- Un `.catch(() => {})` en el panel oculta exactamente este tipo de 403: al depurar un dato
+  que "nunca llega", revisar también el permiso del endpoint antes que la lógica del dato.
+- Al agregar un rol nuevo, `ROLE_PERMISSIONS` es la única fuente; los handlers piden
+  permisos, nunca roles.
+
+---
+
 ## 2026-11-23 · `42P10` al crear paquetes (target de conflicto retirado por ADR-013)
 
 **Síntoma.** El alta manual desde Orbit fallaba siempre con
