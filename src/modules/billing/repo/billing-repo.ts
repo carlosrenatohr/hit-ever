@@ -753,6 +753,14 @@ export class InsforgeBillingRepo implements BillingRepository {
     )
   }
 
+  /** Remove the freight line that billed a package (unlink keeps money in sync). */
+  async deleteLineForPackage(invoiceId: string, packageId: string): Promise<void> {
+    await this.del(
+      'invoice_line_items',
+      `invoice_id=eq.${encodeURIComponent(invoiceId)}&package_id=eq.${encodeURIComponent(packageId)}&line_type=eq.freight`,
+    )
+  }
+
   async unlinkPackage(invoiceId: string, packageId: string): Promise<void> {
     // Soft-delete: mark inactive instead of removing, so the historical link
     // is preserved and the package can be re-invoiced.

@@ -24,6 +24,11 @@ verificar/reparar. Decisiones de arquitectura: [ADR-014](../../docs/adr/014.md).
    `coalesce(weight_override_lb, weight_lb)`) es el peso que factura el detalle, el
    track público y los stats de peso por cliente. El scrape solo escribe `weight_lb`;
    el override del staff (`set_package_weight`) sobrevive los refreshes.
+6. **Enlazar/desenlazar una guía mueve el dinero con ella.** `POST /invoices/:id/packages`
+   agrega la línea de flete (peso: tarifa del cliente; cuota fija: snapshot del paquete),
+   recalcula `total`/`profit` del header y, si la inserción falla, revierte el vínculo.
+   `DELETE .../packages/:packageId` elimina esa línea y recalcula. Una factura cerrada
+   rechaza ambos. Nunca queda una guía en el detalle sin su cargo (ni un cargo huérfano).
 
 ## Bandera `integrityWarning`
 

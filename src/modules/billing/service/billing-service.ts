@@ -1291,18 +1291,110 @@ export class BillingService {
     if (!before) throw new Error('Factura no encontrada.')
     if (before.header.closed_at) throw new Error('La factura está cerrada — los vínculos de paquetes están congelados.')
     // Tenant pin (same rule as createInvoice's packageIds): a package from
-    // another agency can never be attached to this invoice.
+    // another agency can never be attached to this invoice. resolveInvoicePackages
+    // also enforces the invoice/client/status/weight rules the guided flow uses.
     if (!(await this.repo.packageBelongsToOrg(packageId, organizationId))) {
       throw new Error(`El paquete ${packageId} no existe en tu agencia.`)
     }
-    // Active-link invariant: a package with an active invoice cannot be linked
-    // to another invoice.
-    const active = await this.repo.getActivePackageLink(packageId)
-    if (active && active.invoiceId !== id) {
-      throw new Error(`El paquete ${packageId} ya está facturado (factura ${active.invoiceId}).`)
+    const info = (await this.resolveInvoicePackages(
+      [packageId],
+      before.header.client_id,
+      before.header.client_name_raw,
+      organizationId,
+      id,
+    )).get(packageId)
+    if (!info) throw new Error(`El paquete ${packageId} no existe en tu agencia.`)
+
+    // One invoice = one pricing kind. A weight line and a fixed ("cuota fija")
+    // line cannot coexist: the totals and the printed document would mix models.
+    const newKind = info.pricingKind === 'fixed' && info.customerCharge != null ? 'fixed' : 'weight'
+    const existingKinds = before.lines
+      .filter((l) => l.line_type === 'freight')
+      .map((l) => (l.unit === 'lbs' ? 'weight' : 'fixed'))
+    if (existingKinds.length > 0 && !existingKinds.includes(newKind)) {
+      throw new Error('No se pueden mezclar paquetes por peso con paquetes de cuota fija en la misma factura. Generá una factura por tipo de servicio.')
     }
+
+    // Price the package the same way createInvoice() does: fixed packages bill
+    // the snapshot written at creation, weight packages quote the client's
+    // default card. Linking used to skip this, so the guide showed up in the
+    // detail while the invoice totals stayed at the first package's amounts.
+    const nextLineNo = before.lines.reduce((max, l) => Math.max(max, l.line_no), 0) + 1
+    let row: typeof LINE_ROW_DEFAULTS
+    if (newKind === 'fixed') {
+      const charge = info.customerCharge as number
+      const cost = info.providerCost ?? 0
+      row = lineRow({
+        line_no: nextLineNo,
+        description: `${info.serviceType ?? 'paquete'} (cuota fija)`,
+        freight_type: info.freightType,
+        line_type: 'freight',
+        quantity_lbs: 0,
+        unit: info.customerUnit ?? 'package',
+        unit_price: info.customerRate ?? charge,
+        total: charge,
+        freight_cost: cost,
+        profit: round2(charge - cost),
+        package_id: packageId,
+        package_guia: info.guia,
+        package_tracking: info.tracking,
+        organization_id: organizationId,
+        rate_card_id: info.rateCardId,
+        rate_card_version_id: info.rateCardVersionId,
+        rate_card_entry_id: info.rateCardEntryId,
+        base_unit_price: info.customerRate ?? charge,
+        pricing_source: 'package_snapshot',
+      })
+    } else {
+      const client = await this.resolveInvoiceClient(
+        { clientId: before.header.client_id, clientName: before.header.client_name_raw },
+        organizationId,
+      )
+      const q = await this.catalog.quoteOrg(
+        organizationId,
+        info.freightType,
+        'REGULAR',
+        info.weightLb as number,
+        client.defaultRateTableId,
+      )
+      if (!q) throw new Error(`El paquete ${info.guia} no tiene tarifa para ${info.freightType}.`)
+      row = lineRow({
+        line_no: nextLineNo,
+        freight_type: info.freightType,
+        line_type: 'freight',
+        quantity_lbs: info.weightLb,
+        unit: 'lbs',
+        unit_price: q.unitPrice,
+        total: q.total,
+        freight_cost: q.freightCost,
+        profit: q.profit,
+        price_tier: 'REGULAR',
+        package_id: packageId,
+        package_guia: info.guia,
+        package_tracking: info.tracking,
+        organization_id: organizationId,
+        rate_card_id: q.rateCardId ?? null,
+        rate_card_version_id: q.rateCardVersionId ?? null,
+        rate_card_entry_id: q.rateCardEntryId ?? null,
+        base_unit_price: q.unitPrice,
+        pricing_source: q.pricingSource,
+      })
+    }
+
     const [pkg] = await this.repo.getPackagesForBulk([packageId], organizationId)
     await this.repo.linkPackage(id, packageId, 'manual', pkg?.almacen_id ?? null, actor, organizationId)
+    try {
+      await this.repo.insertLineItems(id, [row])
+      await this.repo.setInvoiceTotals(id, {
+        total: round2(before.lines.reduce((sum, l) => sum + (l.total || 0), 0) + row.total),
+        profit: round2(before.lines.reduce((sum, l) => sum + (l.profit || 0), 0) + row.profit),
+        paidUsd: round2(before.payments.reduce((sum, p) => sum + (p.amount_usd || 0), 0)),
+      })
+    } catch (e) {
+      // Never leave a linked guide without its charge (or a charge without a link).
+      await this.repo.unlinkPackage(id, packageId)
+      throw e
+    }
     const v = await this.get(id, organizationId)
     if (!v) throw new Error('Factura no encontrada.')
     await this.repo.insertPackageEvent(packageId, `Factura #${v.invoiceNumber} enlazada`, new Date().toISOString())
@@ -1315,7 +1407,20 @@ export class BillingService {
     const before = await this.repo.getInvoiceBundle(id, organizationId)
     if (!before) throw new Error('Factura no encontrada.')
     if (before.header.closed_at) throw new Error('La factura está cerrada — los vínculos de paquetes están congelados.')
+    // The mirror of linkPackage: the package's freight line leaves with it, and
+    // the header totals are recomputed from what remains. A hand-written line
+    // (no package_id) is never touched.
+    const line = before.lines.find((l) => l.line_type === 'freight' && l.package_id === packageId)
     await this.repo.unlinkPackage(id, packageId)
+    if (line) {
+      await this.repo.deleteLineForPackage(id, packageId)
+      const remaining = before.lines.filter((l) => l.id !== line.id)
+      await this.repo.setInvoiceTotals(id, {
+        total: round2(remaining.reduce((sum, l) => sum + (l.total || 0), 0)),
+        profit: round2(remaining.reduce((sum, l) => sum + (l.profit || 0), 0)),
+        paidUsd: round2(before.payments.reduce((sum, p) => sum + (p.amount_usd || 0), 0)),
+      })
+    }
     const v = await this.get(id, organizationId)
     if (!v) throw new Error('Factura no encontrada.')
     await this.repo.insertPackageEvent(packageId, `Factura #${before.header.invoice_number} desenlazada`, new Date().toISOString())
