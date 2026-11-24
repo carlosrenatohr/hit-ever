@@ -797,6 +797,16 @@ describe('linkedPackageIds', () => {
   })
 })
 
+describe('packageInvoiceLinks', () => {
+  it('passes the org and the package ids through to the repo', async () => {
+    const links = [{ packageId: 'p1', invoiceId: 'i1', status: 'PAID' }]
+    const repo = { packageInvoiceLinks: vi.fn(async () => links) } as unknown as BillingRepository
+    const out = await new BillingService(repo).packageInvoiceLinks('suite', ['p1'])
+    expect(repo.packageInvoiceLinks).toHaveBeenCalledWith('suite', ['p1'])
+    expect(out).toEqual(links)
+  })
+})
+
 // ─── Client resolution + the client's default rate (individual invoice) ──────
 
 describe('createInvoice — client + default rate', () => {

@@ -107,6 +107,14 @@ export interface PackageLinkDbRow {
   packages?: { almacen_id: string; tracking_number: string | null } | null
 }
 
+/** Active invoice link + invoice status for one package (paid icon in the list). */
+export interface PackageInvoiceLink {
+  packageId: string
+  invoiceId: string
+  /** INVOICE_STATUSES value: DRAFT | ISSUED | PAID | VOID. */
+  status: string
+}
+
 export interface InvoiceBundle {
   header: InvoiceHeaderDbRow
   lines: LineItemDbRow[]
@@ -306,6 +314,9 @@ export interface BillingRepository {
   /** Active links for many packages in ONE query (subrequest budget: 1, not N).
    *  Invariant (uniq_active_package_invoice): at most one active link per package. */
   getActivePackageLinks(packageIds: string[]): Promise<Map<string, string>>
+  /** Active invoice + status per package (org-scoped). The package list needs it
+   *  because RLS is default-deny on `invoices`: the panel's embed always returns null. */
+  packageInvoiceLinks(organizationId: string, packageIds: string[]): Promise<PackageInvoiceLink[]>
   /** Active package ids for one invoice (integrity guard: links == packages). */
   listActiveLinkedPackageIds(invoiceId: string): Promise<string[]>
   /** Link many packages to one invoice in ONE POST (subrequest budget: 1, not N). */
@@ -770,6 +781,25 @@ export class InsforgeBillingRepo implements BillingRepository {
     )
     for (const r of rows) map.set(r.package_id, r.invoice_id)
     return map
+  }
+
+  async packageInvoiceLinks(organizationId: string, packageIds: string[]): Promise<PackageInvoiceLink[]> {
+    if (packageIds.length === 0) return []
+    const ids = packageIds.map((id) => encodeURIComponent(id)).join(',')
+    const rows = await this.get<{
+      package_id: string
+      invoice_id: string
+      invoices?: { status?: string } | { status?: string }[] | null
+    }>(
+      'invoice_packages',
+      `organization_id=eq.${encodeURIComponent(organizationId)}&package_id=in.(${ids})&active=eq.true` +
+        `&select=package_id,invoice_id,invoices(status)&limit=${packageIds.length}`,
+    )
+    return rows.map((r) => {
+      // A to-one embed can arrive as an object or a one-item array.
+      const inv = Array.isArray(r.invoices) ? r.invoices[0] : r.invoices
+      return { packageId: r.package_id, invoiceId: r.invoice_id, status: inv?.status ?? 'UNKNOWN' }
+    })
   }
 
   async listActiveLinkedPackageIds(invoiceId: string): Promise<string[]> {

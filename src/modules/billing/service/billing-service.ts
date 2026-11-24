@@ -12,7 +12,7 @@ import type { Currency, FreightType, InvoiceStatus, PaymentBank, PaymentMethod, 
 import { SERVICE_TYPE_TO_FREIGHT } from '../domain/enums.js'
 import { cleanClientDisplay, clientMatchKey, normalizeClientName } from '../ingest/normalize/client.js'
 import { BillingError } from '../domain/errors.js'
-import type { BillingRepository, ExceptionsPayload, InvoiceBundle } from '../repo/billing-repo.js'
+import type { BillingRepository, ExceptionsPayload, InvoiceBundle, PackageInvoiceLink } from '../repo/billing-repo.js'
 
 const EPS = 0.01
 
@@ -1355,6 +1355,11 @@ export class BillingService {
   /** -- Package IDs that have at least one invoice link (org-scoped). -- */
   async linkedPackageIds(organizationId: string): Promise<string[]> {
     return this.repo.listLinkedPackageIds(organizationId)
+  }
+
+  /** Active invoice + status per package, for the paid icon in the package list. */
+  async packageInvoiceLinks(organizationId: string, packageIds: string[]): Promise<PackageInvoiceLink[]> {
+    return this.repo.packageInvoiceLinks(organizationId, packageIds)
   }
 
   /** Get (or lazily create) the invoice's public share token. */

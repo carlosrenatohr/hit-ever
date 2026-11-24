@@ -42,6 +42,21 @@ billing.get('/linked-packages', billingAuth('reports:read'), async (c) => {
   return Res.ok(c, { ids: await svc.linkedPackageIds(c.get('billingSession').agency) })
 })
 
+/** GET /api/billing/invoice-links?ids=a,b,c — active invoice + status per package.
+ *  Same gate as linked-packages (viewer has reports:read) because the package
+ *  list draws the paid icon from here: RLS is default-deny on `invoices`, so the
+ *  panel's PostgREST embed always comes back null. */
+billing.get('/invoice-links', billingAuth('reports:read'), async (c) => {
+  // IDs land inside an `in.(...)` PostgREST filter: accept UUIDs only.
+  const ids = (c.req.query('ids') ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
+    .slice(0, 200)
+  const svc = new BillingService(getBillingRepo(c.env))
+  return Res.ok(c, { links: ids.length ? await svc.packageInvoiceLinks(c.get('billingSession').agency, ids) : [] })
+})
+
 // Read access gates the whole surface; write routes additionally re-check
 // 'invoices:write' at the route level (Stage 3).
 billing.use('*', billingAuth('invoices:read'))
